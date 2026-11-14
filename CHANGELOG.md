@@ -6,6 +6,11 @@ Test prüft, dass die oberste Version die ist, die gebaut wird.
 Eine Zeile, die mit `## ` beginnt, ist eine Version; eine, die mit `- `
 beginnt, eine Änderung. Alles andere wird überlesen.
 
+## 1.5.223
+
+- **neue version**: öffnet auf dem mac direkt die neueste signierte und notarisierte dmg statt der seite des releases
+- **mac-download**: ein fester link, der immer auf die neueste notarisierte dmg zeigt (siehe readme)
+
 ## 1.5.222
 
 - **podcasts, warteschlange** wie bei musik: gespielte folgen bleiben blass darüber stehen, ein doppelklick springt vor oder zurück, eigener cursor für die tastatur (j/k, d, shift + j/k, zweimal shift + d leert, shift + pfeil markiert mehrere), jede folge nur einmal; eine folge, die noch lädt, bleibt an ihrem platz und sagt „lädt…"
