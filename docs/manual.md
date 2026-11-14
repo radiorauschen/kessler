@@ -1849,8 +1849,10 @@ length; the radio and the podcasts count from then on. where the build has
 muto, über names it too, `muto — eine schrift von rade matic`, one line; a
 click opens radematic.com. `neue version` asks github, only when clicked,
 for the newest release and compares its number with the one built: `das ist
-die neueste`, or `1.4.140 ist da — öffnen`, which opens the release's page;
-nothing is downloaded. where github does not show the releases, the row
+die neueste`, or `1.4.140 ist da — öffnen`, which opens the release's page —
+on a mac the signed and notarized disk image instead, from the release
+`mac` (the version's own release has only what is built for linux);
+nothing is downloaded by kessler itself. where github does not show the releases, the row
 says `nicht zu sehen` (`KESSLER_UPDATE_ENDPOINT` for a stand-in). it names the
 developer, `entwickler` → `windpark soft`; a click opens its page,
 windparkbooks.de/soft. it folds out `lizenzen`: first

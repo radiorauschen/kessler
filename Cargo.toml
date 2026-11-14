@@ -1,6 +1,6 @@
 [package]
 name = "kessler"
-version = "1.5.222"
+version = "1.5.223"
 edition = "2021"
 description = "a music player and library manager for local files, with ipod sync"
 license = "GPL-3.0-or-later"

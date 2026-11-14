@@ -52,19 +52,21 @@ impl Check {
 fn ask() -> Answer {
     match crate::library::coverart::fetch_text(&endpoint()) {
         Ok(text) => match Json::parse(&text) {
-            Some(doc) => read(&doc, env!("CARGO_PKG_VERSION")),
+            Some(doc) => read(&doc, env!("CARGO_PKG_VERSION"), cfg!(target_os = "macos")),
             None => Answer::Unseen(String::new()),
         },
         Err(e) => Answer::Unseen(e.to_string()),
     }
 }
 
-fn read(doc: &Json, built: &str) -> Answer {
+pub const MAC_DISK_IMAGE: &str = "https://github.com/radiorauschen/kessler/releases/download/mac/kessler-macos.dmg";
+
+fn read(doc: &Json, built: &str, mac: bool) -> Answer {
     let Some(tag) = doc.text("tag_name") else {
         return Answer::Unseen(String::new());
     };
     let version = tag.trim().trim_start_matches(['v', 'V']).to_string();
-    let page = doc.text("html_url").unwrap_or("").to_string();
+    let page = if mac { MAC_DISK_IMAGE.to_string() } else { doc.text("html_url").unwrap_or("").to_string() };
     match (numbers(&version), numbers(built)) {
         (Some(out), Some(here)) if out > here => Answer::Newer { version, page },
         (Some(_), Some(_)) => Answer::Current,
@@ -84,12 +86,16 @@ mod tests {
     fn a_newer_release_is_told_by_its_numbers_not_its_letters() {
         let doc = |tag: &str| Json::parse(&format!(r#"{{"tag_name":"{tag}","html_url":"https://x/r"}}"#)).unwrap();
         assert_eq!(
-            read(&doc("v1.4.140"), "1.4.131"),
+            read(&doc("v1.4.140"), "1.4.131", false),
             Answer::Newer { version: "1.4.140".into(), page: "https://x/r".into() }
         );
-        assert!(matches!(read(&doc("v1.10.0"), "1.9.9"), Answer::Newer { .. }));
-        assert_eq!(read(&doc("v1.3.62"), "1.4.131"), Answer::Current);
-        assert_eq!(read(&doc("v1.4.131"), "1.4.131"), Answer::Current);
-        assert!(matches!(read(&doc("nightly"), "1.4.131"), Answer::Unseen(_)));
+        assert!(matches!(read(&doc("v1.10.0"), "1.9.9", false), Answer::Newer { .. }));
+        assert_eq!(read(&doc("v1.3.62"), "1.4.131", false), Answer::Current);
+        assert_eq!(
+            read(&doc("v1.4.140"), "1.4.131", true),
+            Answer::Newer { version: "1.4.140".into(), page: MAC_DISK_IMAGE.into() }
+        );
+        assert_eq!(read(&doc("v1.4.131"), "1.4.131", false), Answer::Current);
+        assert!(matches!(read(&doc("nightly"), "1.4.131", false), Answer::Unseen(_)));
     }
 }
