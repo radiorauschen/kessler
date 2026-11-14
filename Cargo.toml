@@ -1,0 +1,67 @@
+[package]
+name = "kessler"
+version = "1.5.222"
+edition = "2021"
+description = "a music player and library manager for local files, with ipod sync"
+license = "GPL-3.0-or-later"
+authors = ["kessler contributors"]
+
+[dependencies]
+rodio = { version = "0.23", default-features = false, features = ["playback", "flac", "mp3", "mp4", "vorbis", "wav", "symphonia-aac", "symphonia-isomp4", "symphonia-alac", "symphonia-aiff", "symphonia-simd"] }
+
+lofty = "0.21"
+
+rusqlite = { version = "0.42", features = ["bundled"] }
+
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "5"
+
+sys-locale = "0.3"
+
+walkdir = "2"
+
+fs4 = "0.12"
+
+libc = "0.2"
+image = "0.25"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+thiserror = "2"
+
+clap = { version = "4", features = ["derive"] }
+
+chrono = { version = "0.4", features = ["serde"] }
+
+rand = "0.8"
+memmap2 = { version = "0.9", optional = true }
+skrifa = { version = "0.44", optional = true }
+write-fonts = { version = "0.50", optional = true }
+unicode-normalization = "0.1.25"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "wgpu", "x11", "wayland", "default_fonts", "clipboard"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "clipboard"], optional = true }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSButton", "NSControl", "NSScreen", "NSCursor"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSNotification", "NSOperation", "NSString", "block2"] }
+block2 = "0.6"
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
+
+[features]
+default = ["ipod", "gui"]
+ipod = []
+gui = ["dep:eframe", "dep:skrifa", "dep:memmap2", "dep:zbus", "dep:write-fonts"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

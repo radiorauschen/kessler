@@ -1,0 +1,30 @@
+name: check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: alsa
+        run: sudo apt-get update -q && sudo apt-get install -yq libasound2-dev pkg-config
+
+      - name: rust
+        run: rustup update stable && rustup default stable && rustup component add clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: tests
+        run: cargo test

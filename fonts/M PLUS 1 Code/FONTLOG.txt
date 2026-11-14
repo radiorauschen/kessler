@@ -1,0 +1,15 @@
+M PLUS 1 Code
+=============
+
+M PLUS 1 Code by the M+ FONTS Project Authors
+(https://github.com/coz-m/MPLUS_FONTS), as published on Google Fonts, under
+the SIL Open Font License 1.1; see OFL.txt.
+
+kessler
+-------
+kessler carries the variable face unchanged, renamed from
+MPLUS1Code[wght].ttf to MPLUS1Code-Variable.ttf only so its file name reads
+like the others, from github.com/google/fonts (ofl/mplus1code). It sets
+Japanese wherever the window's own typeface has no glyph, since 1.3.38 in
+place of M PLUS Rounded 1c: every weight of it is one width, so a Japanese
+name thickens with the rest of its row and does not move.

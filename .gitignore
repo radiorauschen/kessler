@@ -1,0 +1,12 @@
+/target
+/kessler.app
+/Kessler.app
+/dist
+**/*.rs.bk
+
+.DS_Store
+
+/fonts/*
+!/fonts/Asap/
+!/fonts/M PLUS 1 Code/
+!/fonts/Muto/

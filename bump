@@ -1,0 +1,116 @@
+#!/bin/bash
+
+set -eu
+
+cd "$(dirname "$0")"
+
+if [ ! -f Cargo.toml ]; then
+  echo "bump: no Cargo.toml here — run this from the project folder" >&2
+  exit 1
+fi
+
+current() {
+  awk '
+    /^\[/                  { in_package = ($0 == "[package]") }
+    in_package && /^version *=/ {
+      match($0, /"[^"]*"/)
+      print substr($0, RSTART + 1, RLENGTH - 2)
+      exit
+    }
+  ' Cargo.toml
+}
+
+now="$(current)"
+if [ -z "$now" ]; then
+  echo "bump: no version line in the [package] block of Cargo.toml" >&2
+  exit 1
+fi
+
+want=""
+tag=no
+for word in "$@"; do
+  case "$word" in
+    --tag) tag=yes ;;
+    patch|minor|major) want="$word" ;;
+    [0-9]*.[0-9]*.[0-9]*) want="$word" ;;
+    *)
+      echo "bump: don't know what \"$word\" means" >&2
+      echo "      try: patch, minor, major, a number like 0.7.2, or --tag" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$want" ]; then
+  echo "kessler is at $now."
+  echo
+  echo "  ./bump patch    $now → $(printf '%s' "$now" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')     a fix"
+  echo "  ./bump minor    $now → $(printf '%s' "$now" | awk -F. '{printf "%d.%d.0", $1, $2 + 1}')     something new"
+  echo "  ./bump major    $now → $(printf '%s' "$now" | awk -F. '{printf "%d.0.0", $1 + 1}')     1.0 is the day Music.app can go"
+  echo
+  echo "  --tag           also commit Cargo.toml and Cargo.lock and tag them"
+  exit 0
+fi
+
+case "$want" in
+  patch) next="$(printf '%s' "$now" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')" ;;
+  minor) next="$(printf '%s' "$now" | awk -F. '{printf "%d.%d.0", $1, $2 + 1}')" ;;
+  major) next="$(printf '%s' "$now" | awk -F. '{printf "%d.0.0", $1 + 1}')" ;;
+  *)     next="$want" ;;
+esac
+
+if ! printf '%s' "$next" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "bump: \"$next\" is not three numbers with dots between them" >&2
+  exit 1
+fi
+
+if [ "$next" = "$now" ]; then
+  echo "Already at $now — nothing to do."
+  exit 0
+fi
+
+awk -v raised="$next" '
+  /^\[/                  { in_package = ($0 == "[package]") }
+  in_package && /^version *=/ && !changed {
+    sub(/"[^"]*"/, "\"" raised "\"")
+    changed = 1
+  }
+  { print }
+' Cargo.toml > Cargo.toml.bump
+
+if [ ! -s Cargo.toml.bump ] || ! grep -q "^version *= *\"$next\"" Cargo.toml.bump; then
+  rm -f Cargo.toml.bump
+  echo "bump: the rewrite did not come out right — Cargo.toml is untouched" >&2
+  exit 1
+fi
+mv Cargo.toml.bump Cargo.toml
+
+if command -v cargo >/dev/null 2>&1; then
+  cargo update --quiet --offline --package kessler >/dev/null 2>&1 \
+    || cargo update --quiet --package kessler >/dev/null 2>&1 \
+    || true
+fi
+
+echo "$now → $next"
+
+if [ "$tag" != yes ]; then
+  echo
+  echo "  git add Cargo.toml Cargo.lock && git commit -m \"$next\" && git tag v$next"
+  echo "  or next time: ./bump $want --tag"
+  exit 0
+fi
+
+if [ ! -d .git ]; then
+  echo "bump: no git repository here, so nothing was committed or tagged" >&2
+  exit 1
+fi
+
+if git rev-parse "v$next" >/dev/null 2>&1; then
+  echo "bump: the tag v$next already exists — the number was changed, nothing else" >&2
+  exit 1
+fi
+
+git add Cargo.toml Cargo.lock
+git commit -q -m "$next"
+git tag "v$next"
+echo "committed and tagged v$next"

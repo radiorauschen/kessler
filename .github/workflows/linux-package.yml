@@ -1,0 +1,55 @@
+name: linux package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust
+        run: rustup update stable && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: zig and cargo-zigbuild
+        run: pip install cargo-zigbuild
+
+      - name: build and pack for the pi
+        run: ./bundle/make-linux-package.sh arm64
+
+      - name: build and pack for a pc
+        run: ./bundle/make-linux-package.sh x86_64
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: kessler-linux
+          path: dist/*.tar.gz
+          retention-days: 3
+
+      - name: release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="v$version"
+          awk -v v="## $version" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > notes.md
+          printf '\n---\n\nlinux: `…-linux-arm64` für den raspberry pi (64 bit), `…-linux-x86_64` für einen pc. auspacken, dann `./install.sh` im ordner darin.\n' >> notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.tar.gz --clobber
+          else
+            gh release create "$tag" dist/*.tar.gz --title "kessler $version" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
