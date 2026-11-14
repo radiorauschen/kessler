@@ -132,7 +132,9 @@ on a mac, `./bundle/make-app.sh /Applications` builds `kessler.app`, which you
 can open with a double-click; `./bundle/make-app.sh --share` makes a zip for
 another mac, with the typefaces that may travel with it. on linux — a raspberry pi too —
 `./bundle/install-linux.sh` builds it and puts it in the start menu with its
-icon. releases have ready-built packages for a raspberry pi
+icon. a signed and notarized disk image for the mac is always at
+[kessler-macos.dmg](https://github.com/radiorauschen/kessler/releases/download/mac/kessler-macos.dmg).
+releases have ready-built packages for a raspberry pi
 (`…-linux-arm64.tar.gz`) and a linux pc (`…-linux-x86_64.tar.gz`): unpack,
 then `./install.sh`; see the manual.
 

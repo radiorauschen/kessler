@@ -3355,7 +3355,7 @@ sends it to apple's notary service, staples the ticket to it and packs the
 zip and the dmg again, the dmg signed and notarized as well — a mac that
 downloads them opens kessler without being told it is fine. it needs an
 apple developer account and two things set up once on the mac that signs,
-both described at the head of the script: the „developer id application"
+both described by `./bundle/notarize.sh --help`: the „developer id application"
 certificate in the keychain (`KESSLER_SIGN_IDENTITY`) and a notary profile
 (`xcrun notarytool store-credentials`, `KESSLER_NOTARY_PROFILE`,
 `kessler-notary` by default); nothing secret is in the repository. it runs
@@ -3365,7 +3365,15 @@ refuses a bundle with a licensed face that may not be passed on; muto goes
 along under its own licence. for this the app is called `de.windparksoft.kessler`:
 after the first build under the new name macos asks once more for the
 permissions it had (controlling music); the settings and the library do not
-hang on the name.
+hang on the name. the notarized disk image then goes to the release `mac`
+of the repository as `kessler-macos.dmg`, replacing the one before — a
+pre-release, so it never counts as the newest version — and one link always
+gives the newest notarized copy:
+<https://github.com/radiorauschen/kessler/releases/download/mac/kessler-macos.dmg>.
+that wants the github cli (`gh`), logged in with the right to write to the
+repository; without it the upload is left out and said so. `--no-upload`
+keeps the disk image on the mac, and `KESSLER_RELEASE_REPO` names another
+repository.
 
 the icon is a k on a tile. the one that ships — and that the system shows
 before kessler runs — is muto bold's k, white on black
