@@ -10,10 +10,6 @@ touching the mouse (the mouse works as well). it is set in muto, a typeface by
 in the menu bar. it runs on macos, linux (the raspberry pi too) and windows,
 and it is written in rust with egui and sqlite.
 
-<br>
-
-<p align="center"><sub>music view</sub></p>
-
 ![the music: artists, the albums in the track list, the queue and what is known about the artist, side by side](docs/screenshots/music.webp)
 
 <p align="center"><img src="docs/screenshots/colours.webp" alt="the window in each of kessler's fifty colour schemes, one after the other"></p>
