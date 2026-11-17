@@ -97,6 +97,8 @@ egui and sqlite.
 
 ![an ipod plugged in: what is on it, and what the device says about itself](docs/screenshots/ipod.webp)
 
+<sub>an ipod plugged in beside the library: all of its albums with their heads, and what the device says about itself — model, serial number, what is on it, the formats, when it was last written, the space it has left, and whether anything is still to sync.</sub>
+
 ![with everything switched off: a drawing, and how to switch something on](docs/screenshots/all-off.webp)
 
 all settings are in the menu (`m`):
