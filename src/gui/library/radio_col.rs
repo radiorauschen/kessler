@@ -752,8 +752,9 @@ fn station_page(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                 let side = STATION_PAGE_PICTURE.min(inner / 3.0);
                 let beside = (inner - side - BRIEF_GAP).max(40.0);
                 let name = text::paragraph(ui, &station.name, Role::ContentBold, palette.ink, beside);
-                let facts = text::prose(ui, &known.facts(), Role::Label, palette.mid, beside);
-                let block = name.size().y + NAME_TO_FACTS + facts.size().y;
+                let facts = text::prose(ui, &known.facts(), Role::Label, palette.faint, beside);
+                let to_facts = head_to_facts(&name, &facts, m);
+                let block = to_facts + facts.size().y;
                 let inset = m.marker_inset_y;
                 let height = side.max(block) + inset;
                 let (area, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
@@ -762,9 +763,9 @@ fn station_page(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                 let rect = Rect::from_min_size(egui::pos2(left, area.top()), Vec2::splat(side));
                 station_picture(app, ui, rect, palette, &station);
                 let at = egui::pos2(left + side + BRIEF_GAP, area.top() + ((side - block) / 2.0).max(0.0));
-                let below = at + Vec2::new(0.0, name.size().y + NAME_TO_FACTS);
+                let below = at + Vec2::new(0.0, to_facts);
                 ui.painter().galley(at, name, palette.ink);
-                ui.painter().galley(below, facts, palette.mid);
+                ui.painter().galley(below, facts, palette.faint);
                 known.words(ui, width, usize::MAX, m, palette);
                 open_url = known.links(ui, width, m, palette);
             });
@@ -889,8 +890,8 @@ fn station_brief(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, w
     let on_air = app.on_air.as_ref().is_some_and(|s| s.url == station.url);
     let show = app.show_on_now().filter(|_| on_air);
     let show = show.map(|show| text::paragraph(ui, &show, Role::Content, palette.ink, beside));
-    let facts = text::prose(ui, &known.facts(), Role::Label, palette.mid, beside);
-    let above = show.as_ref().map_or(0.0, |g| g.size().y + 2.0);
+    let facts = text::prose(ui, &known.facts(), Role::Label, palette.faint, beside);
+    let above = show.as_ref().map_or(0.0, |g| head_to_facts(g, &facts, m));
     let height = side.max(above + facts.size().y);
     let (area, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let left = content_rect(area, m).left();
@@ -900,7 +901,7 @@ fn station_brief(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, w
     if let Some(show) = show {
         ui.painter().galley(at, show, palette.ink);
     }
-    ui.painter().galley(at + Vec2::new(0.0, above), facts, palette.mid);
+    ui.painter().galley(at + Vec2::new(0.0, above), facts, palette.faint);
 
     known.words(ui, width, BRIEF_CHARS, m, palette);
     if let Some(url) = known.links(ui, width, m, palette) {
@@ -913,7 +914,10 @@ fn station_brief(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, w
 const PROGRAMME_AHEAD: usize = 4;
 
 const STATION_PAGE_PICTURE: f32 = 88.0;
-const NAME_TO_FACTS: f32 = 4.0;
+fn head_to_facts(head: &egui::Galley, facts: &egui::Galley, m: Metrics) -> f32 {
+    let step = m.row * crate::gui::theme::head_line();
+    (text::last_baseline(head) + step - text::baseline(facts)).max(head.size().y)
+}
 const STATION_PICTURE: f32 = 56.0;
 const BRIEF_GAP: f32 = 12.0;
 const BRIEF_CHARS: usize = 280;

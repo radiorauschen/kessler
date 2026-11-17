@@ -2270,6 +2270,7 @@ fn track_column_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
             TrackColumn::Album if merged => continue,
             TrackColumn::Number if merged => app.config.ui.merged_number,
             TrackColumn::Length if merged => app.config.ui.merged_length,
+            TrackColumn::Bitrate if merged => app.config.ui.merged_bitrate,
             _ => app.columns.contains(column),
         };
         let clicked = toggle(ui, column.name(), on, AN_AUS, palette).clicked();
@@ -2301,6 +2302,10 @@ fn track_column_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
                 }
                 TrackColumn::Length if merged => {
                     app.config.ui.merged_length = !on;
+                    app.save_config();
+                }
+                TrackColumn::Bitrate if merged => {
+                    app.config.ui.merged_bitrate = !on;
                     app.save_config();
                 }
                 _ => {
@@ -3391,12 +3396,13 @@ fn heading_cover_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
 
 fn heading_cover_size(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     use crate::config::{HEADING_COVER_LEAST, HEADING_COVER_MOST};
-    let span = HEADING_COVER_MOST - HEADING_COVER_LEAST;
+    let span = (HEADING_COVER_MOST / HEADING_COVER_LEAST).ln();
+    let along = |size: f32| (size / HEADING_COVER_LEAST).ln() / span;
     let size = app.config.ui.heading_cover();
     let reading = format!("{} pt", size.round() as i32);
-    let (moved, settled) = slider(ui, tr!("covergrösse"), (size - HEADING_COVER_LEAST) / span, &reading, palette);
+    let (moved, settled) = slider(ui, tr!("covergrösse"), along(size), &reading, palette);
     if let Some(moved) = moved {
-        app.config.ui.heading_cover_size = (HEADING_COVER_LEAST + moved * span).round();
+        app.config.ui.heading_cover_size = (HEADING_COVER_LEAST * (moved * span).exp()).round();
     }
     if settled {
         app.save_config();

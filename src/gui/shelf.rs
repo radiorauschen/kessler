@@ -146,6 +146,7 @@ query: Option<&str>,
             SortField::Rating => a.rating.cmp(&b.rating),
             SortField::PlayCount => a.play_count.cmp(&b.play_count),
             SortField::DateAdded => a.date_added.cmp(&b.date_added),
+            SortField::Bitrate => a.bitrate.cmp(&b.bitrate),
         };
         let settled = first
             .then_with(|| ka.rank.cmp(&kb.rank))

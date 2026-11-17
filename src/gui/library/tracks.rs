@@ -39,6 +39,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
             .for_rows()
             .with(crate::gui::columns::TrackColumn::Number, app.config.ui.merged_number)
             .with(crate::gui::columns::TrackColumn::Length, app.config.ui.merged_length)
+            .with(crate::gui::columns::TrackColumn::Bitrate, false)
     } else {
         app.columns.clone()
     }
@@ -155,7 +156,18 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
 
         let grouped = merged;
         let head_cover = app.config.ui.heading_covers.then(|| app.config.ui.heading_cover());
-        let groups = if grouped { runs_of(ui, &app.tracks, &app.compiled) } else { Default::default() };
+        let two_lines = two_lines_beside(head_cover);
+        let shelf_order = app.track_order() == (SortField::Artist, SortOrder::Ascending);
+        let groups = if grouped || shelf_order { runs_of(ui, &app.tracks, &app.compiled) } else { Default::default() };
+        let in_one_piece = || {
+            let mut seen = std::collections::HashSet::new();
+            groups.iter().all(|&(start, _)| {
+                let t = &app.tracks[start];
+                seen.insert((crate::db::sort_key(crate::db::grouping_artist(t)), crate::db::sort_key(&t.album)))
+            })
+        };
+        let subheads = !grouped && groups.len() > 1 && in_one_piece();
+        let groups = if grouped || subheads { groups } else { Default::default() };
         let named_artist = app.selected_artist().is_some();
         let heard_album = app.player.library_track().map(|t| {
             (
@@ -176,18 +188,33 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 top > seen.bottom() || top + height < seen.top()
             };
             for (i, track) in app.tracks.iter().enumerate() {
-                if let Some(&(start, len)) = groups.get(next_group) {
+                if subheads && groups.get(next_group).is_some_and(|&(start, _)| start == i) {
+                    next_group += 1;
+                    if i > 0 {
+                        ui.add_space(ALBUM_HEAD_ABOVE);
+                    }
+                    let album = if track.album.trim().is_empty() { tr!("ohne album") } else { track.album.as_str() };
+                    let said = match crate::db::grouping_artist(track) {
+                        artist if !named_artist && !artist.is_empty() => format!("{album} · {artist}"),
+                        _ => album.to_string(),
+                    };
+                    say(ui, width, &said, Role::Label, palette.faint, m);
+                }
+                if let Some(&(start, len)) = groups.get(next_group).filter(|_| grouped) {
                     if start == i {
                         next_group += 1;
                         if i > 0 {
                             ui.add_space(ALBUM_HEAD_ABOVE);
                         }
-                        let height = album_head_height(head_cover, width, m);
+                        let run = &app.tracks[start..(start + len).min(app.tracks.len())];
+                        let track = run.iter().find(|t| !app.guests.contains(&t.id)).unwrap_or(track);
+                        let compiled_run = run.iter().any(|t| app.compiled.contains(&t.id));
+                        let artist = Some(crate::db::grouping_artist(track))
+                            .filter(|a| !named_artist && !compiled_run && !a.is_empty());
+                        let height = album_head_height(head_cover, width, head_lines(artist.is_some(), two_lines), m);
                         if off_screen(ui, height) {
                             ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
                         } else {
-                        let run = &app.tracks[start..(start + len).min(app.tracks.len())];
-                        let track = run.iter().find(|t| !app.guests.contains(&t.id)).unwrap_or(track);
                         let heard = heard_album.as_ref().is_some_and(|(artist, album)| {
                             run.iter().any(|t| {
                                 crate::db::sort_key(crate::db::grouping_artist(t)) == *artist
@@ -195,7 +222,6 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             })
                         });
                         let mut said = heading_facts(&on_heading, run);
-                        let compiled_run = run.iter().any(|t| app.compiled.contains(&t.id));
                         if compiled_run {
                             said.insert(0, tr!("kompilation").to_string());
                         }
@@ -222,7 +248,9 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             track,
                             &said,
                             app.config.ui.heading_count.then_some(len),
-                            !named_artist && !compiled_run,
+                            app.config.ui.merged_bitrate.then(|| heading_bitrate(run)).flatten().as_deref(),
+                            artist,
+                            two_lines,
                             heard,
                             marked,
                             m,
@@ -470,23 +498,52 @@ pub(super) fn heading_facts(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn album_head_height(cover: Option<f32>, width: f32, m: Metrics) -> f32 {
-    let (size, stacked) = head_cover_layout(cover, width, m);
-    let words = if stacked { ALBUM_HEAD_UNDER + m.row * (1.0 + crate::gui::theme::head_line()) } else { 0.0 };
-    size + words + m.marker_pad_x * 2.0 + m.marker_inset_y
+pub(super) fn heading_bitrate(run: &[crate::db::models::Track]) -> Option<String> {
+    let rates = run.iter().filter_map(|t| t.bitrate).filter(|kbit| *kbit > 0);
+    let (low, high) = rates.fold(None, |span: Option<(u32, u32)>, kbit| {
+        Some(span.map_or((kbit, kbit), |(low, high)| (low.min(kbit), high.max(kbit))))
+    })?;
+    Some(if low == high { tr!("{} kbit/s", low) } else { tr!("{}–{} kbit/s", low, high) })
 }
 
-fn head_cover_layout(cover: Option<f32>, width: f32, m: Metrics) -> (f32, bool) {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn head_lines(with_artist: bool, two_lines: bool) -> usize {
+    if with_artist && !two_lines { 3 } else { 2 }
+}
+
+pub(crate) fn three_lines_tall() -> f32 {
+    let row = crate::gui::theme::ROW_ROOMY;
+    (row * (2.0 * crate::gui::theme::head_line() + LINE_INK)).ceil()
+}
+
+const LINE_INK: f32 = 0.7;
+
+pub(crate) fn two_lines_beside(cover: Option<f32>) -> bool {
+    cover.is_some_and(|size| size < three_lines_tall())
+}
+
+fn head_block(lines: usize, m: Metrics) -> f32 {
+    m.row * (1.0 + crate::gui::theme::head_line() * lines.saturating_sub(1) as f32)
+}
+
+pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -> f32 {
+    let (size, stacked) = head_cover_layout(cover, width, lines, m);
+    let tall = if stacked { size + ALBUM_HEAD_UNDER + head_block(lines, m) } else { size.max(head_block(lines, m)) };
+    tall + m.marker_pad_x * 2.0 + m.marker_inset_y
+}
+
+fn head_cover_layout(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -> (f32, bool) {
     let room = (width - m.marker_pad_x * 2.0).max(1.0);
     match cover {
         Some(size) => {
             let size = size.min(room);
-            (size, size > room / 3.0)
+            (size, size >= STACKED_FROM || size > room / 3.0)
         }
-        None => (m.row * 2.0, false),
+        None => (head_block(lines, m), false),
     }
 }
+
+const STACKED_FROM: f32 = 140.0;
 
 const ALBUM_HEAD_UNDER: f32 = 10.0;
 
@@ -498,15 +555,20 @@ pub(super) fn album_head(
     track: &crate::db::models::Track,
     facts: &[String],
     count: Option<usize>,
-    with_artist: bool,
+    bitrate: Option<&str>,
+    artist: Option<&str>,
+    two_lines: bool,
     heard: bool,
     marked: RowState,
     m: Metrics,
     palette: &Palette,
 ) -> Response {
-    let (size, stacked) = head_cover_layout(cover, width, m);
+    let lines = head_lines(artist.is_some(), two_lines);
+    let (size, stacked) = head_cover_layout(cover, width, lines, m);
+    let block = head_block(lines, m);
+    let tall = if stacked { size } else { size.max(block) };
     let pad = m.marker_pad_x;
-    let height = album_head_height(cover, width, m);
+    let height = album_head_height(cover, width, lines, m);
     let plate_height = height - m.marker_inset_y;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let plate = Rect::from_min_size(rect.min, Vec2::new(rect.width(), plate_height));
@@ -518,7 +580,7 @@ pub(super) fn album_head(
     }
     let content = content_rect(rect, m);
     let picture = Rect::from_min_size(
-        egui::pos2(content.left(), rect.top() + pad),
+        egui::pos2(content.left(), rect.top() + pad + (tall - size) / 2.0),
         Vec2::splat(size),
     );
     if cover.is_some() {
@@ -534,11 +596,6 @@ pub(super) fn album_head(
     let title_colour = if heard { palette.accent } else { palette.ink };
 
     let mut under: Vec<String> = Vec::new();
-    let artist = crate::db::grouping_artist(track);
-    if with_artist && !artist.is_empty() {
-        under.push(artist.to_string());
-    }
-    under.extend(facts.iter().cloned());
     if let Some(count) = count {
         under.push(if count == 1 {
             tr!("1 titel").to_string()
@@ -546,11 +603,12 @@ pub(super) fn album_head(
             tr!("{} titel", text::count(count as u64))
         });
     }
+    under.extend(facts.iter().cloned());
+    under.extend(bitrate.map(str::to_string));
     let under = under.join(" · ");
 
     let step = m.row * crate::gui::theme::head_line();
-    let block = m.row + step;
-    let top = if stacked { picture.bottom() + ALBUM_HEAD_UNDER } else { picture.top() + (size - block) / 2.0 };
+    let top = if stacked { picture.bottom() + ALBUM_HEAD_UNDER } else { rect.top() + pad + (tall - block) / 2.0 };
     let active = response.hovered();
     let ground = if plated {
         marker_colour(palette)
@@ -559,15 +617,34 @@ pub(super) fn album_head(
     } else {
         palette.ground
     };
-    for (at, (words, role, colour)) in [
-        (name, Role::ContentBold, title_colour),
-        (under.as_str(), Role::Content, palette.mid),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let cell = Rect::from_min_size(egui::pos2(left, top + step * at as f32), Vec2::new(room, m.row));
-        cell_text(ui, cell, response.id.with(at), words, role, colour, active, ground, m);
+    let flac = marked.secondary(palette);
+    let line = |at: usize| Rect::from_min_size(egui::pos2(left, top + step * at as f32), Vec2::new(room, m.row));
+    cell_text(ui, line(0), response.id.with(0), name, Role::ContentBold, title_colour, active, ground, m);
+    if two_lines {
+        let cell = line(1);
+        match artist {
+            Some(artist) if !under.is_empty() => {
+                let said = text::line_within(ui, &under, Role::Label, flac, (room * 2.0 / 3.0 - MARK_GAP).max(1.0));
+                let artist_room = (room - said.size().x - MARK_GAP).max(1.0);
+                let artist_cell = Rect::from_min_size(cell.min, Vec2::new(artist_room, m.row));
+                cell_text(ui, artist_cell, response.id.with(1), artist, Role::Content, palette.mid, active, ground, m);
+                let ink = text::full_line(ui, artist, Role::Content, palette.mid).size().x;
+                let at = egui::pos2(
+                    left + ink.min(artist_room) + MARK_GAP,
+                    text::on_line(&said, cell.top(), text::row_line(ui, m.row, Role::Content)),
+                );
+                ui.painter().galley(at, said, flac);
+            }
+            Some(artist) => cell_text(ui, cell, response.id.with(1), artist, Role::Content, palette.mid, active, ground, m),
+            None => cell_text(ui, cell, response.id.with(1), &under, Role::Label, flac, active, ground, m),
+        }
+    } else {
+        let mut at = 1;
+        if let Some(artist) = artist {
+            cell_text(ui, line(at), response.id.with(at), artist, Role::Content, palette.mid, active, ground, m);
+            at += 1;
+        }
+        cell_text(ui, line(at), response.id.with(at), &under, Role::Label, flac, active, ground, m);
     }
     response
 }

@@ -752,6 +752,33 @@ impl Theme {
             .unwrap_or(self)
     }
 
+    pub fn icon_colours(self) -> (Color32, Color32) {
+        let palette = self.palette();
+        let ground = match self {
+            Theme::PaysageDHiver => palette.marker,
+            Theme::PcFx
+            | Theme::PcFxDunkel
+            | Theme::Pc98Hell
+            | Theme::Pc98
+            | Theme::FmTowns
+            | Theme::FmTownsDunkel
+            | Theme::Koen
+            | Theme::CocoIchibanya
+            | Theme::CocoIchibanyaDunkel
+            | Theme::Ochsenblut
+            | Theme::RgbHell
+            | Theme::Zeitvogel => palette.marker,
+            Theme::GnomeDunkel => rgb(0x10233A),
+            Theme::Soulseek => rgb(0xC0D1F2),
+            Theme::X68000 => rgb(0x30120E),
+            Theme::Runebending => rgb(0xE5E2FF),
+            Theme::WilderMann => rgb(0x342506),
+            Theme::LehmgefachDunkel => rgb(0x24361D),
+            _ => palette.ground,
+        };
+        (ground, palette.accent)
+    }
+
     pub fn palette(self) -> Palette {
         Palette::for_theme(self)
     }

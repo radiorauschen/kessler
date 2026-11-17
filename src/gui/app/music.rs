@@ -67,6 +67,22 @@ impl GuiApp {
         })
     }
 
+    pub fn scan_standing(&self) -> Option<String> {
+        if !self.is_scanning() {
+            return None;
+        }
+        let (done, total) = self.scan_counts();
+        Some(if total > 0 {
+            tr!("lese ein  {} / {}  {}%",
+                crate::gui::text::count(u64::from(done)),
+                crate::gui::text::count(u64::from(total)),
+                (self.scan_fraction().unwrap_or(0.0) * 100.0).round() as u32
+            )
+        } else {
+            tr!("zähle dateien…").to_string()
+        })
+    }
+
     pub fn scan_counts(&self) -> (u32, u32) {
         (self.scan_done, self.scan_total)
     }

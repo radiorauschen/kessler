@@ -259,6 +259,7 @@ pub fn track_order_from_key(key: &str) -> Option<(SortField, SortOrder)> {
         SortField::Rating,
         SortField::TrackNumber,
         SortField::Genre,
+        SortField::Bitrate,
     ]
     .into_iter()
     .find(|f| f.sql_column() == column)?;
@@ -1535,6 +1536,7 @@ impl eframe::App for GuiApp {
             theme::set_buttons_end(placed.buttons_end);
         }
         if let Some(measure) = self.measure.as_mut() {
+            measure::watch_repaints(ctx);
             measure.begin();
         }
         if self.measure.is_some() {

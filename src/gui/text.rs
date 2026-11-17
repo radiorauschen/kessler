@@ -128,6 +128,19 @@ pub fn runs_width(runs: &[(Arc<Galley>, Color32)]) -> f32 {
     ink + RUN_GAP * runs.len().saturating_sub(1) as f32
 }
 
+pub fn last_baseline(galley: &Galley) -> f32 {
+    galley
+        .rows
+        .last()
+        .and_then(|placed| {
+            placed.row.glyphs.first().map(|g| {
+                let from_fallback = g.font_ascent - g.font_face_ascent - 0.5 * (g.font_height - g.font_face_height);
+                placed.pos.y + g.pos.y + from_fallback
+            })
+        })
+        .unwrap_or(0.0)
+}
+
 pub fn baseline(galley: &Galley) -> f32 {
     galley
         .rows
@@ -190,6 +203,8 @@ pub fn cased_within(
 }
 
 pub const PARAGRAPH_LEADING: f32 = 1.32;
+
+pub const SMALL_LINE: f32 = super::theme::SIZE_LABEL * PARAGRAPH_LEADING;
 
 pub fn paragraph(
     ui: &egui::Ui,

@@ -102,7 +102,10 @@ the `ipod` commands take a mount point (`kessler ipod info /Volumes/IPOD`) and
 fall back to the single connected device when there is exactly one.
 
 scanning is incremental: a file whose mtime matches the stored one is skipped,
-so rescanning a large library is cheap.
+so rescanning a large library is cheap. while the window reads the library,
+the foot says so quietly with the other work going on in the background —
+`zähle dateien…`, then `lese ein 2.904 / 8.497 34%` — and what the foot says
+comes in quickly and goes slowly, so there is time to read it.
 
 the window's scan — at start, and on „jetzt neu einlesen" — also takes out
 tracks whose files have gone from the music folders. a music folder that is
@@ -172,9 +175,9 @@ at 0.6; `was läuft` `kompakt`, the library's figures bottom left, the status
 bottom right, shuffle and repeat in the header, the scope in the search
 field; `alle-zeile`, `zuletzt-zeile` (80 tracks, opening on `zuletzt
 hinzugefügt`) and `kompilationen-zeile` shown, no counts beside the artists;
-the albums as headings in the track list with covers of 60 points and their
-counts, whole compilations; `nr` (flush left), `jahr`, `genre` and `länge`
-in the track list; as many frames as the screen draws (30 on a raspberry
+the albums as headings in the track list with covers of 85 points, their
+counts and their bitrate, whole compilations; `nr` (flush left), `jahr`,
+`genre`, `bitrate` and `länge` in the track list (`wertung` and `plays` off); as many frames as the screen draws (30 on a raspberry
 pi), the scope at 20; no screen saver. a config file that is there keeps
 what it says.
 
@@ -773,7 +776,7 @@ a title too long for its column scrolls sideways while it is selected or under
 the pointer, waits a moment first so that sweeping down a list does not set
 every row in motion, and slides back when you leave. either way it fades into
 the row's own background rather than ending on a cut-off letter. so do a
-record's name and the line under it beside its cover in the combined view,
+record's lines beside its cover in the combined view,
 while the pointer is on the heading. the line
 saying what is playing behaves the same way; there, title, artist and album are
 laid out as a single line that happens to change colour, so a long one scrolls
@@ -845,8 +848,8 @@ window to the front) and `beenden`.
 a window too narrow for the columns side by side — under 640 points, more
 with the queue open — shows one column at a time across its whole width, as
 an ipod does, and slides to the next. under it a line names the columns on
-either side, `← künstler:innen` at the left and `titel →` at the right; a
-click goes there, as `h` and `l` do — into the fourth column too, whatever
+either side, `← künstler:innen` at the left and `titel →` at the right, a
+row above the words at the foot; a click goes there, as `h` and `l` do — into the fourth column too, whatever
 it holds, and opening the information, the words or the log from there only
 exchanges what the fourth holds. the header is the search field and `menü`
 alone; under it what is playing, at label size and on three lines — title,
@@ -1232,8 +1235,13 @@ not either picture was switched on.
 **menü → spalten → alben → ansicht** switches between `eigene spalte` and
 `mit titelliste kombiniert`. combined with the track list, the album column
 goes, and each record stands as a heading over its own tracks — its cover,
-its name, and under it the year and how many tracks (and whose, when the
-list is not one artist's). the heading answers the hand as the album's row
+and beside it three lines: its name in the bold cut, under it whose it is
+(when the list is not one artist's, and not on a compilation), and under that,
+a size smaller and in the colour `flac` has beside a title, the facts — how
+many tracks, the year, the genre, and always last the bitrate.
+without an artist to name the facts stand right under the name. beside a small
+cover the lines can be taller than the cover; then the cover stands in their
+middle. the heading answers the hand as the album's row
 does: a click takes all its tracks, a double-click puts the whole record,
 and only it, at the end of the queue and plays it, a pull carries it, a
 right-click opens the album's menu. the list is always in the shelf's own
@@ -1247,12 +1255,15 @@ many records and tracks it holds at the right.
 
 what belongs to the record moves up into its heading: of the columns switched
 on under menu → spalten → titelliste, `jahr`, `genre` and `hinzugefügt`
-are said once in the line under the record's name, and the rows keep only
-`wertung` and `plays` from there. `nr` and `länge` have switches of their own
-for this view (`[ui] merged_number`, `merged_length`, both on to begin with):
-while it is chosen, `titelliste` shows these two in place of the
-plain list's, and leaves out `album`, which is not shown at all — the name is
-the heading. the menu only lists what the view in use shows.
+are said once in the heading's line of facts, and the rows keep only
+`wertung` and `plays` from there. `nr`, `bitrate` and `länge` have switches of
+their own for this view (`[ui] merged_number`, `merged_bitrate`,
+`merged_length`; `nr` and `länge` on to begin with, `bitrate` off): while it is
+chosen, `titelliste` shows these three in place of the plain list's, and
+leaves out `album`, which is not shown at all — the name is the heading.
+`bitrate` is said at the end of the line of facts — `320 kbit/s`, or the
+span its tracks have, `319–320 kbit/s` — and not in the rows, which have no
+head to name a bare figure. the menu only lists what the view in use shows.
 
 **a column of its own for the right-hand side.** the combined view has one
 name column fewer, and that room goes to the right: the ipod, the artist
@@ -1292,13 +1303,20 @@ tracks as `zuletzt` shows.
 
 with `mit titelliste kombiniert` chosen, the same menu section has, set in
 one step under `ansicht`, the headings' cover: `cover` (an / aus — without,
-a heading is its two lines of words; `[ui] heading_covers`) and
+a heading is its lines of words; `[ui] heading_covers`) and
 `covergrösse` (32 to 256 points — `[ui] heading_cover_size`; never wider
-than the column). once the cover takes more than a third of the column, the
-record's name and the line under it stand under the cover rather than beside
+than the column). the cover's size also chooses the heading's lines: beside a
+cover at least as tall as three lines of words (about 50 points in muto, 57
+in asap) the heading has three; beside a smaller one, two — the name, and
+under it the artist in the plain cut and the second tone and after it the
+facts small and in the colour `flac` has, at the same distance `flac` keeps
+from a title: `cave   4 titel · 2011 · 320 kbit/s`. without a cover, three.
+the slider goes in ratios rather than points — each doubling has the same
+length. from 140 points up, and wherever the cover takes more than a third
+of the column, the record's lines stand under the cover rather than beside
 it. how it is drawn is `bilder`'s, below. after them, `titelzahl` (`[ui]
-heading_count`, on) says whether a heading ends in how many tracks it has —
-`2006 · 9 titel` or `2006`. nothing in the menu is set in more than one
+heading_count`, on) says whether a heading's facts begin with how many tracks
+it has — `9 titel · 2006` or `2006`. nothing in the menu is set in more than one
 step.
 
 ### pictures
@@ -1632,10 +1650,12 @@ in the one screenshot it was picked from.
 ### columns
 
 the track list shows the number, the title and the length. everything else —
-`jahr`, `genre`, `wertung`, `plays`, `hinzugefügt` — is off until you switch
-it on under **menü → spalten**. a column you read past on every row costs
-more than the fact it carries, unless you asked for it. `wertung` shows a
-rating as stars, `★★★` for three, and is 64 points wide.
+`jahr`, `genre`, `wertung`, `plays`, `hinzugefügt`, `bitrate` — is off until
+you switch it on under **menü → spalten**. a column you read past on every row
+costs more than the fact it carries, unless you asked for it. `wertung` shows a
+rating as stars, `★★★` for three, and is 64 points wide. `bitrate` shows the
+file's bitrate in kbit/s, the bare figure (`320`, `1411`), and stays empty
+where the scan could not tell; it sorts like every other column.
 
 figures stand right-aligned, so their digits line up down the column —
 except the track number, which starts the row and stands at its left edge,
@@ -1650,12 +1670,21 @@ a title too long for its room runs on over the empty left part of the column
 after it, up to ten points before that column's own figures, and fades out
 there.
 
+without the albums in the track list, the list says where one record ends
+and the next begins whenever it holds more than one in the shelf's own order
+(`nr ↓`): a small head over each — the album's name, and its artist where no
+one artist is chosen — in the label face and the facts' colour, as the
+podcasts' `heute` and `diese woche` stand over theirs, with the air before
+it that the combined view keeps between records. not under `zuletzt`, where a
+record's tracks stand as they came, and not once the list is sorted by
+another column.
+
 only the columns actually shown can be sorted by. there is no hidden sort
 order, and no head offering to sort by something you cannot see.
 
 **too many for the width**: the title keeps at least 140 points, and the
-columns that would take it are left out, in this order: `genre`, `album`,
-`hinzugefügt`, `plays`, `wertung`, `jahr`, `länge`, `nr`. they stay switched
+columns that would take it are left out, in this order: `genre`, `bitrate`,
+`album`, `hinzugefügt`, `plays`, `wertung`, `jahr`, `länge`, `nr`. they stay switched
 on and come back as the column grows.
 
 **the cursor** in the track list is only marked while the list has the keys:
@@ -2094,6 +2123,13 @@ falls behind the air), and play tunes in again. `←` and `→` (and the media
 keys) go through the stations kept. playing a track from the library ends
 the radio; the queue waits, unmarked, while a station plays.
 
+a station is heard once two seconds of it have come in, and up to eight
+seconds are kept ahead — what the station sends faster than it is heard, as
+most do when they answer and after a wobble of the network. should the
+network still let it run dry, kessler waits until two seconds are there
+again before it goes on: a wobbly connection is heard as one pause, not as a
+stutter.
+
 a station whose connection goes quiet without being closed — the network
 gone, a router asleep — is heard as silence, the window answers as ever, and
 after fifteen seconds without a byte kessler tunes in again, a few times.
@@ -2183,7 +2219,11 @@ wikipedia article and its own page — stand one under the other under `mehr
 lesen`, as an artist's do. the column is headed `sender`, and the station's
 picture is small with its name beside it in the larger, bold face, as a
 record's title stands by its cover, and land, genre and bitrate under the
-name. playing another station puts away what was asked about the one before.
+name, at the label's size in the colour `flac` has beside a title, as a
+record's facts are, their first line as far under the name as a record's
+line under its name in the music. the podcasts set their pages the same way: the name in
+the bold face, who makes it in the second tone, the facts in the colour of
+`flac`. playing another station puts away what was asked about the one before.
 in the narrow window, which has no room for the column, `über den sender`
 shows it at the foot of the stations. under nts's show on now,
 `informationen` also gives the programme's sentence about it; it runs as an
@@ -2543,8 +2583,11 @@ columns, so it can go again as easily as it came. choosing `musik` or
   its parts. under the pointer a row offers `archivieren` at the end of its
   title (`zurückholen` for one archived). one fetched says `geladen` in the
   accent (a line of its own under the facts, which are set in the small
-  face; three lines: the title, whose it is and the day, then `geladen` and
-  how far it was heard — `noch 18:29`, `noch nicht gehört` or `fertig
+  face and the colour `flac` has; beside a picture a little taller than
+  them, three lines in the middle of its height, the facts as far under the
+  title as a record's line under its name in the music, the third under them
+  at the small face's own step, as a station's facts stand: the title, whose it
+  is and the day, then `geladen` and how far it was heard — `noch 18:29`, `noch nicht gehört` or `fertig
   gehört`; the row's picture is always the podcast's, the episode's own
   stands in the third column). the one playing has the arrow before its
   title, an archived one's picture is quieter, and the podcast chosen in the
@@ -2835,7 +2878,9 @@ many, the atlas's size and the biggest of the rest), and what was going on —
 in the search field), `menü`, `tastatur`, `cover-laden`, `podcasts` (their view open),
 `feeds-lesen`, `folge-laden`. last, in square
 brackets, the three places in the code that asked for most of the frames
-nobody's hand asked for, as `file.rs:line ×count`. click the row again to
+nobody's hand asked for, as `file.rs:line ×count` — only those that wanted
+the next frame within 50 ms, not those asking for one in a quarter of a
+second or in two. click the row again to
 stop; the file is then shown in the finder. started with
 `KESSLER_MESSUNG=<file>` in the environment, the window measures from its
 first frame into that file.
@@ -2876,6 +2921,16 @@ to by the thread that reads ahead: the jump comes back at once, and a moment
 of silence is heard until the new place is there. a place the file cannot be
 taken to is said in the measurement (`ton: sprung nach … ging nicht`), and
 it plays on where it was.
+
+the radio says what it does as well: `radio: host/…/end · verbunden` when a
+station answers (`· wieder, 2. versuch` when tuned in again), `radio: … 2 s
+polster nach 0.3 s da, es klingt` once the first two seconds have come,
+`ton: 0.4 s stille, es kam nichts nach · gewartet, bis wieder 2 s da waren`
+when the network let it run dry, `radio: … kommt langsamer an, 80 von 128
+kb/s` when the sound comes in slower than the station's bitrate for five
+seconds (and `kommt wieder schnell genug an` once it does again), `radio: …
+abgebrochen nach 340 s, neu verbinden in 2 s` and `radio: … ging nicht auf:
+…`. the station's address is written without what follows `?` or `#`.
 
 ### the log
 
@@ -3385,10 +3440,17 @@ what the window is dressed in: the k in the typeface it is set in — for
 asap, or any face with those axes, at the same 700 and 85 whatever the
 window's own width and weight, so the k does not change as the app opens and
 closes; for another face its bold — in the scheme's accent, on the scheme's
-ground, as tall as the shipped one shows (on a mac 0.56 of the tile, as
-macos 26 draws the layered icon, and elsewhere 0.56 of the canvas) and
-centred halfway between its outline and its weight, so its stem does not
-pull it to the left, and again whenever the scheme or the typeface changes
+ground — or, where the scheme's ground is a grey that left a dock of these
+icons washed out, a colour of the scheme's own: its marker where that is
+more colourful and the k stands on it (pc-fx, pc-98, fm towns, koen,
+coco壱番屋, ochsenblut, rgb hell, zeitvogel), else the grey tinted in one
+of its hues, so no two schemes' icons come out alike (gnome dunkel,
+soulseek, x68000, runebending, wilder mann, lehmgefach dunkel); paysage
+d'hiver's night takes its marker's dark grey, or the running app would be
+the closed one's white k on black —, as tall as the shipped one shows (on a mac 0.545 of the tile, as
+macos 26 draws the layered icon, and elsewhere 0.545 of the canvas) and
+centred halfway between its outline and its weight, across and down, so its
+stem does not pull it to the left nor its bowl and legs down, and again whenever the scheme or the typeface changes
 (`src/gui/appicon.rs`). on a mac that is the dock icon, handed to the
 application directly; on linux and windows it is the window's icon. the
 licensed faces never go into the shipped icon — only the window draws them,
@@ -3409,12 +3471,16 @@ it ships as two icons, and each system takes the one it understands:
   its shape is not a rounded rectangle but one with quarter-superellipse
   corners, which leave the straight sides with no jump in curvature — that
   break is what makes a foreign icon look foreign in the dock — on apple's
-  grid of 824 units in a 1024 canvas. dressed as the dock's other icons are:
-  a fine rim round the tile's edge, light at the top and darkening to the
-  foot, and apple's soft shadow under it (12 units down, 14 soft, half
-  black); the k stays flat. the icon drawn while kessler runs, in the
-  scheme's colours, is dressed the same way, its rim dark instead on a light
-  ground, where a light one would not show. `logo.svg` stays flat.
+  grid of 824 units in a 1024 canvas, with the current macos's rounder
+  corners: each reaches 35 % of the tile along its sides, at a power of 2.9. dressed as the dock's other icons are:
+  its edge a thick piece of glass: the light caught on the edge facing the
+  upper left and, more weakly, on the edge opposite, where it leaves the
+  glass; a dark line a little further in for the glass's thickness; and a
+  broad soft swell lit on the same two sides and shaded on the others. under
+  it a soft shadow (12 units down, 14 soft, a third black — as light as the
+  system's own apps cast in the dock). the ground inside the edge stays one
+  colour and the k stays flat. the icon drawn while kessler runs, in the
+  scheme's colours, is dressed the same way. `logo.svg` stays flat.
 - **`bundle/kessler.icon`** — the layered one, for macos 26 and after, in
   apple's icon composer format: the black ground and the k, one look for
   light and dark; the system makes the clear and tinted looks out of the same

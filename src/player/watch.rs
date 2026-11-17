@@ -25,6 +25,14 @@ pub fn note(said: String) {
     }
 }
 
+pub fn short(url: &str) -> String {
+    let bare = url.split("://").nth(1).unwrap_or(url);
+    let bare = bare.split(['?', '#']).next().unwrap_or(bare);
+    let host = bare.split('/').next().unwrap_or(bare);
+    let last = bare.trim_end_matches('/').rsplit('/').next().filter(|l| *l != host).unwrap_or("");
+    if last.is_empty() { host.to_string() } else { format!("{host}/…/{last}") }
+}
+
 pub fn take_notes() -> Vec<Note> {
     std::mem::take(&mut *NOTES.lock().unwrap_or_else(|e| e.into_inner()))
 }

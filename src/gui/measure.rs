@@ -51,6 +51,7 @@ pub struct Measure {
     lapped: Option<Instant>,
     slowest: (f32, &'static str),
     asked: std::collections::HashMap<String, usize>,
+    soon: Vec<Duration>,
     frames: Vec<f32>,
     logic: Vec<f32>,
     doing: Vec<Doing>,
@@ -82,6 +83,25 @@ pub fn textures_said(ctx: &eframe::egui::Context) -> String {
     )
 }
 
+static SOON: std::sync::Mutex<Vec<Duration>> = std::sync::Mutex::new(Vec::new());
+
+const SOON_MOST: usize = 4096;
+
+const QUICK: Duration = Duration::from_millis(50);
+
+pub fn watch_repaints(ctx: &eframe::egui::Context) {
+    static WATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WATCHING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    ctx.set_repaint_observer(Box::new(|info: eframe::egui::RequestRepaintInfo| {
+        let mut soon = SOON.lock().unwrap_or_else(|e| e.into_inner());
+        if soon.len() < SOON_MOST {
+            soon.push(info.delay);
+        }
+    }));
+}
+
 impl Measure {
     pub fn start(path: PathBuf) -> std::io::Result<Self> {
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
@@ -101,6 +121,7 @@ impl Measure {
             lapped: None,
             slowest: (0.0, ""),
             asked: std::collections::HashMap::new(),
+            soon: Vec::new(),
             frames: Vec::new(),
             logic: Vec::new(),
             doing: Vec::new(),
@@ -136,6 +157,7 @@ impl Measure {
     }
 
     pub fn begin(&mut self) {
+        self.soon = std::mem::take(&mut *SOON.lock().unwrap_or_else(|e| e.into_inner()));
         let now = Instant::now();
         self.frame_began = Some(now);
         self.lapped = Some(now);
@@ -159,7 +181,11 @@ impl Measure {
 
     pub fn frame(&mut self, doing: Doing, asked: &[eframe::egui::RepaintCause]) {
         if !doing.input {
-            for cause in asked {
+            let known = self.soon.len() == asked.len();
+            for (i, cause) in asked.iter().enumerate() {
+                if known && self.soon[i] > QUICK {
+                    continue;
+                }
                 let file = cause.file.rsplit(['/', '\\']).next().unwrap_or(cause.file);
                 *self.asked.entry(format!("{file}:{}", cause.line)).or_default() += 1;
             }

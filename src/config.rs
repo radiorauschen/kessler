@@ -98,6 +98,7 @@ pub struct UiConfig {
     pub brightness: String,
     pub merged_number: bool,
     pub merged_length: bool,
+    pub merged_bitrate: bool,
     pub numbers_right: bool,
     pub small_length: bool,
     pub all_columns: bool,
@@ -205,7 +206,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             ground: "公園".into(),
-            track_columns: vec!["nr".into(), "jahr".into(), "genre".into(), "länge".into()],
+            track_columns: vec!["nr".into(), "jahr".into(), "genre".into(), "bitrate".into(), "länge".into()],
             artist_counts: false,
             artist_total: false,
             albums_in_tracks: true,
@@ -262,6 +263,7 @@ impl Default for UiConfig {
             brightness: "system".into(),
             merged_number: true,
             merged_length: true,
+            merged_bitrate: true,
             numbers_right: false,
             small_length: false,
             device_mark: "wort".into(),
@@ -513,7 +515,7 @@ fn said_language(contents: &str) -> bool {
 pub const SMALL_MACHINE: bool = cfg!(all(target_os = "linux", target_arch = "aarch64"));
 
 pub const HEADING_COVER_LEAST: f32 = 32.0;
-pub const HEADING_COVER_DEFAULT: f32 = 60.0;
+pub const HEADING_COVER_DEFAULT: f32 = 85.0;
 pub const HEADING_COVER_MOST: f32 = 256.0;
 
 pub const RECENT_SHOWN: usize = 80;
@@ -588,9 +590,9 @@ mod tests {
         assert!(ui.show_all_artists && ui.show_recent && ui.start_on_recent && ui.show_compilations);
         assert!(!ui.artist_counts);
         assert!(ui.albums_in_tracks && ui.heading_covers && ui.heading_count && ui.compilations_whole);
-        assert_eq!(ui.heading_cover(), 60.0);
-        assert_eq!(ui.track_columns, ["nr", "jahr", "genre", "länge"]);
-        assert!(!ui.numbers_right && ui.merged_number && ui.merged_length);
+        assert_eq!(ui.heading_cover(), 85.0);
+        assert_eq!(ui.track_columns, ["nr", "jahr", "genre", "bitrate", "länge"]);
+        assert!(!ui.numbers_right && ui.merged_number && ui.merged_length && ui.merged_bitrate);
         assert_eq!(ui.saver_after, 0, "no screen saver");
         assert!(!ui.field_spectrum, "the scope costs, so it waits to be asked for");
         assert_eq!(ui.language, "", "the system's");

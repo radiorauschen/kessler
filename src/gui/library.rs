@@ -596,6 +596,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         const COMPACT_FOOT: f32 = 44.0;
         let foot = if status_at_foot { COMPACT_FOOT } else { 0.0 };
         let columns_height = (ui.available_height() - foot).max(120.0);
+        let strip_height = if narrow { columns_height + NARROW_INTO_FOOT.min(foot) } else { columns_height };
         let ink: FootInk = ui.data(|d| d.get_temp(foot_ink_id())).unwrap_or_default();
         let deeper = (foot - (m.margin_x - theme::MARGIN_BOTTOM).max(0.0)).max(0.0);
         let reach = |ui: &Ui, n: usize, width: f32| -> f32 {
@@ -632,16 +633,17 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             let podcasts_narrow = window.width() < theme::NARROW_UNTIL;
             let reach_column = |ui: &Ui, n: usize, width: f32| reach(ui, 20 + n, width);
             ui.allocate_ui(Vec2::new(full_width, columns_height + deeper), |ui| {
-                podcast_row(app, ui, m, &palette, full_width, podcasts_narrow, columns_height, &reach_column);
+                let height = if podcasts_narrow { strip_height } else { columns_height };
+                podcast_row(app, ui, m, &palette, full_width, podcasts_narrow, height, &reach_column);
             });
         } else if app.all_off() {
             ui.allocate_ui(Vec2::new(full_width, columns_height), |ui| {
                 all_off_note(app, ui, &palette, full_width, columns_height);
             });
         } else if narrow && app.showing_radio() {
-            radio_strip(app, ui, m, &palette, full_width, columns_height);
+            radio_strip(app, ui, m, &palette, full_width, strip_height);
         } else if narrow {
-            sliding_columns(app, ui, m, &palette, full_width, columns_height);
+            sliding_columns(app, ui, m, &palette, full_width, strip_height);
         } else if app.showing_radio() {
             ui.allocate_ui(Vec2::new(full_width, columns_height), |ui| {
                 radio_row(app, ui, m, &palette, full_width);
@@ -895,6 +897,8 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         app.reveal_all = false;
     }
 }
+
+const NARROW_INTO_FOOT: f32 = 24.0;
 
 fn sliding_columns(
     app: &mut GuiApp,
@@ -1150,6 +1154,54 @@ mod tests {
         assert_eq!(masthead::clock_words(midnight, true, true, Lang::En), "3/5/2026  12:05 am");
         assert_eq!(masthead::clock_words(at, false, false, Lang::De), "14:07");
         assert_eq!(masthead::clock_words(at, true, false, Lang::Ja), "午後2:07");
+    }
+
+    #[test]
+    fn the_cover_chooses_two_lines_or_three() {
+        use super::tracks::{three_lines_tall, two_lines_beside};
+        let tall = three_lines_tall();
+        assert!(tall > super::theme::ROW_ROOMY * 2.0 * super::theme::head_line(), "more than two line steps");
+        assert!(two_lines_beside(Some(crate::config::HEADING_COVER_LEAST)));
+        assert!(two_lines_beside(Some(tall - 1.0)));
+        assert!(!two_lines_beside(Some(tall)));
+        assert!(!two_lines_beside(Some(crate::config::HEADING_COVER_DEFAULT)));
+        assert!(!two_lines_beside(None), "without a cover, three");
+    }
+
+    #[test]
+    fn a_record_says_its_bitrate_or_its_span() {
+        let track = |bitrate: Option<u32>| crate::db::models::Track {
+            id: 0,
+            path: std::path::PathBuf::new(),
+            title: "t".into(),
+            artist: "cave".into(),
+            album_artist: String::new(),
+            album: "allways".into(),
+            genre: String::new(),
+            year: None,
+            track_number: None,
+            disc_number: None,
+            duration_secs: 1.0,
+            bitrate,
+            sample_rate: None,
+            file_size: 1,
+            format: "mp3".into(),
+            rating: 0,
+            play_count: 0,
+            last_played: None,
+            date_added: Default::default(),
+            date_modified: Default::default(),
+            file_hash: None,
+            has_artwork: false,
+        };
+        let said = |run: &[crate::db::models::Track]| super::tracks::heading_bitrate(run);
+        assert_eq!(said(&[track(Some(320)), track(Some(320))]).as_deref(), Some("320 kbit/s"));
+        assert_eq!(
+            said(&[track(Some(320)), track(None), track(Some(319)), track(Some(0))]).as_deref(),
+            Some("319–320 kbit/s")
+        );
+        assert_eq!(said(&[track(None), track(Some(0))]), None);
+        assert_eq!(said(&[]), None);
     }
 
     #[test]

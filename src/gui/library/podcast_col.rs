@@ -260,7 +260,11 @@ fn show_page(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
         say(ui, width, &makers, Role::Label, palette.mid, m);
     }
     if let Some(said) = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive()) {
-        say(ui, width, &said, Role::Label, palette.faint, m);
+        if makers.is_empty() {
+            say(ui, width, &said, Role::Label, palette.faint, m);
+        } else {
+            say_under(ui, width, &said, Role::Label, palette.faint, m);
+        }
     }
     if !feed.link.is_empty() {
         ui.add_space(BLOCK_AIR);
@@ -296,8 +300,7 @@ fn links_block(ui: &mut Ui, width: f32, links: &[(String, String)], m: Metrics, 
 const HEAD_ABOUT_CHARS: usize = 180;
 
 fn show_head(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, show: &Show, feed: &crate::podcast::Feed) {
-    let small = (m.row * 0.72).round();
-    let side = (m.row + small * 2.0) * 1.6;
+    let side = (m.row + text::SMALL_LINE * 2.0) * 1.6;
     let top = ui.cursor().min;
     let content = content_rect(Rect::from_min_size(top, Vec2::new(width, side)), m);
     let picture = Rect::from_min_size(content.min, Vec2::splat(side));
@@ -313,7 +316,11 @@ fn show_head(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
         say(&mut inner, w, &makers, Role::Label, palette.mid, m);
     }
     if let Some(said) = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive()) {
-        say(&mut inner, w, &said, Role::Label, palette.faint, m);
+        if makers.is_empty() {
+            say(&mut inner, w, &said, Role::Label, palette.faint, m);
+        } else {
+            say_under(&mut inner, w, &said, Role::Label, palette.faint, m);
+        }
     }
     if !feed.link.is_empty() {
         let shown = feed.link.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.").trim_end_matches('/');
@@ -908,7 +915,7 @@ fn episode_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
             facts.push(tr!("geladen").to_string());
         }
         if !facts.is_empty() {
-            say(ui, width, &facts.join(" · "), Role::Label, palette.faint, m);
+            say_under(ui, width, &facts.join(" · "), Role::Label, palette.faint, m);
         }
         ui.add_space(BLOCK_AIR);
         let fetching = panel.fetching.as_ref().filter(|(e, ..)| e.id == episode.id);
@@ -1085,8 +1092,10 @@ fn episode_row(
     palette: &Palette,
 ) -> (Response, bool) {
     let pad = m.marker_pad_x;
-    let small = (m.row * 0.72).round();
-    let side = m.row + small * 2.0;
+    let small = text::SMALL_LINE;
+    let to_facts = text::row_line(ui, m.row, Role::Content) + m.row * crate::gui::theme::head_line() - text::row_line(ui, small, Role::Content);
+    let words = to_facts + small * 2.0;
+    let side = (words * EPISODE_PICTURE).round();
     let height = side + pad * 2.0 + m.marker_inset_y;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let response = response.on_hover_cursor(egui::CursorIcon::Default);
@@ -1104,6 +1113,7 @@ fn episode_row(
     }
     let content = content_rect(rect, m);
     let picture = Rect::from_min_size(egui::pos2(content.left(), rect.top() + pad), Vec2::splat(side));
+    let top = picture.top() + (side - words) / 2.0;
     picture_at(app, ui, picture, palette, art, &show.title);
     if state.spent {
         ui.painter().rect_filled(picture.expand(0.5), MARKER_RADIUS, ground.gamma_multiply(ARCHIVED_VEIL));
@@ -1114,7 +1124,7 @@ fn episode_row(
     if active && !offer.is_empty() {
         let probe = text::line(ui, offer, Role::Label, palette.mid);
         let word_width = probe.size().x;
-        let cell = Rect::from_min_size(egui::pos2(content.right() - word_width, picture.top()), Vec2::new(word_width, m.row));
+        let cell = Rect::from_min_size(egui::pos2(content.right() - word_width, top), Vec2::new(word_width, m.row));
         on_word = response.hover_pos().is_some_and(|at| at.x >= cell.left() - 6.0 && at.y <= cell.bottom());
         if on_word {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1126,7 +1136,7 @@ fn episode_row(
         room = (room - word_width - 12.0).max(1.0);
     }
     if new {
-        let y = picture.top() + m.row / 2.0;
+        let y = top + m.row / 2.0;
         ui.painter().circle_filled(egui::pos2(picture.right() + ALBUM_HEAD_GAP / 2.0, y), NEW_DOT, palette.accent);
     }
     let (title_colour, facts_colour) = if state.playing {
@@ -1136,17 +1146,17 @@ fn episode_row(
     } else if state.muted {
         (palette.mid, palette.faint)
     } else {
-        (palette.ink, palette.mid)
+        (palette.ink, state.secondary(palette))
     };
     let facts_room = (content.right() - left).max(1.0);
-    let title_cell = Rect::from_min_size(egui::pos2(left, picture.top()), Vec2::new(room, m.row));
+    let title_cell = Rect::from_min_size(egui::pos2(left, top), Vec2::new(room, m.row));
     let lead = lead_arrow(ui, id, title_cell, text::row_line(ui, m.row, Role::Content), state.playing, title_colour);
     let title_cell = Rect::from_min_max(egui::pos2(title_cell.left() + lead, title_cell.top()), title_cell.max);
     cell_text(ui, title_cell, id.with(0), title, Role::ContentBold, title_colour, active, ground, m);
-    let facts_cell = Rect::from_min_size(egui::pos2(left, picture.top() + m.row), Vec2::new(facts_room, small));
+    let facts_cell = Rect::from_min_size(egui::pos2(left, top + to_facts), Vec2::new(facts_room, small));
     cell_text(ui, facts_cell, id.with(1), facts, Role::Label, facts_colour, active, ground, m);
     let mut x = left;
-    let third = picture.top() + m.row + small;
+    let third = top + to_facts + small;
     for (on, word) in [(starred, tr!("gemerkt"))] {
         if !on {
             continue;
@@ -1176,6 +1186,8 @@ fn episode_row(
     let word_clicked = on_word && response.clicked();
     (response, word_clicked)
 }
+
+const EPISODE_PICTURE: f32 = 1.12;
 
 fn day_of(episode: &Episode) -> Option<String> {
     Some(local_day(episode)?.format("%d.%m.%Y").to_string())

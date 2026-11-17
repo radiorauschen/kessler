@@ -65,7 +65,7 @@ pub(super) fn narrow_rule(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, m: M
 
 const NARROW_GAP: f32 = 12.0;
 
-const NARROW_LINE: f32 = 16.0;
+const NARROW_LINE: f32 = text::SMALL_LINE;
 
 const SEARCH_GAP: f32 = 12.0;
 
@@ -103,23 +103,6 @@ pub(super) fn header_controls(
         }
     }
 
-    if app.is_scanning() {
-        let (done, total) = app.scan_counts();
-        let said = if total > 0 {
-            tr!("lese ein  {} / {}  {}%",
-                text::count(done as u64),
-                text::count(total as u64),
-                (app.scan_fraction().unwrap_or(0.0) * 100.0).round() as u32
-            )
-        } else {
-            tr!("zähle dateien…").to_string()
-        };
-        let g = text::line(ui, &said, Role::Label, palette.accent);
-        right -= g.size().x;
-        ui.painter()
-            .galley(egui::pos2(right, top), g, palette.accent);
-        right -= 20.0;
-    }
     right
 }
 
@@ -388,6 +371,7 @@ pub(super) fn header_corner(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, ri
 
 #[allow(clippy::too_many_arguments)]
 const STATUS_FADE: f32 = 0.12;
+const STATUS_FADE_OUT: f32 = 0.9;
 
 pub(super) fn header_status(
     app: &mut GuiApp,
@@ -407,6 +391,7 @@ pub(super) fn header_status(
         None => {
             let standing: Vec<String> = if short {
                 [
+                    app.scan_standing(),
                     app.transfer_standing(),
                     app.artist_hunt_standing(),
                     app.measuring_standing(),
@@ -419,6 +404,7 @@ pub(super) fn header_status(
             } else {
                 [
                     app.search_standing(),
+                    app.scan_standing(),
                     app.transfer_standing(),
                     app.artist_hunt_standing(),
                     app.measuring_standing(),
@@ -434,7 +420,8 @@ pub(super) fn header_status(
     };
     let said_room = room;
     let present = said.is_some();
-    let fade = ui.ctx().animate_bool_with_time(egui::Id::unique("status-said-fade"), present, STATUS_FADE);
+    let fade_time = if present { STATUS_FADE } else { STATUS_FADE_OUT };
+    let fade = ui.ctx().animate_bool_with_time(egui::Id::unique("status-said-fade"), present, fade_time);
     let last = egui::Id::unique("status-said-last");
     if let Some(said) = &said {
         ui.data_mut(|d| d.insert_temp(last, said.clone()));

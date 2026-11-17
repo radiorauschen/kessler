@@ -72,12 +72,15 @@ GROUND = (0x00, 0x00, 0x00)
 INK = (0xFF, 0xFF, 0xFF)
 LIP = tuple(round(c * 0.7) for c in GROUND)
 
-LETTER = 0.56
+LETTER = 0.545
 
 BY_WEIGHT = 0.5
 
+MAC_REACH = 0.352
+MAC_POWER = 2.9
+
 SHAPES = {
-    "mac": ((100 / 1024, 100 / 1024, 924 / 1024, 924 / 1024), ("super", 0.30 * 824 / 1024, 3.5), 924 / 1024),
+    "mac": ((100 / 1024, 100 / 1024, 924 / 1024, 924 / 1024), ("super", MAC_REACH * 824 / 1024, MAC_POWER), 924 / 1024),
     "gnome": ((8 / 128, 8 / 128, 120 / 128, 112 / 128), ("round", 12 / 128), 118 / 128),
     "kde": ((3 / 48, 3 / 48, 45 / 48, 45 / 48), ("round", 2.5 / 48), 45 / 48),
 }
@@ -118,21 +121,20 @@ def letter(face) -> str:
     weight = StatisticsPen(glyphs)
     glyphs[name].draw(weight)
     across = (x0 + x1) / 2 + (weight.meanX - (x0 + x1) / 2) * BY_WEIGHT
+    upright = (y0 + y1) / 2 + (weight.meanY - (y0 + y1) / 2) * BY_WEIGHT
     left, top, right, bottom = (v * CANVAS for v in face)
     mx, my = (left + right) / 2, (top + bottom) / 2
     dx = mx - scale * across
-    dy = my + scale * (y0 + y1) / 2
+    dy = my + scale * upright
     pen = SVGPathPen(glyphs)
     glyphs[name].draw(TransformPen(pen, (scale, 0, 0, -scale, dx, dy)))
     return pen.getCommands()
 
-RIM = 4
-RIM_STRENGTH = 0.5
 SHADOW_DOWN = 12
 SHADOW_SOFT = 14
-SHADOW_STRENGTH = 0.5
+SHADOW_STRENGTH = 0.33
 
-def svg(shape: str = "mac", with_tile: bool = True, dressed: bool = True) -> str:
+def svg(shape: str = "mac", with_tile: bool = True) -> str:
     """One whole icon as SVG: the tile, its lip, and the k. Without the tile,
     the k alone on nothing — the layer Icon Composer puts on a ground of its
     own."""
@@ -143,21 +145,64 @@ def svg(shape: str = "mac", with_tile: bool = True, dressed: bool = True) -> str
             moved = (face[0], face[1] + lip - face[3], face[2], lip)
             tile += f'<path d="{outline(moved, corner)}" fill="{hexa(LIP)}"/>\n'
         tile += f'<path d="{outline(face, corner)}" fill="{hexa(GROUND)}"/>\n'
-        if shape == "mac" and dressed:
-            width = 2 * RIM * CANVAS / 1024
-            tile += (
-                '<defs><clipPath id="face"><path d="' + outline(face, corner) + '"/></clipPath>'
-                '<linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">'
-                '<stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#000000"/>'
-                '</linearGradient></defs>\n'
-                f'<path d="{outline(face, corner)}" fill="none" stroke="url(#rim)" stroke-width="{width:.2f}" '
-                f'stroke-opacity="{RIM_STRENGTH}" clip-path="url(#face)"/>\n'
-            )
     figure = f'<path d="{letter(face)}" fill="{hexa(INK)}"/>'
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{CANVAS}" height="{CANVAS}" '
         f'viewBox="0 0 {CANVAS} {CANVAS}">\n{tile}{figure}\n</svg>\n'
     )
+
+GLASS_LIGHT = (-0.55, -0.85)
+GLASS_FACING = 1.6
+GLASS_CATCH = (3.0, 0.95, 0.60)
+GLASS_SPREAD = (10.0, 0.35, 0.15)
+GLASS_GLOW = (20.0, 0.06)
+GLASS_THICK = (6.0, 14.0, 0.40)
+GLASS_BETWEEN = (4.0, 10.0, 0.12)
+GLASS_SWELL = (16.0, 44.0)
+GLASS_SWELL_LIT = (0.30, 0.18)
+GLASS_SWELL_SHADE = 0.12
+
+def glass_edge(drawn: Image.Image, scale: float) -> Image.Image:
+    import numpy as np
+
+    rgba = np.asarray(drawn, dtype=np.float32) / 255
+    cover = rgba[..., 3]
+    tile = Image.fromarray((cover * 255).astype("uint8"))
+
+    def blurred(sigma):
+        return np.asarray(tile.filter(ImageFilter.GaussianBlur(sigma * scale)), dtype=np.float32) / 255
+
+    def band(sigma):
+        return np.clip(cover - blurred(sigma), 0, 1)
+
+    def between(a, b):
+        return np.clip(band(b) - band(a), 0, 1)
+
+    gy, gx = np.gradient(blurred(4))
+    slope = np.hypot(gx, gy) + 1e-6
+    nx, ny = -gx / slope, -gy / slope
+    lx, ly = GLASS_LIGHT
+    length = np.hypot(lx, ly)
+    lx, ly = lx / length, ly / length
+    towards = np.clip(nx * lx + ny * ly, 0, 1) ** GLASS_FACING
+    away = np.clip(-nx * lx - ny * ly, 0, 1) ** GLASS_FACING
+    aside = (1 - towards) * (1 - away)
+    swell = between(*GLASS_SWELL)
+    lift = (
+        band(GLASS_CATCH[0]) * (GLASS_CATCH[1] * towards + GLASS_CATCH[2] * away)
+        + band(GLASS_SPREAD[0]) * (GLASS_SPREAD[1] * towards + GLASS_SPREAD[2] * away)
+        + GLASS_GLOW[1] * band(GLASS_GLOW[0])
+        + swell * (GLASS_SWELL_LIT[0] * towards + GLASS_SWELL_LIT[1] * away)
+    )
+    drop = (
+        GLASS_BETWEEN[2] * between(GLASS_BETWEEN[0], GLASS_BETWEEN[1]) * aside
+        + GLASS_THICK[2] * between(GLASS_THICK[0], GLASS_THICK[1])
+        + GLASS_SWELL_SHADE * swell * aside
+    )
+    rgb = rgba[..., :3]
+    rgb = (rgb + lift[..., None] * (1 - rgb)) * (1 - drop[..., None])
+    out = np.dstack([np.clip(rgb, 0, 1), cover])
+    return Image.fromarray((out * 255).round().astype("uint8"), "RGBA")
 
 def icon(px: int, shape: str = "mac", with_tile: bool = True) -> Image.Image:
     """One icon at `px` pixels, drawn at that size — not shrunk."""
@@ -166,6 +211,7 @@ def icon(px: int, shape: str = "mac", with_tile: bool = True) -> Image.Image:
     if shape != "mac" or not with_tile:
         return drawn
     scale = px / 1024
+    drawn = glass_edge(drawn, scale)
     shade = Image.new("L", (px, px), 0)
     shade.paste(drawn.getchannel("A"), (0, round(SHADOW_DOWN * scale)))
     shade = shade.filter(ImageFilter.GaussianBlur(SHADOW_SOFT * scale / 2))
@@ -243,7 +289,7 @@ def main() -> None:
     for shape, folder in LINUX.items():
         write_iconset(folder, shape)
     write_layered()
-    (HERE / "logo.svg").write_text(svg(dressed=False))
+    (HERE / "logo.svg").write_text(svg())
     write_previews()
     print(f"wrote {ICONSET.name}/, {', '.join(f.name + '/' for f in LINUX.values())} {LAYERED.name}/, logo.svg")
 

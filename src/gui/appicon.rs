@@ -4,7 +4,7 @@ use super::glyphs::Mask;
 
 pub const SIDE: usize = 512;
 
-const LETTER: f32 = if cfg!(target_os = "macos") { 0.56 * 824.0 / 1024.0 } else { 0.56 };
+const LETTER: f32 = if cfg!(target_os = "macos") { 0.545 * 824.0 / 1024.0 } else { 0.545 };
 
 const BY_WEIGHT: f32 = 0.5;
 
@@ -42,7 +42,7 @@ impl Shape {
             Shape::Mac => {
                 let inset = 100.0 / 1024.0;
                 let face = Rect { left: inset, top: inset, right: 1.0 - inset, bottom: 1.0 - inset };
-                (face, Corner::Super { reach: 0.30 * (1.0 - 2.0 * inset), power: 3.5 }, face.bottom)
+                (face, Corner::Super { reach: 0.352 * (1.0 - 2.0 * inset), power: 2.9 }, face.bottom)
             }
             Shape::Gnome => {
                 let u = 1.0 / 128.0;
@@ -126,9 +126,11 @@ pub fn compose(size: usize, shape: Shape, ground: Color32, ink: Color32, letter:
     let (left, top) = letter.map_or((0, 0), |m| {
         let middle = m.width as f32 / 2.0;
         let across = middle + (weight_across(m) - middle) * BY_WEIGHT;
+        let half = m.height as f32 / 2.0;
+        let down = half + (weight_down(m) - half) * BY_WEIGHT;
         (
             (mx * size as f32 - across).round() as isize,
-            (my * size as f32 - m.height as f32 / 2.0).round() as isize,
+            (my * size as f32 - down).round() as isize,
         )
     });
     for y in 0..size {
@@ -151,50 +153,79 @@ pub fn compose(size: usize, shape: Shape, ground: Color32, ink: Color32, letter:
         }
     }
     if shape == Shape::Mac {
-        dress_mac(&mut out, &tile, size, ground);
+        dress_mac(&mut out, &tile, size);
     }
     out
 }
 
-const RIM: f32 = 4.0;
-
-const RIM_STRENGTH: f32 = 0.5;
-
-const LIGHT_GROUND: f32 = 0.6;
-
-const RIM_DARK_TOP: f32 = 0.12;
-const RIM_DARK_FOOT: f32 = 0.3;
-
-fn luminance(c: Color32) -> f32 {
-    (0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b())) / 255.0
-}
+const GLASS_LIGHT: (f32, f32) = (-0.55, -0.85);
+const GLASS_FACING: f32 = 1.6;
+const GLASS_CATCH: (f32, f32, f32) = (3.0, 0.95, 0.60);
+const GLASS_SPREAD: (f32, f32, f32) = (10.0, 0.35, 0.15);
+const GLASS_GLOW: (f32, f32) = (20.0, 0.06);
+const GLASS_THICK: (f32, f32, f32) = (6.0, 14.0, 0.40);
+const GLASS_BETWEEN: (f32, f32, f32) = (4.0, 10.0, 0.12);
+const GLASS_SWELL: (f32, f32) = (16.0, 44.0);
+const GLASS_SWELL_LIT: (f32, f32) = (0.30, 0.18);
+const GLASS_SWELL_SHADE: f32 = 0.12;
 
 const SHADOW_DOWN: f32 = 12.0;
 const SHADOW_SOFT: f32 = 14.0;
-const SHADOW_STRENGTH: f32 = 0.5;
+const SHADOW_STRENGTH: f32 = 0.33;
 
-fn dress_mac(out: &mut [u8], tile: &[(f32, f32)], size: usize, ground: Color32) {
-    let light_ground = luminance(ground) > LIGHT_GROUND;
+fn dress_mac(out: &mut [u8], tile: &[(f32, f32)], size: usize) {
     let scale = size as f32 / 1024.0;
     let cover: Vec<f32> = tile.iter().map(|(c, _)| *c).collect();
-    let reach = (RIM * scale).round().max(1.0) as isize;
-    let inner = min_filter(&cover, size, reach);
+    let blurred = |sigma: f32| -> Vec<f32> {
+        let radius = ((sigma * scale).powi(2) + 0.25).sqrt() - 0.5;
+        let radius = radius.round().max(1.0) as usize;
+        let mut soft = cover.clone();
+        for _ in 0..3 {
+            soft = box_blur(&soft, size, radius);
+        }
+        soft
+    };
+    let band = |sigma: f32| -> Vec<f32> { cover.iter().zip(blurred(sigma)).map(|(c, s)| (c - s).clamp(0.0, 1.0)).collect() };
+    let between = |a: &[f32], b: &[f32], at: usize| (b[at] - a[at]).clamp(0.0, 1.0);
+    let soft = blurred(4.0);
+    let light = {
+        let l = GLASS_LIGHT.0.hypot(GLASS_LIGHT.1);
+        (GLASS_LIGHT.0 / l, GLASS_LIGHT.1 / l)
+    };
+    let catch = band(GLASS_CATCH.0);
+    let spread = band(GLASS_SPREAD.0);
+    let glow = band(GLASS_GLOW.0);
+    let (thin, thick) = (band(GLASS_THICK.0), band(GLASS_THICK.1));
+    let (inside, outside) = (band(GLASS_BETWEEN.0), band(GLASS_BETWEEN.1));
+    let (swell_in, swell_out) = (band(GLASS_SWELL.0), band(GLASS_SWELL.1));
     for y in 0..size {
-        let down = y as f32 / size as f32;
-        let (rim_colour, strength) = if light_ground {
-            (Color32::BLACK, RIM_DARK_TOP + (RIM_DARK_FOOT - RIM_DARK_TOP) * down)
-        } else {
-            (Color32::from_gray((255.0 * (1.0 - down)) as u8), RIM_STRENGTH)
-        };
         for x in 0..size {
             let at = y * size + x;
-            let rim = (cover[at] - inner[at]).clamp(0.0, 1.0) * strength;
-            if rim > 0.0 {
-                let now = Color32::from_rgb(out[at * 4], out[at * 4 + 1], out[at * 4 + 2]);
-                let dressed = now.lerp_to_gamma(rim_colour, rim);
-                out[at * 4] = dressed.r();
-                out[at * 4 + 1] = dressed.g();
-                out[at * 4 + 2] = dressed.b();
+            let value = |dx: isize, dy: isize| {
+                let (sx, sy) = ((x as isize + dx).clamp(0, size as isize - 1), (y as isize + dy).clamp(0, size as isize - 1));
+                soft[sy as usize * size + sx as usize]
+            };
+            let (gx, gy) = ((value(1, 0) - value(-1, 0)) / 2.0, (value(0, 1) - value(0, -1)) / 2.0);
+            let slope = gx.hypot(gy) + 1e-6;
+            let (nx, ny) = (-gx / slope, -gy / slope);
+            let towards = (nx * light.0 + ny * light.1).clamp(0.0, 1.0).powf(GLASS_FACING);
+            let away = (-nx * light.0 - ny * light.1).clamp(0.0, 1.0).powf(GLASS_FACING);
+            let swell = between(&swell_in, &swell_out, at);
+            let lift = catch[at] * (GLASS_CATCH.1 * towards + GLASS_CATCH.2 * away)
+                + spread[at] * (GLASS_SPREAD.1 * towards + GLASS_SPREAD.2 * away)
+                + GLASS_GLOW.1 * glow[at]
+                + swell * (GLASS_SWELL_LIT.0 * towards + GLASS_SWELL_LIT.1 * away);
+            let aside = (1.0 - towards) * (1.0 - away);
+            let drop = GLASS_BETWEEN.2 * between(&inside, &outside, at) * aside
+                + GLASS_THICK.2 * between(&thin, &thick, at)
+                + GLASS_SWELL_SHADE * swell * aside;
+            if lift <= 0.0 && drop <= 0.0 {
+                continue;
+            }
+            for c in 0..3 {
+                let v = f32::from(out[at * 4 + c]) / 255.0;
+                let v = (v + lift * (1.0 - v)) * (1.0 - drop);
+                out[at * 4 + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }
     }
@@ -219,25 +250,6 @@ fn dress_mac(out: &mut [u8], tile: &[(f32, f32)], size: usize, ground: Color32) 
         }
         out[at * 4 + 3] = (alpha * 255.0).round().min(255.0) as u8;
     }
-}
-
-fn min_filter(values: &[f32], size: usize, reach: isize) -> Vec<f32> {
-    let pass = |src: &[f32], across: bool| -> Vec<f32> {
-        let mut dst = vec![0.0; src.len()];
-        for y in 0..size as isize {
-            for x in 0..size as isize {
-                let mut least = f32::MAX;
-                for d in -reach..=reach {
-                    let (sx, sy) = if across { (x + d, y) } else { (x, y + d) };
-                    let v = if sx < 0 || sy < 0 || sx >= size as isize || sy >= size as isize { 0.0 } else { src[sy as usize * size + sx as usize] };
-                    least = least.min(v);
-                }
-                dst[y as usize * size + x as usize] = least;
-            }
-        }
-        dst
-    };
-    pass(&pass(values, true), false)
 }
 
 fn box_blur(values: &[f32], size: usize, radius: usize) -> Vec<f32> {
@@ -322,6 +334,16 @@ pub fn letter_square(ctx: &egui::Context, size: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
+fn weight_down(mask: &Mask) -> f32 {
+    let (mut sum, mut moment) = (0.0f32, 0.0f32);
+    for (at, &c) in mask.cover.iter().enumerate() {
+        let c = c as f32;
+        sum += c;
+        moment += c * ((at / mask.width) as f32 + 0.5);
+    }
+    if sum > 0.0 { moment / sum } else { mask.height as f32 / 2.0 }
+}
+
 fn weight_across(mask: &Mask) -> f32 {
     let (mut sum, mut moment) = (0.0f32, 0.0f32);
     for (at, &c) in mask.cover.iter().enumerate() {
@@ -347,6 +369,28 @@ pub fn premultiplied(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_scheme_looks_closed() {
+        use super::super::theme::Theme;
+        let near = |c: Color32, to: u8| [c.r(), c.g(), c.b()].iter().all(|&v| v.abs_diff(to) < 24);
+        for theme in Theme::all() {
+            let (ground, ink) = theme.icon_colours();
+            assert!(!(near(ground, 0) && near(ink, 255)), "{theme:?} looks like the closed icon");
+        }
+    }
+
+    #[test]
+    fn every_icon_k_is_legible() {
+        use super::super::theme::{contrast, Theme};
+        for theme in Theme::all() {
+            if matches!(theme, Theme::Eigenes | Theme::EigenesDunkel) {
+                continue;
+            }
+            let (ground, ink) = theme.icon_colours();
+            assert!(contrast(ground, ink) >= 3.0, "{theme:?}: {}", contrast(ground, ink));
+        }
+    }
 
     #[test]
     fn the_tile_is_on_the_grid() {
@@ -444,5 +488,28 @@ mod tests {
             }
         }
         sheet.save(path).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn icon_frames() {
+        use super::super::theme::Theme;
+        let dir = std::path::PathBuf::from(std::env::var("KESSLER_ICON_FRAMES").unwrap_or("/tmp/icon-frames".into()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let muto = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/fonts/Muto/MutoBold.otf"));
+        let size = 1024;
+        let letter = match &muto {
+            Ok(data) => sized(size, |p| super::super::glyphs::letter_in(data, 'k', p, &[])).unwrap(),
+            Err(_) => {
+                let asap = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/fonts/Asap/Asap-Variable.ttf")).unwrap();
+                sized(size, |p| super::super::glyphs::letter_in(&asap, 'k', p, ICON_AT)).unwrap()
+            }
+        };
+        for (n, theme) in Theme::all().iter().enumerate() {
+            let (ground, accent) = theme.icon_colours();
+            let px = compose(size, Shape::Mac, ground, accent, Some(&letter));
+            let icon = image::RgbaImage::from_raw(size as u32, size as u32, px).unwrap();
+            icon.save(dir.join(format!("{n:02}-{theme:?}.png"))).unwrap();
+        }
     }
 }

@@ -135,8 +135,8 @@ impl GuiApp {
     }
 
     pub(in crate::gui) fn dress_the_icon(&mut self, ctx: &egui::Context) {
-        let palette = self.resolved.palette();
-        let wanted = (palette.ground, palette.accent, self.typeface.clone(), crate::lang::current());
+        let (ground, accent) = self.resolved.icon_colours();
+        let wanted = (ground, accent, self.typeface.clone(), crate::lang::current());
         if self.icon_dressed.as_ref() == Some(&wanted) {
             return;
         }
@@ -145,7 +145,7 @@ impl GuiApp {
             return;
         };
         self.icon_dressed = Some(wanted);
-        let rgba = appicon::compose(size, appicon::Shape::here(), palette.ground, palette.accent, Some(&letter));
+        let rgba = appicon::compose(size, appicon::Shape::here(), ground, accent, Some(&letter));
         if !crate::media::set_dock_icon(&appicon::premultiplied(&rgba), size, size) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(egui::IconData {
                 rgba,

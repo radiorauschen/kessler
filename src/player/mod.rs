@@ -352,6 +352,8 @@ impl Player {
                 Ok(Ok(source)) => {
                     on.opening = None;
                     on.since = Some(std::time::Instant::now());
+                    let again = if on.tries > 0 { format!(" · wieder, {}. versuch", on.tries) } else { String::new() };
+                    watch::note(format!("radio: {} · verbunden{again}", watch::short(&on.url)));
                     if playing {
                         self.engine.play_stream(source, &on.url);
                     }
@@ -359,6 +361,7 @@ impl Player {
                 }
                 Ok(Err(why)) => {
                     on.opening = None;
+                    watch::note(format!("radio: {} · ging nicht auf: {why}", watch::short(&on.url)));
                     if on.tries > 0 && on.tries < RETRIES {
                         on.tries += 1;
                         on.again_at = Some(std::time::Instant::now() + RETRY_AFTER * 2u32.pow(on.tries - 1));
@@ -380,12 +383,20 @@ impl Player {
             if on.since.is_some_and(|since| since.elapsed() >= HELD_FOR) {
                 on.tries = 0;
             }
+            let held = on.since.map(|since| since.elapsed().as_secs_f64()).unwrap_or_default();
             if on.tries < RETRIES {
                 on.tries += 1;
                 on.since = None;
-                on.again_at = Some(std::time::Instant::now() + RETRY_AFTER * 2u32.pow(on.tries - 1));
+                let wait = RETRY_AFTER * 2u32.pow(on.tries - 1);
+                on.again_at = Some(std::time::Instant::now() + wait);
+                watch::note(format!(
+                    "radio: {} · abgebrochen nach {held:.0} s, neu verbinden in {:.0} s",
+                    watch::short(&on.url),
+                    wait.as_secs_f64()
+                ));
                 return Ok(true);
             }
+            watch::note(format!("radio: {} · abgebrochen nach {held:.0} s, aufgegeben", watch::short(&on.url)));
             self.state = PlaybackState::Stopped;
             self.on_air = None;
             return Ok(true);

@@ -6,6 +6,10 @@ use rodio::Source;
 
 pub const AHEAD: Duration = Duration::from_secs(3);
 
+pub const CUSHION: Duration = Duration::from_secs(2);
+
+const LIVE_ROOM: Duration = Duration::from_secs(8);
+
 const CHUNK: usize = 4096;
 
 struct Store {
@@ -15,6 +19,7 @@ struct Store {
     seek_to: Option<Duration>,
     seeking: bool,
     starved: Option<std::time::Instant>,
+    first: bool,
 }
 
 const STARVED_AFTER: Duration = Duration::from_millis(30);
@@ -24,6 +29,8 @@ struct Shared<S> {
     store: Mutex<Store>,
     changed: Condvar,
     room: usize,
+    cushion: usize,
+    live: bool,
 }
 
 pub struct Ahead<S: Source + Send + 'static> {
@@ -37,16 +44,38 @@ pub struct Ahead<S: Source + Send + 'static> {
 
 impl<S: Source + Send + 'static> Ahead<S> {
     pub fn new(inner: S) -> Self {
+        Self::with(inner, AHEAD, None)
+    }
+
+    pub fn live(inner: S) -> Self {
+        Self::with(inner, LIVE_ROOM, Some(CUSHION))
+    }
+
+    fn with(inner: S, ahead: Duration, cushion: Option<Duration>) -> Self {
         let channels = inner.channels();
         let rate = inner.sample_rate();
         let total = inner.total_duration();
         let per_second = rate.get() as usize * usize::from(channels.get());
-        let room = (per_second * AHEAD.as_millis() as usize / 1000).div_ceil(CHUNK).max(2);
+        let chunks = |d: Duration| (per_second * d.as_millis() as usize / 1000).div_ceil(CHUNK);
+        let room = chunks(ahead).max(2);
+        let cushion_chunks = cushion.map_or(1, |c| chunks(c).clamp(1, room - 1));
+        let live = cushion.is_some();
+        let store = Store {
+            chunks: VecDeque::new(),
+            done: false,
+            stop: false,
+            seek_to: None,
+            seeking: false,
+            starved: live.then(std::time::Instant::now),
+            first: live,
+        };
         let shared = Arc::new(Shared {
             inner: Mutex::new(inner),
-            store: Mutex::new(Store { chunks: VecDeque::new(), done: false, stop: false, seek_to: None, seeking: false, starved: None }),
+            store: Mutex::new(store),
             changed: Condvar::new(),
             room,
+            cushion: cushion_chunks,
+            live,
         });
         let reading = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -95,9 +124,18 @@ fn read<S: Source>(shared: &Shared<S>) {
         }
         store.done = ended;
         store.seeking = false;
-        if let Some(since) = store.starved.take() {
-            let silent = since.elapsed();
-            if silent >= Duration::from_millis(250) {
+        if store.starved.is_some() && (ended || store.chunks.len() >= shared.cushion) {
+            let silent = store.starved.take().map(|since| since.elapsed()).unwrap_or_default();
+            let first = std::mem::take(&mut store.first);
+            if first {
+                super::watch::note(format!("radio: {:.0} s polster nach {:.1} s da, es klingt", CUSHION.as_secs_f64(), silent.as_secs_f64()));
+            } else if shared.live {
+                super::watch::note(format!(
+                    "ton: {:.1} s stille, es kam nichts nach · gewartet, bis wieder {:.0} s da waren",
+                    silent.as_secs_f64(),
+                    CUSHION.as_secs_f64()
+                ));
+            } else if silent >= Duration::from_millis(250) {
                 super::watch::note(format!("ton: {:.1} s stille, es kam nichts nach", silent.as_secs_f64()));
             }
         }
@@ -127,6 +165,15 @@ impl<S: Source + Send + 'static> Iterator for Ahead<S> {
         }
         let mut store = self.shared.store.lock().unwrap_or_else(|e| e.into_inner());
         loop {
+            if store.stop {
+                return None;
+            }
+            if store.starved.is_some() && !store.done {
+                drop(store);
+                self.current = vec![0.0; usize::from(self.channels.get())];
+                self.at = 1;
+                return Some(0.0);
+            }
             if let Some(chunk) = store.chunks.pop_front() {
                 drop(store);
                 self.shared.changed.notify_all();
@@ -137,7 +184,7 @@ impl<S: Source + Send + 'static> Iterator for Ahead<S> {
             if store.done || store.stop {
                 return None;
             }
-            if store.seeking || store.starved.is_some() {
+            if store.seeking {
                 drop(store);
                 self.current = vec![0.0; usize::from(self.channels.get())];
                 self.at = 1;
@@ -164,13 +211,19 @@ impl<S: Source + Send + 'static> Source for Ahead<S> {
         }
         let mut store = self.shared.store.lock().unwrap_or_else(|e| e.into_inner());
         loop {
+            if store.stop {
+                return Some(0);
+            }
+            if store.starved.is_some() && !store.done {
+                return Some(usize::from(self.channels.get()));
+            }
             if let Some(chunk) = store.chunks.front() {
                 return Some(chunk.len());
             }
-            if store.done || store.stop {
+            if store.done {
                 return Some(0);
             }
-            if store.seeking || store.starved.is_some() {
+            if store.seeking {
                 return Some(usize::from(self.channels.get()));
             }
             store = wait_a_little(&self.shared, store);
@@ -382,5 +435,79 @@ mod tests {
         drop(ahead);
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(Arc::strong_count(&shared), 1);
+    }
+
+    struct Gated {
+        given: Arc<std::sync::atomic::AtomicUsize>,
+        sent: usize,
+    }
+
+    impl Iterator for Gated {
+        type Item = f32;
+        fn next(&mut self) -> Option<f32> {
+            use std::sync::atomic::Ordering;
+            loop {
+                if self.sent < self.given.load(Ordering::SeqCst) {
+                    self.sent += 1;
+                    return Some(1.0);
+                }
+                if Arc::strong_count(&self.given) == 1 {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    impl Source for Gated {
+        fn current_span_len(&self) -> Option<usize> {
+            None
+        }
+        fn channels(&self) -> rodio::ChannelCount {
+            rodio::nz!(2)
+        }
+        fn sample_rate(&self) -> rodio::SampleRate {
+            rodio::nz!(8000)
+        }
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+    }
+
+    fn cushion_of_gated() -> usize {
+        (2 * 8000 * CUSHION.as_millis() as usize / 1000).div_ceil(CHUNK) * CHUNK
+    }
+
+    fn heard(ahead: &mut Ahead<Gated>, asked: usize) -> usize {
+        (0..asked).filter(|_| ahead.next() == Some(1.0)).count()
+    }
+
+    #[test]
+    fn a_station_waits_for_its_cushion() {
+        use std::sync::atomic::Ordering;
+        let given = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut ahead = Ahead::live(Gated { given: Arc::clone(&given), sent: 0 });
+        given.store(cushion_of_gated() - CHUNK, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(heard(&mut ahead, 1000), 0, "a scrap is not a cushion");
+        given.store(cushion_of_gated(), Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(heard(&mut ahead, 1000), 1000);
+    }
+
+    #[test]
+    fn a_station_run_dry_gathers_again() {
+        use std::sync::atomic::Ordering;
+        let given = Arc::new(std::sync::atomic::AtomicUsize::new(cushion_of_gated()));
+        let mut ahead = Ahead::live(Gated { given: Arc::clone(&given), sent: 0 });
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(heard(&mut ahead, cushion_of_gated()), cushion_of_gated());
+        assert_eq!(heard(&mut ahead, 1000), 0);
+        given.fetch_add(CHUNK, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(heard(&mut ahead, 1000), 0, "one chunk does not end the silence");
+        given.fetch_add(cushion_of_gated(), Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(heard(&mut ahead, 1000), 1000);
     }
 }

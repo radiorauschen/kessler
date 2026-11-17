@@ -547,6 +547,7 @@ pub const PART: &[(&str, &str)] = &[
     ("{}: verbunden, der sender schickt nicht mit, was läuft", "{}: tuned in, the station does not send what it plays"),
     ("der sender sagt nicht, was läuft", "the station doesn't say what it plays"),
     ("{} kbit/s", "{} kbit/s"),
+    ("{}–{} kbit/s", "{}–{} kbit/s"),
     ("vom sender selbst", "from the station itself"),
     ("wikipedia", "wikipedia"),
     ("der sender hat noch nicht gesagt, was läuft", "the station has not said yet what is playing"),
