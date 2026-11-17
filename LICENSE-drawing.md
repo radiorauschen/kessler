@@ -1,32 +1,33 @@
 # the drawings
 
-the drawings kessler shows — under „über" in its menu, and over „alles ist
-ausgeschaltet" — are by felix (radiorauschen), drawn by hand for kessler.
-they are not under kessler's licence (gpl-3.0-or-later) but under their
-own:
+all drawings in this repository are by felix (radiorauschen), drawn by hand
+for kessler — those kessler shows in its window, those in the readme and the
+one on the disk image for the mac. they are not under kessler's licence
+(gpl-3.0-or-later) but under their own:
 
 **creative commons attribution-noncommercial-noderivatives 4.0
 international (cc by-nc-nd 4.0)**
 <https://creativecommons.org/licenses/by-nc-nd/4.0/>
 
-you may copy and pass it on, as part of kessler or on its own, as long as
-you name felix as its author, do not use it commercially and do not change
-it. kessler tints them in the colour scheme's receded accent and scales
-them to the window, as every copy of kessler does; that is how they are
-meant to be shown.
+you may copy and pass them on, as part of kessler or on their own, as long
+as you name felix as their author, do not use them commercially and do not
+change them. in the window kessler tints them in the colour scheme's
+receded accent and scales them to fit, as every copy of kessler does; that
+is how they are meant to be shown.
 
-this covers:
+this covers every drawing, its scan and every picture made from it, and
+whatever drawing is added later. at present:
 
-- `bundle/drawing-scan.webp` — the scan
-- `docs/screenshots/drawing.png` — the same drawing for the readme's head
-- `src/gui/drawing.png` — the same drawing as a mask, made from the scan by
-  `bundle/make-drawing.py` (the script itself is part of kessler and under
-  its licence)
-- `bundle/drawing-off-scan.webp` and `src/gui/drawing-off.png` — the second
-  drawing, its scan and its mask, made the same way
-- `bundle/dmg/seesaw-scan.webp`, `bundle/dmg/arrow-scan.webp` and the
-  pictures made from them, `bundle/dmg/background.png` and
-  `background@2x.png` — the disk image's picture
+- `bundle/drawing-scan.webp`, `src/gui/drawing.png` and
+  `docs/screenshots/drawing.png` — the drawing under „über" and at the head
+  of the readme: its scan, its mask (made by `bundle/make-drawing.py`, a
+  script that is part of kessler and under its licence) and the readme's copy
+- `bundle/drawing-off-scan.webp` and `src/gui/drawing-off.png` — the drawing
+  over „alles ist ausgeschaltet", its scan and its mask
+- `docs/screenshots/drawing-2.png` — the drawing at the foot of the readme
+- `bundle/dmg/seesaw-scan.webp`, `bundle/dmg/arrow-scan.webp`,
+  `bundle/dmg/background.png` and `background@2x.png` — the disk image's
+  picture, its scans and what is made from them
 
 the motto under „über", „»warum großschreiben, wenn man nicht groß sprechen
 kann?«", is not felix's and not covered here: it is a quotation, ascribed to

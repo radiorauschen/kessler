@@ -261,8 +261,8 @@ kessler is free software: you can pass it on and change it under the terms of
 the [gnu general public license](LICENSE), version 3 or (at your choice) any
 later version. it comes with no warranty.
 
-my drawings in the menu and on the page kessler shows with everything
-switched off are under their own terms, [cc by-nc-nd 4.0](LICENSE-drawing.md).
+all my drawings — in the window, in this readme and on the disk image — are
+under their own terms, [cc by-nc-nd 4.0](LICENSE-drawing.md).
 the motto under „über“ is a quotation, ascribed to people of the hfg ulm or
 of the bauhaus. the typefaces in `fonts/` keep their own licences, and so do
 the libraries kessler is built from (menu → über → `lizenzen`).
