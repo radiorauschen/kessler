@@ -14,11 +14,9 @@ runs on macos,
 linux (including the raspberry pi) and windows, and is written in rust with
 egui and sqlite.
 
-<p align="center"><img src="docs/screenshots/logo.webp" width="96" alt="kessler's icon in the colours of its schemes, one after the other"></p>
-
 ![the window in each of kessler's fifty colour schemes, one after the other](docs/screenshots/colours.webp)
 
-![all fifty colour schemes side by side, a stripe each: its ground, and on it its accent, its ink and its two quieter tones](docs/screenshots/schemes.png)
+<p align="center"><img src="docs/screenshots/logo.webp" height="128" alt="kessler's icon in the colours of its schemes, one after the other">&nbsp;&nbsp;<img src="docs/screenshots/schemes.png" height="128" alt="all fifty colour schemes side by side, a stripe each: its ground, and on it its accent, its ink and its two quieter tones"></p>
 
 ![the music: artists, the albums in the track list, the queue and what is known about the artist, side by side](docs/screenshots/music.webp)
 
