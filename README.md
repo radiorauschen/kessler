@@ -79,7 +79,7 @@ egui and sqlite.
 
 ![the radio: the stations kept, the one on the air, its schedule and the songs kept from it](docs/screenshots/radio.webp)
 
-![the podcasts: the ones followed, their episodes by week, and the episode playing](docs/screenshots/podcasts.webp)
+![the podcasts: the ones followed, a show and its episodes, and the episode playing](docs/screenshots/podcasts.webp)
 
 ![the words of the song playing, in a column beside the queue](docs/screenshots/lyrics.webp)
 
