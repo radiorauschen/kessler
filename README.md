@@ -12,7 +12,7 @@ and it is written in rust with egui and sqlite.
 
 ![the music: artists, the albums in the track list, the queue and what is known about the artist, side by side](docs/screenshots/music.webp)
 
-<sub>music: albums, queue and the artist side by side</sub>
+<p align="center"><sub>music: albums, queue and the artist side by side</sub></p>
 
 <p align="center"><img src="docs/screenshots/colours.webp" alt="the window in each of kessler's fifty colour schemes, one after the other"></p>
 
@@ -67,27 +67,27 @@ and it is written in rust with egui and sqlite.
 
 ![the radio: the stations kept, the one on the air, its schedule and the songs kept from it](docs/screenshots/radio.webp)
 
-<sub>radio: a station, its schedule and the songs kept</sub>
+<p align="center"><sub>radio: a station, its schedule and the songs kept</sub></p>
 
 ![the podcasts: the ones followed, a show and its episodes, and the episode playing](docs/screenshots/podcasts.webp)
 
-<sub>podcasts: a show, its episodes and the one playing</sub>
+<p align="center"><sub>podcasts: a show, its episodes and the one playing</sub></p>
 
 ![the words of the song playing, in a column beside the queue](docs/screenshots/lyrics.webp)
 
-<sub>lyrics beside the queue</sub>
+<p align="center"><sub>lyrics beside the queue</sub></p>
 
 ![the equalizer: ten bands, presets, and how far it turns the whole down so nothing clips](docs/screenshots/equalizer.webp)
 
-<sub>the equalizer</sub>
+<p align="center"><sub>the equalizer</sub></p>
 
 ![an ipod plugged in: what is on it, and what the device says about itself](docs/screenshots/ipod.webp)
 
-<sub>an ipod plugged in</sub>
+<p align="center"><sub>an ipod plugged in</sub></p>
 
 ![with everything switched off: a drawing, and how to switch something on](docs/screenshots/all-off.webp)
 
-<sub>everything switched off</sub>
+<p align="center"><sub>everything switched off</sub></p>
 
 all settings are in the menu (`m`):
 
