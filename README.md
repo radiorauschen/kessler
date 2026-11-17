@@ -10,9 +10,11 @@ touching the mouse (the mouse works as well). it is set in muto, a typeface by
 in the menu bar. it runs on macos, linux (the raspberry pi too) and windows,
 and it is written in rust with egui and sqlite.
 
-![the music: artists, the albums in the track list, the queue and what is known about the artist, side by side](docs/screenshots/music.webp)
+<br>
 
 <p align="center"><sub>music view</sub></p>
+
+![the music: artists, the albums in the track list, the queue and what is known about the artist, side by side](docs/screenshots/music.webp)
 
 <p align="center"><img src="docs/screenshots/colours.webp" alt="the window in each of kessler's fifty colour schemes, one after the other"></p>
 
@@ -65,29 +67,41 @@ and it is written in rust with egui and sqlite.
   title whose letters can swell with the music, a screen saver, 50 colour
   schemes in light and dark pairs, and german, english and japanese.
 
-![the radio: the stations kept, the one on the air, its schedule and the songs kept from it](docs/screenshots/radio.webp)
+<br>
 
 <p align="center"><sub>radio view</sub></p>
 
-![the podcasts: the ones followed, a show and its episodes, and the episode playing](docs/screenshots/podcasts.webp)
+![the radio: the stations kept, the one on the air, its schedule and the songs kept from it](docs/screenshots/radio.webp)
+
+<br>
 
 <p align="center"><sub>podcast view</sub></p>
 
-![the words of the song playing, in a column beside the queue](docs/screenshots/lyrics.webp)
+![the podcasts: the ones followed, a show and its episodes, and the episode playing](docs/screenshots/podcasts.webp)
+
+<br>
 
 <p align="center"><sub>lyrics</sub></p>
 
-![the equalizer: ten bands, presets, and how far it turns the whole down so nothing clips](docs/screenshots/equalizer.webp)
+![the words of the song playing, in a column beside the queue](docs/screenshots/lyrics.webp)
+
+<br>
 
 <p align="center"><sub>equalizer</sub></p>
 
-![an ipod plugged in: what is on it, and what the device says about itself](docs/screenshots/ipod.webp)
+![the equalizer: ten bands, presets, and how far it turns the whole down so nothing clips](docs/screenshots/equalizer.webp)
+
+<br>
 
 <p align="center"><sub>ipod view</sub></p>
 
-![with everything switched off: a drawing, and how to switch something on](docs/screenshots/all-off.webp)
+![an ipod plugged in: what is on it, and what the device says about itself](docs/screenshots/ipod.webp)
+
+<br>
 
 <p align="center"><sub>all views switched off</sub></p>
+
+![with everything switched off: a drawing, and how to switch something on](docs/screenshots/all-off.webp)
 
 all settings are in the menu (`m`):
 
