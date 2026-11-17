@@ -50,6 +50,56 @@ pub struct Icy {
     every: Option<usize>,
     left: usize,
     said: Said,
+    pace: Pace,
+}
+
+struct Pace {
+    name: String,
+    expected: Option<f64>,
+    since: std::time::Instant,
+    bytes: u64,
+    behind: bool,
+}
+
+const PACE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl Pace {
+    fn new(url: &str, bitrate: &str) -> Self {
+        Pace {
+            name: super::watch::short(url),
+            expected: bitrate.parse::<f64>().ok().filter(|kbit| *kbit > 0.0).map(|kbit| kbit * 1000.0 / 8.0),
+            since: std::time::Instant::now(),
+            bytes: 0,
+            behind: false,
+        }
+    }
+
+    fn came(&mut self, n: usize) {
+        self.bytes += n as u64;
+        let took = self.since.elapsed();
+        if took < PACE_EVERY {
+            return;
+        }
+        if let Some(said) = self.reading(took.as_secs_f64()) {
+            super::watch::note(said);
+        }
+        self.since = std::time::Instant::now();
+        self.bytes = 0;
+    }
+
+    fn reading(&mut self, took: f64) -> Option<String> {
+        let expected = self.expected?;
+        let rate = self.bytes as f64 / took;
+        let kbit = |bytes: f64| bytes * 8.0 / 1000.0;
+        let behind = rate < expected * 0.85;
+        let said = match (self.behind, behind) {
+            (false, true) => Some(format!("radio: {} · kommt langsamer an, {:.0} von {:.0} kb/s", self.name, kbit(rate), kbit(expected))),
+            (true, false) => Some(format!("radio: {} · kommt wieder schnell genug an, {:.0} kb/s", self.name, kbit(rate))),
+            _ => None,
+        };
+        self.behind = behind;
+        said
+    }
 }
 
 impl Read for Icy {
@@ -65,6 +115,7 @@ impl Read for Icy {
         let wanted = if self.every.is_some() { buf.len().min(self.left) } else { buf.len() };
         let n = self.out.read(&mut buf[..wanted])?;
         self.read += n as u64;
+        self.pace.came(n);
         self.left = self.left.saturating_sub(n);
         Ok(n)
     }
@@ -276,7 +327,7 @@ fn ask(url: &str) -> Result<(Child, BufReader<ChildStdout>, Head), String> {
 pub fn open(url: &str, said: Said, introduced: Introduced) -> Result<Decoder<BufReader<Stream>>, String> {
     let mut url = url.to_string();
     let mut deep = 0;
-    let (child, out, every) = loop {
+    let (child, out, every, bitrate) = loop {
         let (mut child, mut out, head) = ask(&url)?;
         if super::hls::is_hls(&url, &head.kind) {
             let mut text = String::new();
@@ -288,8 +339,9 @@ pub fn open(url: &str, said: Said, introduced: Introduced) -> Result<Decoder<Buf
             return decoder(Stream::Hls(hls), Some(if mp3 { "mp3" } else { "aac" }));
         }
         if !is_playlist(&url, &head.kind) {
+            let bitrate = head.intro.bitrate.clone();
             *introduced.lock().unwrap_or_else(|e| e.into_inner()) = Some(Introduction { titles: head.every.is_some(), ..head.intro });
-            break (child, out, head.every);
+            break (child, out, head.every, bitrate);
         }
         let mut text = String::new();
         let _ = (&mut out).take(64 * 1024).read_to_string(&mut text);
@@ -301,7 +353,8 @@ pub fn open(url: &str, said: Said, introduced: Introduced) -> Result<Decoder<Buf
             _ => return Err("the playlist names no stream".to_string()),
         }
     };
-    let stream = Stream::Icy(Icy { child, out, read: 0, every, left: every.unwrap_or(0), said });
+    let pace = Pace::new(&url, &bitrate);
+    let stream = Stream::Icy(Icy { child, out, read: 0, every, left: every.unwrap_or(0), said, pace });
     decoder(stream, None)
 }
 
@@ -377,6 +430,22 @@ mod tests {
         let m3u = "#EXTM3U\n#EXTINF:-1,Radio\nhttp://s.example:8000/stream\n";
         assert_eq!(super::first_in_playlist(m3u).as_deref(), Some("http://s.example:8000/stream"));
         assert_eq!(super::first_in_playlist("nothing here"), None);
+    }
+
+    #[test]
+    fn falling_behind_is_said_once() {
+        let mut pace = super::Pace::new("https://example.org/live.mp3?key=secret", "128");
+        let mut stretch = |kbit: f64| {
+            pace.bytes = (kbit * 1000.0 / 8.0 * 5.0) as u64;
+            pace.reading(5.0)
+        };
+        assert_eq!(stretch(128.0), None);
+        let said = stretch(80.0).unwrap();
+        assert!(said.contains("80 von 128 kb/s") && !said.contains("secret"), "{said}");
+        assert_eq!(stretch(60.0), None);
+        assert!(stretch(130.0).unwrap().contains("wieder"));
+        assert_eq!(stretch(128.0), None);
+        assert_eq!(super::Pace::new("https://example.org/live", "").reading(5.0), None);
     }
 
     #[test]

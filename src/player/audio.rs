@@ -317,7 +317,7 @@ impl AudioEngine {
         if let Some(sink) = self.woken_sink() {
             let sink = sink.lock().unwrap_or_else(|e| e.into_inner());
             sink.clear();
-            sink.append(Tap::levelled(super::ahead::Ahead::new(source), Arc::clone(&self.heard), &self.leveling, Path::new(url)));
+            sink.append(Tap::levelled(super::ahead::Ahead::live(source), Arc::clone(&self.heard), &self.leveling, Path::new(url)));
             sink.play();
         }
         let mut lined_up = self.lined_up.lock().unwrap_or_else(|e| e.into_inner());

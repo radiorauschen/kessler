@@ -547,6 +547,7 @@ pub const PART: &[(&str, &str)] = &[
     ("{}: verbunden, der sender schickt nicht mit, was läuft", "{}: 接続しました。局は曲情報を送っていません"),
     ("der sender sagt nicht, was läuft", "局は曲情報を送っていません"),
     ("{} kbit/s", "{} kbit/s"),
+    ("{}–{} kbit/s", "{}–{} kbit/s"),
     ("vom sender selbst", "局自身より"),
     ("wikipedia", "ウィキペディア"),
     ("der sender hat noch nicht gesagt, was läuft", "局はまだ何が流れているか伝えていません"),

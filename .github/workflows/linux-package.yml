@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   linux:
+    if: github.repository == 'radiorauschen/kessler' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

@@ -11,11 +11,12 @@ pub enum TrackColumn {
     Rating,
     Plays,
     Added,
+    Bitrate,
     Length,
 }
 
 impl TrackColumn {
-    pub const ALL: [TrackColumn; 8] = [
+    pub const ALL: [TrackColumn; 9] = [
         Self::Number,
         Self::Album,
         Self::Year,
@@ -23,13 +24,15 @@ impl TrackColumn {
         Self::Rating,
         Self::Plays,
         Self::Added,
+        Self::Bitrate,
         Self::Length,
     ];
 
     pub const DEFAULT: [TrackColumn; 2] = [Self::Number, Self::Length];
 
-    pub const FIRST_TO_GO: [TrackColumn; 8] = [
+    pub const FIRST_TO_GO: [TrackColumn; 9] = [
         Self::Genre,
+        Self::Bitrate,
         Self::Album,
         Self::Added,
         Self::Plays,
@@ -48,6 +51,7 @@ impl TrackColumn {
             Self::Rating => "wertung",
             Self::Plays => "plays",
             Self::Added => "hinzugefügt",
+            Self::Bitrate => "bitrate",
             Self::Length => "länge",
         }
     }
@@ -66,6 +70,7 @@ impl TrackColumn {
             Self::Rating => 64.0,
             Self::Plays => 42.0,
             Self::Added => 82.0,
+            Self::Bitrate => 52.0,
             Self::Length => 52.0,
         }
     }
@@ -78,7 +83,7 @@ impl TrackColumn {
     }
 
     pub fn figures(self) -> bool {
-        matches!(self, Self::Number | Self::Year | Self::Plays | Self::Length)
+        matches!(self, Self::Number | Self::Year | Self::Plays | Self::Bitrate | Self::Length)
     }
 
     pub fn role(self) -> crate::gui::theme::Role {
@@ -105,6 +110,7 @@ impl TrackColumn {
             Self::Rating => SortField::Rating,
             Self::Plays => SortField::PlayCount,
             Self::Added => SortField::DateAdded,
+            Self::Bitrate => SortField::Bitrate,
             Self::Length => SortField::Duration,
         }
     }
@@ -127,6 +133,11 @@ impl TrackColumn {
                 }
             }
             Self::Added => track.date_added.format("%d.%m.%Y").to_string(),
+            Self::Bitrate => track
+                .bitrate
+                .filter(|kbit| *kbit > 0)
+                .map(|kbit| kbit.to_string())
+                .unwrap_or_default(),
             Self::Length => text::duration(track.duration_secs as u64),
         }
     }
@@ -423,6 +434,12 @@ mod tests {
             "",
             "a file with no number was given a number anyway"
         );
+
+        assert_eq!(TrackColumn::Bitrate.value(&track), "");
+        track.bitrate = Some(0);
+        assert_eq!(TrackColumn::Bitrate.value(&track), "");
+        track.bitrate = Some(1411);
+        assert_eq!(TrackColumn::Bitrate.value(&track), "1411");
     }
 
     #[test]

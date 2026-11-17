@@ -127,6 +127,7 @@ pub enum SortField {
     Rating,
     TrackNumber,
     Genre,
+    Bitrate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +165,7 @@ impl SortField {
             Self::Rating => "rating",
             Self::TrackNumber => "track_number",
             Self::Genre => "genre",
+            Self::Bitrate => "bitrate",
         }
     }
 }

@@ -29,8 +29,17 @@ disagree — then fix this file.
 | `Label` | heads, facts, words at a row's end, the masthead |
 | `Figures` / `FiguresLabel` | numbers in the mono cut: track numbers, times, counts |
 
-- a row's facts under its title — a record's artist · year · genre, an
-  episode's podcast · day — in `Label`, the second tone.
+- a row's facts under its title — a record's tracks · year · genre ·
+  bitrate, an episode's podcast · day, a station's land · genre — in
+  `Label`, in the colour `flac` has beside a title (`RowState::secondary`,
+  `faint` on an unmarked row); who made it, where it has a line of its own,
+  in `Content`, the second tone.
+- from a title to the first line under it: a heading's line step,
+  `row · head_line()`, baseline to baseline — in the music, the radio and the
+  podcasts alike.
+- small lines one under another stand `text::SMALL_LINE` apart (the label
+  size at prose's leading): a station's facts, an episode's lines, the narrow
+  window's names, what stands under a podcast's name (`forms::say_under`).
 - figures stay regular whatever the row does; bold digits only make a column
   uneven.
 

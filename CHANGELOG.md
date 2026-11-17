@@ -1,54 +1,65 @@
-# Änderungen
+# changes
 
-Was sich von einer Version zur nächsten geändert hat, neueste zuerst. Ein
-Test prüft, dass die oberste Version die ist, die gebaut wird.
+what changed from one version to the next, newest first. a test checks that
+the topmost version is the one being built.
 
-Eine Zeile, die mit `## ` beginnt, ist eine Version; eine, die mit `- `
-beginnt, eine Änderung. Alles andere wird überlesen.
+a line starting with `## ` is a version; one starting with `- ` is a change.
+everything else is skipped.
+
+## 1.5.248
+
+- **radio** steadier: a station is heard once two seconds of it have come in, and up to eight seconds are kept ahead; should the network still run dry, it waits for two seconds again — one pause rather than a stutter
+- **record heads** in the combined view: album, artist and the facts (number of tracks, year, genre, added, bitrate) on three lines beside the cover, or two beside a small one; from 140 pt the lines stand under the cover
+- **track list**: a new column „bitrate" (sortable, off at first); with more than one album in the list, each gets a small heading of its own
+- **podcasts and radio**: the same line spacing as the music; the facts of an episode and of a station in the colour of „flac"; the picture of an episode a little larger
+- **cover size** slider in proportions rather than points, so the small sizes get more room; first start with 85 pt and the bitrate shown
+- **app icon**: the rounder corners of current macos, a glassy edge, a lighter shadow, the k in its optical centre; schemes with a grey ground take a stronger colour of their own, so that icons are easier to tell apart
+- **small things**: reading the library at start shows quietly at the bottom right, and messages there fade more slowly; in the narrow window the columns reach further down
+- **measuring**: the radio writes when it connects, reconnects or breaks off, when its store ran dry and when the sound comes in slower than the station's bitrate; the brackets name only what wanted the next frame soon
 
 ## 1.5.223
 
-- **neue version**: öffnet auf dem mac direkt die neueste signierte und notarisierte dmg statt der seite des releases
-- **mac-download**: ein fester link, der immer auf die neueste notarisierte dmg zeigt (siehe readme)
+- **new version**: on the mac it opens the newest signed and notarised dmg directly instead of the release page
+- **mac download**: one fixed link that always points to the newest notarised dmg (see the readme)
 
 ## 1.5.222
 
-- **podcasts, warteschlange** wie bei musik: gespielte folgen bleiben blass darüber stehen, ein doppelklick springt vor oder zurück, eigener cursor für die tastatur (j/k, d, shift + j/k, zweimal shift + d leert, shift + pfeil markiert mehrere), jede folge nur einmal; eine folge, die noch lädt, bleibt an ihrem platz und sagt „lädt…"
-- **ipod, experiment**: geladene, noch nicht gehörte folgen als playlist „podcasts" auf alte ipods; gehörte gehen beim nächsten abgleich wieder runter
-- **ipod-abgleich** robuster: die datenbank wird ganz geschrieben, bevor sie die alte ersetzt; ein fehlender ordner lässt nur diesen titel scheitern
-- **radio**: die zeile bleibt beim verbinden ruhig („sender verbinde…" mit laufenden punkten), wechsel werden überblendet, punkt und „live" gleiten; mit muto beginnt die animation mit einem quadrat, das am ende zum kreis wird
-- **menüleiste (mac)**: schlaf-timer im menü, solange eine folge läuft (auch im linux-panel); cover über dem titel mit gleichem rand rundum
-- **flüssiger**: kein kurzes ruckeln mehr alle 15 sekunden während einer folge; beim streamen einer folge seltener neu zeichnen; lautstärke angleichen misst mehrere platten zugleich
-- **kleinigkeiten**: grosser weicher schatten am rechtsklick-menü; „bei last.fm lieben" im rechtsklick-menü; system-cursor am spaltentrenner; anzahl der künstler:innen oben rechts (menü → künstler:innen); pfeile laufen beim zurückwechseln nicht mehr nach; der rest eines mausrad-schritts geht nicht mehr in die nächste spalte; „windpark soft" unter „über" verlinkt
-- **fehler behoben**: sehr grosse podcast-feeds liessen sich nicht laden; beim folgenwechsel stand kurz der musiktitel oben
-- **messen**: zeigt den speicher jetzt und was die podcasts tun (feeds, ansichten, laden)
+- **podcasts, queue** as in the music: played episodes stay above it, faint, a double click jumps back or ahead, a cursor of its own for the keyboard (j/k, d, shift + j/k, shift + d twice empties it, shift + arrow marks several), every episode only once; an episode still loading keeps its place and says „lädt…"
+- **ipod, experiment**: downloaded episodes not yet heard as a playlist „podcasts" on older ipods; heard ones leave again at the next sync
+- **ipod sync** sturdier: the database is written in full before it replaces the old one; a missing folder fails only that track
+- **radio**: the line stays calm while connecting („sender verbinde…" with running dots), changes cross-fade, dot and „live" glide; with muto the animation starts as a square that rounds into a circle at the end
+- **menu bar (mac)**: sleep timer in the menu while an episode plays (also in the linux panel); cover above the title with an even margin all round
+- **smoother**: no short stutter every 15 seconds during an episode any more; fewer redraws while an episode streams; loudness levelling measures several records at once
+- **small things**: a large soft shadow under the context menu; „bei last.fm lieben" in the context menu; system cursor on the column divider; number of artists at the top right (menu → künstler:innen); arrows no longer run on when switching back; the rest of a mouse-wheel step no longer spills into the next column; „windpark soft" under „über" is a link
+- **fixed**: very large podcast feeds would not load; changing episodes briefly showed the music title at the top
+- **measuring**: shows the memory now and what the podcasts do (feeds, views, loading)
 
 ## 1.5.200
 
-- **equalizer** (`z`): eine eigene spalte in musik, radio und podcasts — zehn bänder, voreinstellungen, zwei eigene; senkt automatisch so weit ab, dass nichts übersteuert
-- **ansichten**: musik, radio, podcasts und ipod lassen sich einzeln ein- und ausschalten (menü → allgemein, oder `c` und ziffer); beim ersten start ist alles aus und das fenster sagt, wie man einschaltet; jede ansicht merkt sich ihre eigene seitenspalte
-- **tastatur**: radio und podcasts ganz mit den pfeiltasten, das rechtsklick-menü mit `v`, cursor im suchfeld mit ← →, tastenübersicht (`?`) neu geordnet
-- **podcasts**: feeds werden nur noch gefragt, ob sich etwas geändert hat; serien nach staffel und folge; schlaf-timer in der fusszeile; deutlich weniger arbeitsspeicher
-- **radio**: beginnt ohne sender; ein sender ohne verbindung hält das fenster nicht mehr an und wird neu eingestellt
-- **wiedergabe**: nach einer pause oder einem verlorenen ausgabegerät geht es an derselben stelle weiter; ein abgestürzter dekoder reisst nichts mehr mit
-- **bilder**: beispielbild unter darstellung → bilder, das raster, töne und feinheit sofort zeigt; bilder im suchfeld gehen bis an den rand; kessler saga mit vorspann und mehr landschaft
-- **mac**: zeichnet direkt über metal (weniger arbeitsspeicher), quadratisches symbol in der menüleiste, neues icon mit kante und schatten, .dmg mit eigenem bild, signieren und notarisieren per skript
-- **linux**: mausrad und kopfzeile wie am mac, wahlweise vulkan (`KESSLER_GRAFIK=wgpu`)
-- **menü**: „tasten", „neue version" und „sparsam" unter allgemein; wertung als sterne; zwischenablage des systems; neues standard-farbschema 公園, hell oder dunkel wie das system
-- kessler sammelt nichts: keine telemetrie, keine analyse, keine absturzberichte — steht jetzt auch im readme und im handbuch
+- **equalizer** (`z`): a column of its own in music, radio and podcasts — ten bands, presets, two of your own; lowers itself automatically so that nothing clips
+- **views**: music, radio, podcasts and ipod can each be switched on and off (menu → allgemein, or `c` and a digit); on the first start everything is off and the window says how to switch on; every view remembers its own side column
+- **keyboard**: radio and podcasts entirely by arrow keys, the context menu with `v`, the cursor in the search field with ← →, key overview (`?`) rearranged
+- **podcasts**: feeds are only asked whether anything changed; series by season and episode; sleep timer in the footer; much less memory
+- **radio**: starts without a station; a station without a connection no longer holds up the window and is tuned in again
+- **playback**: after a pause or a lost output device it goes on at the same place; a crashed decoder no longer takes anything down with it
+- **pictures**: a sample picture under darstellung → bilder that shows grid, tones and fineness at once; pictures in the search field reach the edge; kessler saga with an opening and more landscape
+- **mac**: draws directly through metal (less memory), a square symbol in the menu bar, a new icon with edge and shadow, a .dmg with its own picture, signing and notarising by script
+- **linux**: mouse wheel and title bar as on the mac, vulkan if wanted (`KESSLER_GRAFIK=wgpu`)
+- **menu**: „tasten", „neue version" and „sparsam" under allgemein; rating as stars; the system clipboard; a new default colour scheme 公園, light or dark as the system is
+- kessler collects nothing: no telemetry, no analytics, no crash reports — now also stated in the readme and the manual
 
 ## 1.5.116
 
-- **podcasts**: folgen über die feed-adresse oder die suche, neue folgen im hintergrund, laden, weiterhören wo man aufgehört hat, behalten, archivieren und löschen je folge, kapitel in der zeitleiste, eigene warteschlange (`w`), beschreibung und links der sendung (`i`), „offen" für noch nicht gehörtes, teilen, schlaf-timer bis zum ende der folge
-- **radio**: stationen per stream-adresse, suche mit genre, land und bitrate, was als nächstes läuft, wo der sender es sagt, ruhigere leerzustände
-- **menü** neu geordnet: eigene reiter allgemein, radio und podcasts; radio, podcasts und ipod lassen sich ganz abschalten; „einstellungen zurücksetzen"
-- **kopfzeile**: neue umschalter zwischen musik, radio, podcasts und ipod, der menü-knopf in mehreren formen, alle bedienelemente nach einer farbregel
-- **bilder**: neues raster „blaues rauschen", neu gewählte rasterfarben; kleinere bilder und ein begrenzter bildspeicher, deutlich weniger arbeitsspeicher
-- **suchfeld und schoner**: kessler saga, kugel, zarathustra in misaki als laufender text, liedtext-schoner mit der gesungenen zeile in der mitte
-- **wiedergabe**: rodio 0.23 — kein knacken mehr zwischen titeln mit verschiedenen abtastraten, keine verzerrten stimmen beim wechsel zwischen musik, radio und podcast, spulen ohne zu hängen
-- **andere künstler:innen** als baum, linksbündig, klammern in der farbe ihrer namen
-- menüleiste (mac) mit dem cover der laufenden folge; junicode und chivo mono sind wieder raus; viele kleinere fehler behoben
+- **podcasts**: episodes by feed address or search, new episodes in the background, downloading, listening on where you left off, keeping, archiving and deleting per episode, chapters on the timeline, a queue of its own (`w`), the show's description and links (`i`), „offen" for what has not been heard, sharing, a sleep timer to the end of the episode
+- **radio**: stations by stream address, search by genre, country and bitrate, what plays next where the station says, calmer empty states
+- **menu** rearranged: tabs of their own for allgemein, radio and podcasts; radio, podcasts and ipod can be switched off entirely; „einstellungen zurücksetzen"
+- **masthead**: new switches between music, radio, podcasts and ipod, the menu button in several shapes, every control by one colour rule
+- **pictures**: a new grid „blue noise", newly chosen grid colours; smaller pictures and a bounded picture store, much less memory
+- **search field and screen saver**: kessler saga, ball, zarathustra in misaki as running text, a lyrics saver with the sung line in the middle
+- **playback**: rodio 0.23 — no more clicks between tracks of different sample rates, no distorted voices when changing between music, radio and podcast, seeking without hanging
+- **other artists** as a tree, left-aligned, brackets in the colour of their names
+- menu bar (mac) with the cover of the playing episode; junicode and chivo mono are out again; many smaller fixes
 
 ## 1.4.134
 
-- die erste öffentliche fassung von kessler: musikplayer mit ipod-verwaltung für den mac und linux, mit radio, last.fm, liedtexten, informationen über künstler:innen und drei sprachen
+- the first public version of kessler: a music player with ipod management for the mac and linux, with radio, last.fm, lyrics, information about artists and three languages

@@ -538,16 +538,8 @@ pub fn fetch_feed_since(url: &str, since: Option<&Validators>) -> Result<Reading
         Ok(Reading::Cached { .. }) => String::new(),
         Err(_) => "fehler".to_string(),
     };
-    crate::player::watch::note(format!("feed gelesen: {} · {said} · {took:.1} s (gewartet {wait:.1} s)", feed_name(url)));
+    crate::player::watch::note(format!("feed gelesen: {} · {said} · {took:.1} s (gewartet {wait:.1} s)", crate::player::watch::short(url)));
     answer
-}
-
-fn feed_name(url: &str) -> String {
-    let bare = url.split("://").nth(1).unwrap_or(url);
-    let bare = bare.split(['?', '#']).next().unwrap_or(bare);
-    let host = bare.split('/').next().unwrap_or(bare);
-    let last = bare.trim_end_matches('/').rsplit('/').next().filter(|l| *l != host).unwrap_or("");
-    if last.is_empty() { host.to_string() } else { format!("{host}/…/{last}") }
 }
 
 fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, String> {
@@ -592,7 +584,7 @@ fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, St
     let feed = feed::read(&text).ok_or_else(|| tr!("kein podcast-feed: {}", url))?;
     crate::player::watch::note(format!(
         "feed gelesen: {} · {:.1} mb · gelesen in {:.0} ms",
-        feed_name(url),
+        crate::player::watch::short(url),
         output.stdout.len() as f64 / 1e6,
         parsing.elapsed().as_secs_f64() * 1000.0
     ));
@@ -713,7 +705,7 @@ pub fn fetch_feed_later(url: &str, since: Option<Validators>, from_disk: bool) -
             if let Some((feed, _)) = &cached {
                 crate::player::watch::note(format!(
                     "feed von der platte: {} · {} folgen · {:.0} ms",
-                    feed_name(&url),
+                    crate::player::watch::short(&url),
                     feed.episodes.len(),
                     reading.elapsed().as_secs_f64() * 1000.0
                 ));

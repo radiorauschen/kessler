@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   mac:
+    if: github.repository == 'radiorauschen/kessler' || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
