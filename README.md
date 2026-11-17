@@ -22,6 +22,8 @@ egui and sqlite.
 
 ![the music: artists, the albums in the track list, the queue and what is known about the artist, side by side](docs/screenshots/music.webp)
 
+<sub>the music: fred frith's two records with their heads — cover, title, and the facts in the colour of „flac“ — the queue, and what is known about him, his picture screened in the scheme's colours.</sub>
+
 ## features
 
 - **keyboard.** every function has a key, in the music, the radio and the
@@ -79,11 +81,19 @@ egui and sqlite.
 
 ![the radio: the stations kept, the one on the air, its schedule and the songs kept from it](docs/screenshots/radio.webp)
 
+<sub>the radio: nts 2 on the air — what the station is, its schedule with the show playing and how long it has left, the songs kept from the radio, and the show's own picture and words.</sub>
+
 ![the podcasts: the ones followed, a show and its episodes, and the episode playing](docs/screenshots/podcasts.webp)
+
+<sub>the podcasts: a show, its older episodes with what is heard and what is not, and the episode playing while it is still being fetched — keep, mark as heard, share, a sleep timer.</sub>
 
 ![the words of the song playing, in a column beside the queue](docs/screenshots/lyrics.webp)
 
+<sub>the lyrics beside the queue, the line being sung lit in the accent.</sub>
+
 ![the equalizer: ten bands, presets, and how far it turns the whole down so nothing clips](docs/screenshots/equalizer.webp)
+
+<sub>the equalizer: „more bass“ chosen, the curve over ten bands, and how much quieter the whole is turned so that nothing clips.</sub>
 
 ![an ipod plugged in: what is on it, and what the device says about itself](docs/screenshots/ipod.webp)
 
