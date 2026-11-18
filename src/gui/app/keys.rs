@@ -989,8 +989,10 @@ impl GuiApp {
             let (list, _) = self.podcasts.episodes(self.config.ui.podcast_show_archived);
             let looked = self.podcasts.episode.as_ref().map(|(e, _)| e.id.clone());
             let at = looked.and_then(|id| list.iter().position(|(e, _)| e.id == id));
-            match (self.podcasts.focus, at) {
-                (1, Some(at)) => Some((About::Episode(at), "episode")),
+            let podcast = self.podcasts.chosen.as_ref().and_then(|c| self.podcasts_listed().iter().position(|s| s.feed == c.feed));
+            match (self.podcasts.focus, at, podcast) {
+                (1, Some(at), _) => Some((About::Episode(at), "episode")),
+                (0, _, Some(at)) if !self.podcasts.only_fetched && !self.podcasts.only_starred && !self.podcasts.only_open => Some((About::Podcast(at), "podcast")),
                 _ => None,
             }
         } else if self.showing_radio() {

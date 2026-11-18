@@ -553,7 +553,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         theme::margin_top()
     };
     if on_a_mac {
-        let band = Rect::from_min_size(window.min, Vec2::new(window.width(), crate::gui::macwindow::BY_HAND_MIDDLE * 2.0));
+        let band = Rect::from_min_size(window.min, Vec2::new(window.width(), theme::band_middle() * 2.0));
         let held = ui.interact(band, egui::Id::unique("window-band"), Sense::click_and_drag());
         if held.drag_started_by(egui::PointerButton::Primary) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -645,8 +645,9 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         } else if narrow {
             sliding_columns(app, ui, m, &palette, full_width, strip_height);
         } else if app.showing_radio() {
-            ui.allocate_ui(Vec2::new(full_width, columns_height), |ui| {
-                radio_row(app, ui, m, &palette, full_width);
+            let reach_column = |ui: &Ui, n: usize, width: f32| reach(ui, 40 + n, width);
+            ui.allocate_ui(Vec2::new(full_width, columns_height + deeper), |ui| {
+                radio_row(app, ui, m, &palette, full_width, &reach_column);
             });
         } else {
             ui.allocate_ui(Vec2::new(full_width, columns_height + deeper), |ui| {

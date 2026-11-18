@@ -175,7 +175,7 @@ at 0.6; `was läuft` `kompakt`, the library's figures bottom left, the status
 bottom right, shuffle and repeat in the header, the scope in the search
 field; `alle-zeile`, `zuletzt-zeile` (80 tracks, opening on `zuletzt
 hinzugefügt`) and `kompilationen-zeile` shown, no counts beside the artists;
-the albums as headings in the track list with covers of 85 points, their
+the albums as headings in the track list with covers of 80 points, their
 counts and their bitrate, whole compilations; `nr` (flush left), `jahr`,
 `genre`, `bitrate` and `länge` in the track list (`wertung` and `plays` off); as many frames as the screen draws (30 on a raspberry
 pi), the scope at 20; no screen saver. a config file that is there keeps
@@ -195,7 +195,7 @@ and dropped the next time the file is saved.
 | `enter` | play selection — several tracks picked with `shift` + `j` `k`: all of them, from the first |
 | `n` / `p` | next / previous track — the one before in the queue. shuffled, back to what played before. more than three seconds in, `p` starts the track again|
 | `1` `2` `3` `4` | the library, the radio, the podcasts, the ipod — each on its own key, as far as it is there (the podcasts on `3` and the ipod on `4`)|
-| `v` / `shift` + `F10` / the menu key | the right-click menu for the row the keyboard stands on — a track (or the tracks picked), a record, a name, a row of the queue or a list, a list, a station, an episode — opened beside that row. in it `↑` `↓` (`k` `j`, `tab`) go along the entries, past those greyed out, and on to the stars at the foot of a track's menu, where `←` `→` (`h` `l`) give one star less or more at once; `enter` does the one stood on (on the stars, closes the menu), `esc` (or the same key) closes it, as it now closes a menu a right-click opened|
+| `v` / `shift` + `F10` / the menu key | the right-click menu for the row the keyboard stands on — a track (or the tracks picked), a record, a name, a row of the queue or a list, a list, a station, an episode, a podcast — opened beside that row. in it `↑` `↓` (`k` `j`, `tab`) go along the entries, past those greyed out, and on to the stars at the foot of a track's menu, where `←` `→` (`h` `l`) give one star less or more at once; `enter` does the one stood on (on the stars, closes the menu), `esc` (or the same key) closes it, as it now closes a menu a right-click opened|
 | `c` then `1` `2` `3` | switch the music, the radio or the podcasts off, as under menü → allgemein → funktionen (a view switched off while open goes back to the one open before it, where that is still on — the radio after the podcasts opened from it): within a second of `c`, or while `c` is held, for as many digits as are pressed under it. the foot says how to switch it back on — or, for a view off already, that it is (`podcasts sind schon aus — 3 schaltet sie ein`)|
 | `1` `2` `3` on a view switched off | switch it on again and open it (the same digit twice within a second)|
 | `j` `k` / `↓` `↑` | move down / up (`shift` to select several) |
@@ -207,7 +207,7 @@ and dropped the next time the file is saved.
 | `,` / `.` | seek a minute back / on |
 | `/` | search (`enter` or `tab` back to the list, `esc` to leave); in the field `←` `→` move the caret, `alt` with them a word, `cmd` with them or home / end to either end|
 | on the radio | `j` `k` / `↓` `↑` the station, or the line in „gerade gehört"; `h` `l` / `←` `→` between the stations and „gerade gehört"; `enter` plays the station, or keeps the line heard (or lets it go), or shows who sang a song kept; `d` / `backspace` forgets a song kept|
-| on the podcasts | `j` `k` / `↓` `↑` the next row of the first column — „alle", „offen", „geladen", „gemerkt", a podcast — chosen at once, or the next episode looked at; `h` `l` / `←` `→` / `tab` between the podcasts, the episodes and the queue; `enter` into the episodes, or plays the episode; `shift` + `↓` `↑` picks a run of episodes, `cmd` + `a` all of the list — picked, the right-click menu does to them all; `a` into the queue or out; `d` / `backspace` archives or brings back; `esc` lets the picked go; `gg` / `G` top and foot. in the queue, as in the music's: its played rows, the episode playing and what comes are one list for `j` `k`, arriving there on the one playing — with a cursor of its own, so the episodes and the episode's page stay as they are while it moves; `d` / `backspace` take the row out instead of archiving it, `shift` + `j` `k` carry a row of what comes up or down, `shift` + `d` twice empties it all, `enter` plays (the one playing plays on); `shift` + `↓` `↑` picks a run of rows across played and to come, `cmd` + `a` all of them — `d` takes them all out, `shift` + `j` `k` carries those to come together, `esc` lets them go |
+| on the podcasts | `j` `k` / `↓` `↑` the next row of the first column — „alle", „offen", „heruntergeladen", „gemerkt", a podcast — chosen at once, or the next episode looked at; `h` `l` / `←` `→` / `tab` between the podcasts, the episodes and the queue; `enter` into the episodes, or plays the episode; `shift` + `↓` `↑` picks a run of episodes, `cmd` + `a` all of the list — picked, the right-click menu does to them all; `a` into the queue or out; `d` / `backspace` archives or brings back; `v` on a podcast in the first column (one followed, or one a search found) its menu, `folgen` or `nicht mehr folgen`; `esc` lets the picked go; `gg` / `G` top and foot. in the queue, as in the music's: its played rows, the episode playing and what comes are one list for `j` `k`, arriving there on the one playing — with a cursor of its own, so the episodes and the episode's page stay as they are while it moves; `d` / `backspace` take the row out instead of archiving it, `shift` + `j` `k` carry a row of what comes up or down, `shift` + `d` twice empties it all, `enter` plays (the one playing plays on); `shift` + `↓` `↑` picks a run of rows across played and to come, `cmd` + `a` all of them — `d` takes them all out, `shift` + `j` `k` carries those to come together, `esc` lets them go |
 | `a` / `shift` + `a` | queue: at the end / next |
 | `d` / `backspace` | in the queue: take the track out |
 | `cmd` + `backspace` | the same, as the finder takes things away (`ctrl` + `backspace` on linux) |
@@ -556,7 +556,7 @@ column says `wird umgewandelt` instead of `spielt es nicht` while it is on.
 row is there while the podcasts are switched on). the old ipods have no
 podcasts of their own, but they have playlists. with it on, `überspielen:
 ganze bibliothek` also takes the episodes that are fetched and not heard yet
-— the ones under `geladen`, without the heard and the archived, the kept ones
+— the ones under `heruntergeladen`, without the heard and the archived, the kept ones
 always — and writes a playlist `podcasts` of them, the newest first. on the
 device an episode is a track like any other: its title, its podcast as artist
 and record, the genre `podcast`. what the device cannot play is converted as
@@ -683,7 +683,7 @@ it is built to one deliberately narrow set of rules, which live in
   neighbouring columns keep their own tone. the status line, the device line
   and `auswerfen` turn to the ink, as `menü` does (news keeps the accent).
 - **the status line** sets who speaks a little apart from what they say:
-  `last.fm 0:30`, `ipod 14 titel`.
+  `last.fm zählt in 0:30`, `ipod 14 titel`.
 - **three tonal values** plus one accent, and the accent says one of two
   things only: this is what plays, or this is news — a status, an error, a
   scan under way.
@@ -875,12 +875,14 @@ can stand:
   move along to make room; then the names at label size (while a station
   plays they take what the long rule would), the time and its rule, the
   transport keys, `vol`, the view and `menü`. a column with nothing written
-  under it runs down into the foot's band, as far as the sides' margin, and
+  under it — in the music, the radio and the podcasts alike — runs down into
+  the foot's band, as far as the sides' margin, and
   slides back up when the library's figures or what the status line says
   come to stand under it. a list scrolled to its end stays where it stands
   as its column goes up and down (the queue slid down at every pause, as
   last.fm's count at the foot went away). what the status line says goes
-  down to the bottom right-hand corner, in short (`last.fm 0:39`, `ipod 14
+  down to the bottom right-hand corner, in short (`last.fm zählt in 0:39` — the
+  time until the track counts for last.fm, gone while paused — `ipod 14
   titel · 4.8 gb frei`, `auswerfen`), in a band of its own, its baseline as
   far from the window's bottom edge as the sides are from its sides (24
   points; 28 before): the lists end a little earlier in this place, so the
@@ -1239,7 +1241,8 @@ and beside it three lines: its name in the bold cut, under it whose it is
 (when the list is not one artist's, and not on a compilation), and under that,
 a size smaller and in the colour `flac` has beside a title, the facts — how
 many tracks, the year, the genre, and always last the bitrate.
-without an artist to name the facts stand right under the name. beside a small
+without an artist to name the facts stand right under the name, and go on
+to a third line, broken after a `·`, where they do not fit beside the cover. beside a small
 cover the lines can be taller than the cover; then the cover stands in their
 middle. the heading answers the hand as the album's row
 does: a click takes all its tracks, a double-click puts the whole record,
@@ -1295,8 +1298,8 @@ tracks too and the window opens on the whole library (the ipod keeps its
 `zuletzt hinzugefügt` list). `zuletzt` shows 80 tracks at first, and
 scrolled to the end of the track list it fetches 80 more, and again. the row
 after it, `beim öffnen zeigen`, says where the window opens: on `zuletzt`
-(the default) or on `alle` (`[ui] start_on_recent`; a row of its own set in
-under `zuletzt-zeile` as `zuletzt hinzugefügt` / `ganze bibliothek` before).
+(the default) or on `alle` (`[ui] start_on_recent`). it is set in under
+`zuletzt-zeile`, and stands there only while that row is shown.
 under `zuletzt` the list is read as records too: the newest record first,
 each one whole and in its own running order, until there are about as many
 tracks as `zuletzt` shows.
@@ -1316,7 +1319,10 @@ length. from 140 points up, and wherever the cover takes more than a third
 of the column, the record's lines stand under the cover rather than beside
 it. how it is drawn is `bilder`'s, below. after them, `titelzahl` (`[ui]
 heading_count`, on) says whether a heading's facts begin with how many tracks
-it has — `9 titel · 2006` or `2006`. nothing in the menu is set in more than one
+it has — `9 titel · 2006` or `2006`. `unter dem namen` (`[ui] heading_plain`)
+is `abgestuft` (the default, as above) or `eine zeile`: the name, and under it
+one line at the reading size and in the second tone, whatever the cover's
+size — `thou · 2020 · 16 titel · 320 kbit/s`. nothing in the menu is set in more than one
 step.
 
 ### pictures
@@ -1523,6 +1529,9 @@ a 120 hz screen otherwise draws every move of the pointer twice as often as
 anybody can follow. nothing the hand does is lost: what came in meanwhile is
 taken by the next frame. the scope and the clock ask for fewer frames than
 this anyway and are not slowed.
+
+with nothing playing and the pointer still, the window draws nothing at all
+— resting on a row included, unless its title is too long and runs along.
 
 ### colour schemes
 
@@ -2177,10 +2186,11 @@ rule draws itself in to the dot, drawn along behind it.
 
 `gerade gehört` has the newest at the top. in the radio view the library's
 figures stay away from the foot, and while a station plays the foot says where
-its song stands with last.fm, by the radio's rule: `last.fm noch 0:12` for the
-first thirty seconds, then `zählt beim nächsten lied` for ten seconds, then
+its song stands with last.fm, by the radio's rule: `last.fm zählt in 0:12` for
+the first thirty seconds, then `zählt beim nächsten lied` for ten seconds, then
 nothing; the song already under way when the station came on counts down four
-minutes instead, and `zählt nicht` stays for one without an artist.
+minutes instead, and `zählt nicht` stays for one without an artist. paused,
+the line goes, and the time paused is not counted as heard.
 `entfernen` takes a station or a kept song out.
 
 an artist's column says when and on which station they
@@ -2554,25 +2564,38 @@ columns, so it can go again as easily as it came. choosing `musik` or
   every episode begun and not heard to the end, under its own head
   `angefangen` at the top, then every one not begun that came out since its
   podcast was followed, under `heute`, `diese woche`, `älter`; never one
-  archived — what is heard to the end leaves by itself. then `geladen` with
+  archived — what is heard to the end leaves by itself. then `heruntergeladen` with
   what the episodes fetched take on the disk beside it — while archived
   episodes are hidden, what of it is theirs too: `56.4 mb archiviert` where
   it is all theirs, `84 mb · 56 archiviert` where part, and the empty list
   then says `1 geladene folge ist archiviert und ausgeblendet` with
   `archivierte einblenden` under it — then the podcasts followed. while the
-  search field holds something it searches for podcasts rather than the
-  library — apple's podcast directory (the itunes search api: free, no key),
-  asked once the field stands still — and the column lists what it found. as
+  search field holds something it searches the podcasts rather than the
+  library, and the column lists what it found in two blocks, each under a
+  head of its own with its count: `in deinen podcasts` — `folgen` with how
+  many episodes match, which, chosen, lists them all in the episodes column
+  as `alle` does, then the podcasts followed the search found something in
+  (in the name, the author or an episode), in the column's order, each with
+  how many of its episodes match; the others are left out — and, well apart below
+  it, `neue podcasts`, what apple's podcast directory found (the itunes
+  search api: free, no key), asked once the field stands still, without the
+  podcasts followed. the episodes column narrows to the episodes whose
+  title, description or podcast's name hold every word between them, its
+  head counting them (see below). a feed's address goes to the directory
+  alone.
+  case and accents do not count: `muller` finds „Müller". as
   the radio's stations do, a row offers a word at its end under the pointer:
   `folgen` for one found, `entfernen` for one followed (`gefolgt` stands
   there while the pointer is elsewhere); a click on the word follows or lets
-  go, anywhere else on the row chooses the podcast.
+  go, anywhere else on the row chooses the podcast. a right click on it, or
+  `v` on the one chosen, opens its menu with the same: `folgen`, or `nicht
+  mehr folgen`.
 - **the episodes** — the second (video episodes are left out of an episode
   with a video and a sound file the sound is taken, one with only a video is
   not listed): those of the podcast chosen, the newest first, or under
   `alle` those of all followed, the newest first, each with whose it is.
   eighty at first, and eighty more each time the list's end comes into view,
-  as `zuletzt` does in the library. under `geladen` the episodes fetched
+  as `zuletzt` does in the library. under `heruntergeladen` the episodes fetched
   whose files are still there, the newest first, whether their podcast is
   still followed or not (kessler notes each one fetched in `podcasts.toml`).
   each is set as a record's head is in the track list: its podcast's picture
@@ -2581,21 +2604,23 @@ columns, so it can go again as easily as it came. choosing `musik` or
   `gehört` (heard ones in the quieter tone). where the list comes newest
   first, `heute`, `diese woche` (the last seven days) and `älter` stand over
   its parts. under the pointer a row offers `archivieren` at the end of its
-  title (`zurückholen` for one archived). one fetched says `geladen` in the
+  title (`zurückholen` for one archived). one fetched says `heruntergeladen` in the
   accent (a line of its own under the facts, which are set in the small
   face and the colour `flac` has; beside a picture a little taller than
   them, three lines in the middle of its height, the facts as far under the
   title as a record's line under its name in the music, the third under them
   at the small face's own step, as a station's facts stand: the title, whose it
-  is and the day, then `geladen` and how far it was heard — `noch 18:29`, `noch nicht gehört` or `fertig
+  is and the day, then `heruntergeladen` and how far it was heard — `noch 18:29`, `noch nicht gehört` or `fertig
   gehört`; the row's picture is always the podcast's, the episode's own
   stands in the third column). the one playing has the arrow before its
   title, an archived one's picture is quieter, and the podcast chosen in the
-  first column — or `alle`, or `geladen` — wears the arrow and the darker
+  first column — or `alle`, or `heruntergeladen` — wears the arrow and the darker
   plate, as a chosen view does everywhere. a right click opens its menu:
   `abspielen`, `in die warteschlange`, `archivieren`, `ab hier archivieren`
   — this one and every older one under it, to clear a long `alle` down — and
-  `datei löschen`; on one of several picked, the same for all of them.
+  `datei löschen` — or, for one not fetched, `herunterladen` —; on one of several
+  picked, the same for all of them (`markierte herunterladen` while any is not
+  fetched).
   episodes are carried into the queue as tracks are: picked up from the list
   — the ones picked together, where it is one of them — and let go at a
   place in the queue, a hair in the ink saying where; a row of the queue is
@@ -2620,9 +2645,9 @@ columns, so it can go again as easily as it came. choosing `musik` or
   the page of the podcast playing — picture, makers, how often it comes, its
   site, what it is about — with the episode playing over it, or, while none
   plays, the chosen podcast's; `i` again puts it away, and it and the log
-  take each other's place. the darker plate on `alle`, `geladen`, `gemerkt`
+  take each other's place. the darker plate on `alle`, `heruntergeladen`, `gemerkt`
   or a podcast goes over to an episode as soon as one is clicked, as it does
-  between the music's columns; the view keeps its arrow. `geladen` with
+  between the music's columns; the view keeps its arrow. `heruntergeladen` with
   nothing fetched says so. the episode's column offers `teilen`: its title
   and podcast and an address anyone can open go on the clipboard — the
   episode's own page where its feed names one (`link` in the item), else its
@@ -2664,9 +2689,10 @@ going.
   is read, screened as a station's is) — or, the episode's own where the
   feed gives it one (`itunes:image` in the item), fetched as it is looked at
   or played and then standing in its row in the list too, its title, its
-  podcast, the day it came out, how long it plays, `geladen` once fetched;
+  podcast, the day it came out, how long it plays, `heruntergeladen` once fetched;
   `abspielen` (or `weiter bei 12:30`); `datei löschen` for one fetched, to
-  have the room back (not while it plays); `in die warteschlange` / `aus der
+  have the room back (not while it plays), and for one not fetched `herunterladen`,
+  to have it without playing it (see below); `in die warteschlange` / `aus der
   warteschlange`; `archivieren` / `nicht mehr archivieren` (an episode
   archived is greyed in the lists, or left out of them — see below); its
   **chapters**, where it has any — numbered as a record's tracks are, the
@@ -2699,7 +2725,7 @@ going.
   serial`) is listed from its first episode, by season and number where the
   feed counts them, and kept whole; an episode's place shows with its date,
   `staffel 2, folge 4` or `folge 4`; under them the start of what it is
-  about, all of it after `mehr`. `alle`, `offen`, `geladen` and `gemerkt`
+  about, all of it after `mehr`. `alle`, `offen`, `heruntergeladen` and `gemerkt`
   have none, their episodes being of many podcasts. the same page, at full
   size, is what `i` shows of the podcast playing. the pictures are read two
   at a time, each made small as it is read, and let go of once they have not
@@ -2756,7 +2782,7 @@ the radio — from any view.
 menu keeps an episode on purpose: it stands under `gemerkt` in the first
 column (there while any are kept), says `gemerkt` in its row, and is never
 archived or let go of by itself — not by `ab hier archivieren`, `archivierte
-dateien löschen` or `geladene löschen nach`. `als gehört markieren` / `als
+dateien löschen` or `heruntergeladene löschen nach`. `als gehört markieren` / `als
 ungehört markieren` there too, for the ones picked together as well. while
 an episode plays, its column has the sleep timer: `einschlafen: aus`, then a
 click each for 15, 30 or 60 minutes or the episode's end; the last eight
@@ -2768,6 +2794,17 @@ what is left of it and five), and `beenden`, off — fading out already, the
 sound comes back. a feed's address typed into the search field (`https://…`,
 `feed://…`) finds that podcast itself, to follow — a private feed, or one
 the directory does not list.
+
+while the search field narrows the episodes, whichever list the second
+column shows — `alle`, `offen`, `heruntergeladen`, `gemerkt` or one podcast's — keeps
+only the episodes whose title, description or podcast's name hold every word
+typed between them — so a podcast found by its name and chosen lists its
+episodes, and `nation klima` finds that podcast's episodes about the
+climate. only
+what kessler holds of each feed is searched: its newest thirty episodes (a
+series whole), and those begun; a podcast chosen offers `ältere folgen
+laden` at the end of its list as ever, and its older episodes are searched
+too once they are read. nothing matching, the list says so.
 
 the second column's head offers `archivierte ausblenden` / `archivierte
 einblenden` at its end under the pointer (`[ui] podcast_show_archived`).
@@ -2792,6 +2829,17 @@ radio's columns too — a drag holds until kessler is quit).
   there. heard to its end (within half a minute of it), its file goes again.
   an episode is no song: it is not scrobbled, counted as a play, or looked
   up for words or an artist.
+- **downloaded without playing.** `herunterladen` — on the episode's page, in its
+  right-click menu, and for several picked at once — fetches it in the
+  background while nothing plays, one after the other beside an episode
+  being fetched to play; its row says how far, `lädt herunter 34 %`, or `lädt gleich
+  herunter` while it waits its turn, the foot `podcasts  lädt herunter 34 % ·
+  noch 2 folgen`, and once there it stands under `heruntergeladen`. played while it comes
+  in, its fetch is taken over rather than started again. an episode fetched
+  this way is kept: heard, its file stays, and `heruntergeladene löschen nach` does
+  not take it either — its page says `heruntergeladen · bleibt`. only `datei
+  löschen`, `alle heruntergeladenen löschen`, or archiving it with `archivierte
+  dateien löschen` on let it go. kept as `held` in `podcasts.toml`.
 - **kept.** the podcasts followed and where each episode was left (every
   fifteen seconds while it plays, and when another starts), in
   `podcasts.toml` beside the settings. at the foot of the first column, how
@@ -2802,7 +2850,7 @@ the menu has a tab of its own for them while they are on:
 - `zurückspulen` and `vorspulen` (`[ui] podcast_back`, `podcast_ahead`): 10,
   15, 30 or 60 seconds back, 10, 15, 30, 45 or 60 ahead — 10 and 10 to begin
   with.
-- `geladene löschen nach` (`[ui] podcast_keep`), the archiving: `dem hören`,
+- `heruntergeladene löschen nach` (`[ui] podcast_keep`), the archiving: `dem hören`,
   `7 tagen`, `1 monat`, `3 monaten`, `6 monaten` or `1 jahr` (the last
   three; files fetched longer ago go as the podcasts open and every half
   hour, heard or not), or `nie`. never the one playing.
@@ -2813,9 +2861,9 @@ the menu has a tab of its own for them while they are on:
   the one playing. under these rows the tab says in a few words what is
   what: archiving takes an episode out of the lists and keeps its file
   unless this is on; `datei löschen` only frees the room and keeps the
-  episode listed; `geladene löschen nach` clears files away by itself,
+  episode listed; `heruntergeladene löschen nach` clears files away by itself,
   archived or not.
-- `alle geladenen löschen`, with what they take beside it.
+- `alle heruntergeladenen löschen`, with what they take beside it.
 - `bilder neu laden`: every podcast's picture let go of and fetched again
   (they are kept in `podcast-art/` in kessler's data folder).
 - `podcasts importieren…` and `podcasts exportieren…`: the podcasts

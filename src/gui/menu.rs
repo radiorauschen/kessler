@@ -1252,7 +1252,7 @@ fn podcasts_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
         "immer" => tr!("nie"),
         _ => tr!("dem hören"),
     };
-    if row(ui, tr!("geladene löschen nach"), said, true, palette).clicked() {
+    if row(ui, tr!("heruntergeladene löschen nach"), said, true, palette).clicked() {
         let at = KEEPS.iter().position(|k| *k == keep).map_or(0, |i| (i + 1) % KEEPS.len());
         app.config.ui.podcast_keep = KEEPS[at].to_string();
         app.save_config();
@@ -1289,9 +1289,9 @@ fn podcasts_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if row(ui, "", now, true, palette).clicked() && !app.checking_for_episodes() {
         app.check_for_episodes();
     }
-    explanation(ui, tr!("„archivieren“ nimmt eine folge aus den listen — ihre datei bleibt, außer „archivierte dateien löschen“ ist an. „datei löschen“ gibt nur den platz frei, die folge bleibt in der liste. „geladene löschen nach“ räumt dateien von selbst weg, ob archiviert oder nicht."), palette);
+    explanation(ui, tr!("„archivieren“ nimmt eine folge aus den listen — ihre datei bleibt, außer „archivierte dateien löschen“ ist an. „datei löschen“ gibt nur den platz frei, die folge bleibt in der liste. „heruntergeladene löschen nach“ räumt dateien von selbst weg, ob archiviert oder nicht — nur von hand heruntergeladene bleiben."), palette);
     let size = crate::podcast::cache_size();
-    if size > 0 && row(ui, tr!("alle geladenen löschen"), &format!("{:.1} mb", size as f64 / 1_000_000.0), true, palette).clicked() {
+    if size > 0 && row(ui, tr!("alle heruntergeladenen löschen"), &format!("{:.1} mb", size as f64 / 1_000_000.0), true, palette).clicked() {
         app.forget_all_episodes();
     }
     if row(ui, "", tr!("bilder neu laden"), true, palette).clicked() {
@@ -2187,12 +2187,14 @@ fn artists_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 
     if recent {
-        let on_recent = app.config.ui.start_on_recent;
-        let said = if on_recent { tr!("zuletzt") } else { tr!("alle") };
-        if row(ui, tr!("beim öffnen zeigen"), said, true, palette).clicked() {
-            app.config.ui.start_on_recent = !on_recent;
-            app.save_config();
-        }
+        set_in(ui, |ui| {
+            let on_recent = app.config.ui.start_on_recent;
+            let said = if on_recent { tr!("zuletzt") } else { tr!("alle") };
+            if row(ui, tr!("beim öffnen zeigen"), said, true, palette).clicked() {
+                app.config.ui.start_on_recent = !on_recent;
+                app.save_config();
+            }
+        });
     }
 
     if toggle(ui, "kompilationen-zeile", app.config.ui.show_compilations, ("sichtbar", "versteckt"), palette)
@@ -3390,6 +3392,12 @@ fn heading_cover_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let count = app.config.ui.heading_count;
     if toggle(ui, tr!("titelzahl"), count, AN_AUS, palette).clicked() {
         app.config.ui.heading_count = !count;
+        app.save_config();
+    }
+    let plain = app.config.ui.heading_plain;
+    let said = if plain { tr!("eine zeile") } else { tr!("abgestuft") };
+    if row(ui, tr!("unter dem namen"), said, true, palette).clicked() {
+        app.config.ui.heading_plain = !plain;
         app.save_config();
     }
 }

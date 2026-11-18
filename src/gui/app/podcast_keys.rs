@@ -12,8 +12,14 @@ enum ShowRow {
 
 impl GuiApp {
     fn podcast_rows(&self) -> Vec<ShowRow> {
-        if let Some(found) = &self.podcasts.found {
-            return found.iter().cloned().map(ShowRow::Podcast).collect();
+        if let Some((followed, directory)) = self.podcasts_found() {
+            let mut rows: Vec<ShowRow> = Vec::new();
+            if self.found_episodes().is_some() {
+                rows.push(ShowRow::All);
+            }
+            rows.extend(followed.into_iter().map(|f| ShowRow::Podcast(f.show)));
+            rows.extend(directory.into_iter().map(ShowRow::Podcast));
+            return rows;
         }
         let mut rows = vec![ShowRow::All, ShowRow::Open, ShowRow::Fetched];
         if !self.podcasts.kept.starred.is_empty() || self.podcasts.only_starred {
@@ -34,11 +40,7 @@ impl GuiApp {
         } else {
             panel.chosen.clone().map(ShowRow::Podcast)
         };
-        match now {
-            Some(row) => rows.iter().position(|r| *r == row).unwrap_or(0),
-            None if panel.found.is_some() => 0,
-            None => 0,
-        }
+        now.and_then(|row| rows.iter().position(|r| *r == row)).unwrap_or(0)
     }
 
     fn choose_podcast_row(&mut self, row: ShowRow) {

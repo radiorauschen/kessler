@@ -197,9 +197,15 @@ pub struct Aired {
     pub at: chrono::DateTime<chrono::Local>,
     pub from_start: bool,
     pub scrobbled: bool,
+    pub paused_secs: i64,
 }
 
 impl Aired {
+    pub fn heard_secs(&self, now: chrono::DateTime<chrono::Local>, paused_since: Option<chrono::DateTime<chrono::Local>>) -> i64 {
+        let pausing = paused_since.map_or(0, |since| (now - since).num_seconds().max(0));
+        ((now - self.at).num_seconds() - self.paused_secs - pausing).max(0)
+    }
+
     pub fn new(said: &str) -> Self {
         let parted = [" - ", " – ", " — "].iter().find_map(|apart| said.split_once(apart));
         let (artist, title) = match parted {
@@ -208,7 +214,7 @@ impl Aired {
             }
             _ => (None, said.trim().to_string()),
         };
-        Aired { said: said.to_string(), artist, title, at: chrono::Local::now(), from_start: true, scrobbled: false }
+        Aired { said: said.to_string(), artist, title, at: chrono::Local::now(), from_start: true, scrobbled: false, paused_secs: 0 }
     }
 }
 
@@ -1125,6 +1131,18 @@ fn entries_in(answer: &str) -> Vec<(Station, Standing)> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_pause_is_not_heard() {
+        let mut song = Aired::new("thou - blew");
+        let now = song.at + chrono::Duration::seconds(100);
+        assert_eq!(song.heard_secs(now, None), 100);
+        song.paused_secs = 30;
+        assert_eq!(song.heard_secs(now, None), 70);
+        let since = song.at + chrono::Duration::seconds(90);
+        assert_eq!(song.heard_secs(now, Some(since)), 60, "the pause going on counts too");
+    }
+
     use super::*;
 
     #[test]

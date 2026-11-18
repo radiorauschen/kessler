@@ -452,7 +452,7 @@ impl GuiApp {
         if now.artist.is_none() {
             return Some(OnAirScrobble::Never);
         }
-        let heard = (chrono::Local::now() - now.at).num_seconds().max(0);
+        let heard = now.heard_secs(chrono::Local::now(), self.radio_paused_since);
         let needed = if now.from_start { super::radio::RADIO_SCROBBLE_AFTER } else { crate::lastfm::watch::ENOUGH_SECS as i64 };
         Some(match needed - heard {
             left if left > 0 => OnAirScrobble::Listening(left as u64),
@@ -462,26 +462,36 @@ impl GuiApp {
     }
 
     pub fn scrobble_standing(&self) -> Option<String> {
+        self.scrobble_said(false)
+    }
+
+    fn scrobble_said(&self, short: bool) -> Option<String> {
         use crate::lastfm::watch::Standing;
         let scrobbler = self.scrobbler.as_ref()?;
-        if let Some(on_air) = self.radio_scrobble_standing() {
-            return Some(match on_air {
-                OnAirScrobble::Listening(left) => tr!("last.fm  noch {}", crate::gui::text::duration(left)),
-                OnAirScrobble::Counts => tr!("last.fm  zählt beim nächsten lied").to_string(),
-                OnAirScrobble::Never => tr!("last.fm  zählt nicht").to_string(),
-            });
+        let paused = self.player.state() == crate::player::PlaybackState::Paused;
+        let counting = |left: u64| tr!("last.fm  zählt in {}", crate::gui::text::duration(left));
+        if !paused {
+            if let Some(on_air) = self.radio_scrobble_standing() {
+                return Some(match on_air {
+                    OnAirScrobble::Listening(left) => counting(left),
+                    OnAirScrobble::Counts if short => tr!("last.fm  zählt").to_string(),
+                    OnAirScrobble::Counts => tr!("last.fm  zählt beim nächsten lied").to_string(),
+                    OnAirScrobble::Never if short => tr!("last.fm  nicht").to_string(),
+                    OnAirScrobble::Never => tr!("last.fm  zählt nicht").to_string(),
+                });
+            }
+            match self.scrobble_watch.standing() {
+                Some(Standing::Counted) => return Some(tr!("last.fm  gezählt").to_string()),
+                Some(Standing::Never) if short => return Some(tr!("last.fm  nicht").to_string()),
+                Some(Standing::Never) => return Some(tr!("last.fm  zählt nicht").to_string()),
+                Some(Standing::Listening { left }) => return Some(counting(left.ceil() as u64)),
+                None => {}
+            }
         }
-        match self.scrobble_watch.standing() {
-            Some(Standing::Counted) => Some(tr!("last.fm  gescrobbelt").to_string()),
-            Some(Standing::Never) => Some(tr!("last.fm  zählt nicht").to_string()),
-            Some(Standing::Listening { left }) => Some(tr!("last.fm  noch {}",
-                crate::gui::text::duration(left.ceil() as u64)
-            )),
-            None => match scrobbler.waiting() {
-                0 => None,
-                1 => Some(tr!("last.fm  1 wartet").to_string()),
-                n => Some(tr!("last.fm  {} warten", n)),
-            },
+        match scrobbler.waiting() {
+            0 => None,
+            1 if !short => Some(tr!("last.fm  1 wartet").to_string()),
+            n => Some(tr!("last.fm  {} warten", n)),
         }
     }
 
@@ -501,30 +511,13 @@ impl GuiApp {
     }
 
     pub fn scrobble_short(&self) -> Option<String> {
-        use crate::lastfm::watch::Standing;
-        let scrobbler = self.scrobbler.as_ref()?;
-        if let Some(on_air) = self.radio_scrobble_standing() {
-            return Some(match on_air {
-                OnAirScrobble::Listening(left) => format!("last.fm  {}", crate::gui::text::duration(left)),
-                OnAirScrobble::Counts => tr!("last.fm  zählt").to_string(),
-                OnAirScrobble::Never => tr!("last.fm  nicht").to_string(),
-            });
-        }
-        match self.scrobble_watch.standing() {
-            Some(Standing::Counted) => Some("last.fm  ok".to_string()),
-            Some(Standing::Never) => Some(tr!("last.fm  nicht").to_string()),
-            Some(Standing::Listening { left }) => Some(format!(
-                "last.fm  {}",
-                crate::gui::text::duration(left.ceil() as u64)
-            )),
-            None => match scrobbler.waiting() {
-                0 => None,
-                n => Some(tr!("last.fm  {} warten", n)),
-            },
-        }
+        self.scrobble_said(true)
     }
 
     pub fn search_standing(&self) -> Option<String> {
+        if self.showing_podcasts() {
+            return None;
+        }
         let query = self.filter.as_ref()?;
         if query.trim().is_empty() {
             return None;

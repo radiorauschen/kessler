@@ -25,7 +25,7 @@ fn let_go_elsewhere(app: &mut GuiApp, ui: &Ui, column: Rect) {
     }
 }
 
-pub(super) fn radio_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, full_width: f32) {
+pub(super) fn radio_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, full_width: f32, reach: &dyn Fn(&Ui, usize, f32) -> f32) {
     let gap = m.column_gap;
     let min = crate::gui::theme::MIN_NAME_COLUMN;
     let side = radio_side(app);
@@ -77,28 +77,44 @@ pub(super) fn radio_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pal
         (stations, page, heard_width)
     };
     let mut taken: Vec<Rect> = Vec::new();
+    let column = |ui: &mut Ui, n: usize, width: f32, body: &mut dyn FnMut(&mut Ui) -> Rect| -> Rect {
+        let height = reach(ui, n, width);
+        ui.allocate_ui_with_layout(Vec2::new(width, height), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(width);
+            ui.set_height(height);
+            body(ui)
+        })
+        .inner
+    };
     ui.horizontal_top(|ui| {
-        taken.push(stations_column(app, ui, m, palette, stations));
+        taken.push(column(ui, 0, stations, &mut |ui| stations_column(app, ui, m, palette, stations)));
         ui.add_space(gap);
-        let station = ui.allocate_ui(Vec2::new(page, ui.available_height()), |ui| station_page(app, ui, m, palette, page));
-        taken.push(station.response.rect);
+        let station = column(ui, 1, page, &mut |ui| {
+            ui.allocate_ui(Vec2::new(page, ui.available_height()), |ui| station_page(app, ui, m, palette, page)).response.rect
+        });
+        taken.push(station);
         ui.add_space(gap);
         let has_programme = app.programme.is_some();
         let head = if has_programme { tr!("programm") } else { tr!("gerade gehört") };
-        let heard_rect = ui.allocate_ui(Vec2::new(heard_width, ui.available_height()), |ui| {
-            ui.vertical(|ui| {
-                still_heading(ui, head, "", m, palette);
-                ui.add_space(HEAD_AIR);
-                without_a_bar(ui, "radio-heard").auto_shrink([false, false]).show(ui, |ui| {
-                    heard_rows(app, ui, m, palette, heard_width, false);
+        let heard_rect = column(ui, 2, heard_width, &mut |ui| {
+            ui.allocate_ui(Vec2::new(heard_width, ui.available_height()), |ui| {
+                ui.vertical(|ui| {
+                    still_heading(ui, head, "", m, palette);
+                    ui.add_space(HEAD_AIR);
+                    without_a_bar(ui, "radio-heard").auto_shrink([false, false]).show(ui, |ui| {
+                        heard_rows(app, ui, m, palette, heard_width, false);
+                    });
                 });
-            });
+            })
+            .response
+            .rect
         });
-        taken.push(heard_rect.response.rect);
-        for (side, open, side_full) in sides {
+        taken.push(heard_rect);
+        for (k, (side, open, side_full)) in sides.into_iter().enumerate() {
             let side_width = side_full * open;
             ui.add_space(gap * open);
-            let (slot, _) = ui.allocate_exact_size(Vec2::new(side_width, ui.available_height()), Sense::hover());
+            let height = reach(ui, 3 + k, side_width);
+            let (slot, _) = ui.allocate_exact_size(Vec2::new(side_width, height), Sense::hover());
             let whole = Rect::from_min_size(slot.min, Vec2::new(side_full, slot.height()));
             let mut inside = ui.new_child(egui::UiBuilder::new().max_rect(whole));
             inside.set_clip_rect(slot.intersect(ui.clip_rect()));

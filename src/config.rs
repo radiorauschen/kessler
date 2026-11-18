@@ -105,6 +105,7 @@ pub struct UiConfig {
     pub device_mark: String,
     pub notify: bool,
     pub heading_count: bool,
+    pub heading_plain: bool,
     pub modes_in_queue: bool,
     pub info_picture: bool,
     pub info_picture_wide: bool,
@@ -269,6 +270,7 @@ impl Default for UiConfig {
             device_mark: "wort".into(),
             notify: false,
             heading_count: true,
+            heading_plain: false,
             modes_in_queue: false,
             info_picture: true,
             info_picture_wide: false,
@@ -515,7 +517,7 @@ fn said_language(contents: &str) -> bool {
 pub const SMALL_MACHINE: bool = cfg!(all(target_os = "linux", target_arch = "aarch64"));
 
 pub const HEADING_COVER_LEAST: f32 = 32.0;
-pub const HEADING_COVER_DEFAULT: f32 = 85.0;
+pub const HEADING_COVER_DEFAULT: f32 = 80.0;
 pub const HEADING_COVER_MOST: f32 = 256.0;
 
 pub const RECENT_SHOWN: usize = 80;
@@ -590,7 +592,7 @@ mod tests {
         assert!(ui.show_all_artists && ui.show_recent && ui.start_on_recent && ui.show_compilations);
         assert!(!ui.artist_counts);
         assert!(ui.albums_in_tracks && ui.heading_covers && ui.heading_count && ui.compilations_whole);
-        assert_eq!(ui.heading_cover(), 85.0);
+        assert_eq!(ui.heading_cover(), 80.0);
         assert_eq!(ui.track_columns, ["nr", "jahr", "genre", "bitrate", "länge"]);
         assert!(!ui.numbers_right && ui.merged_number && ui.merged_length && ui.merged_bitrate);
         assert_eq!(ui.saver_after, 0, "no screen saver");

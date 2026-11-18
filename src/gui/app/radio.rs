@@ -399,6 +399,7 @@ impl GuiApp {
         if self.player.tuning() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        self.hold_the_pauses();
         self.hear_the_station(ctx);
         let query = self.query().unwrap_or_default();
         let Some(radio) = self.radio.as_mut() else { return };
@@ -440,6 +441,21 @@ impl GuiApp {
         }
     }
 
+    fn hold_the_pauses(&mut self) {
+        let paused = self.on_air.is_some() && self.player.state() == crate::player::PlaybackState::Paused;
+        let now = chrono::Local::now();
+        match (paused, self.radio_paused_since) {
+            (true, None) => self.radio_paused_since = Some(now),
+            (false, Some(since)) => {
+                if let Some(song) = self.aired.first_mut() {
+                    song.paused_secs += (now - since).num_seconds().max(0);
+                }
+                self.radio_paused_since = None;
+            }
+            _ => {}
+        }
+    }
+
     fn hear_the_station(&mut self, ctx: &egui::Context) {
         if self.on_air.is_none() {
             self.aired.clear();
@@ -476,10 +492,11 @@ impl GuiApp {
             }
             None => self.programme = None,
         }
-        let counting = matches!(
-            self.radio_scrobble_standing(),
-            Some(super::look::OnAirScrobble::Listening(_) | super::look::OnAirScrobble::Counts)
-        );
+        let counting = self.radio_paused_since.is_none()
+            && matches!(
+                self.radio_scrobble_standing(),
+                Some(super::look::OnAirScrobble::Listening(_) | super::look::OnAirScrobble::Counts)
+            );
         if counting {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         } else if self.on_air.is_some() {
@@ -530,7 +547,7 @@ impl GuiApp {
         }
         aired.from_start = !self.aired.is_empty();
         if let Some(done) = self.aired.first_mut() {
-            let heard = (aired.at - done.at).num_seconds();
+            let heard = done.heard_secs(aired.at, self.radio_paused_since);
             if done.from_start && !done.scrobbled && heard >= RADIO_SCROBBLE_AFTER {
                 done.scrobbled = true;
                 let done = done.clone();
@@ -555,7 +572,7 @@ impl GuiApp {
             return;
         }
         let Some(now) = self.aired.first_mut() else { return };
-        let heard = (chrono::Local::now() - now.at).num_seconds();
+        let heard = now.heard_secs(chrono::Local::now(), None);
         if !now.scrobbled && heard as f64 >= crate::lastfm::watch::ENOUGH_SECS {
             now.scrobbled = true;
             let now = now.clone();
