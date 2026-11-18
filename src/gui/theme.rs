@@ -331,6 +331,13 @@ pub fn set_titlebar(height: f32) {
     TITLEBAR_NOW.store(height.max(0.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+pub fn band_middle() -> f32 {
+    match titlebar() {
+        band if band > 0.0 => band / 2.0,
+        _ => crate::gui::macwindow::BY_HAND_MIDDLE,
+    }
+}
+
 static BUTTONS_END: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub fn buttons_end() -> f32 {
@@ -343,7 +350,7 @@ pub fn set_buttons_end(at: f32) {
 
 pub fn band_line_top(height: f32) -> f32 {
     if cfg!(target_os = "macos") {
-        (crate::gui::macwindow::BY_HAND_MIDDLE - height / 2.0).round()
+        (band_middle() - height / 2.0).round()
     } else {
         AIR_TOP
     }
@@ -361,11 +368,11 @@ pub fn margin_top() -> f32 {
 pub const BAND_INK_TOP: f32 = 24.0;
 
 pub fn margin_under_line() -> f32 {
-    margin_under(crate::gui::macwindow::BY_HAND_MIDDLE * 2.0)
+    margin_under(band_middle() * 2.0)
 }
 
 pub fn line_on_band_middle(height: f32) -> f32 {
-    (crate::gui::macwindow::BY_HAND_MIDDLE - height / 2.0).round()
+    (band_middle() - height / 2.0).round()
 }
 
 fn margin_under(band: f32) -> f32 {

@@ -39,6 +39,11 @@ pub type Underway = (Episode, Show, Receiver<Fetching>, (u64, u64));
 
 type Answer<T> = Receiver<std::result::Result<T, String>>;
 
+pub struct FoundShow {
+    pub show: Show,
+    pub episodes: usize,
+}
+
 #[derive(Default)]
 pub struct PodcastPanel {
     pub feeds_version: u64,
@@ -49,6 +54,8 @@ pub struct PodcastPanel {
     pub found: Option<Vec<Show>>,
     pub searching: Option<Answer<Vec<Show>>>,
     pub typed_at: Option<Instant>,
+    pub search: Option<crate::podcast::query::Query>,
+    matched: std::cell::RefCell<HashMap<String, bool>>,
     pub chosen: Option<Show>,
     pub more: usize,
     pub only_fetched: bool,
@@ -70,6 +77,8 @@ pub struct PodcastPanel {
     pub whole: Option<String>,
     pub unreached: Vec<String>,
     pub fetching: Option<Underway>,
+    pub to_fetch: std::collections::VecDeque<(Episode, Show)>,
+    pub keeping: Option<Underway>,
     pub start_at: Option<f64>,
     pub seek_once_playing: Option<(f64, Instant)>,
     pub playing: Option<(String, std::path::PathBuf)>,
@@ -88,10 +97,41 @@ pub struct PodcastPanel {
 }
 
 impl PodcastPanel {
+    pub fn set_search(&mut self, search: Option<crate::podcast::query::Query>) {
+        if self.search != search {
+            self.search = search;
+            self.matched.borrow_mut().clear();
+        }
+    }
+
+    fn episode_search(&self) -> Option<&crate::podcast::query::Query> {
+        self.search.as_ref().filter(|q| q.at_home())
+    }
+
+    fn passes(&self, episode: &Episode, show: &Show) -> bool {
+        let Some(search) = self.episode_search() else { return true };
+        *self.matched.borrow_mut().entry(episode.id.clone()).or_insert_with(|| search.episode_matches(episode, show))
+    }
+
+    pub fn matching_total(&self, archived: bool) -> usize {
+        self.kept.show.iter().map(|show| self.matching_in(show, archived)).sum()
+    }
+
+    pub fn matching_in(&self, show: &Show, archived: bool) -> usize {
+        let Some(feed) = self.feeds.get(&show.feed) else { return 0 };
+        feed.episodes.iter().filter(|e| (archived || !self.kept.is_archived(&e.id)) && self.passes(e, show)).count()
+    }
+
+    pub fn narrowed(&self) -> bool {
+        self.episode_search().is_some()
+    }
+
     fn waiting(&self) -> bool {
         self.searching.is_some()
             || !self.reading.is_empty()
             || self.fetching.is_some()
+            || self.keeping.is_some()
+            || !self.to_fetch.is_empty()
             || self.typed_at.is_some()
             || self.chapters_reading.is_some()
             || self.seek_once_playing.is_some()
@@ -118,7 +158,7 @@ impl PodcastPanel {
             for (s, show) in shows.iter().enumerate() {
                 let Some(feed) = self.feeds.get(&show.feed) else { continue };
                 for (i, e) in feed.episodes.iter().enumerate() {
-                    if !gone.contains(e.id.as_str()) {
+                    if !gone.contains(e.id.as_str()) && self.passes(e, show) {
                         all.push((crate::podcast::when(e), s as u32, i as u32));
                     }
                 }
@@ -157,6 +197,7 @@ impl PodcastPanel {
         if !archived {
             self.kept.archived.hash(&mut h);
         }
+        self.episode_search().hash(&mut h);
         h.finish()
     }
 
@@ -168,6 +209,7 @@ impl PodcastPanel {
             self.kept.starred.iter().map(crate::podcast::Fetched::episode).map(|(e, s)| (Cow::Owned(e), Cow::Owned(s))).collect()
         } else if self.only_open {
             let mut open = self.open_episodes();
+            open.retain(|(e, s)| self.passes(e, s));
             open.sort_by_key(|(e, _)| (!self.kept.is_begun(&e.id), std::cmp::Reverse(crate::podcast::when(e))));
             return open;
         } else if let Some(show) = &self.chosen {
@@ -187,6 +229,7 @@ impl PodcastPanel {
             let gone: std::collections::HashSet<&str> = self.kept.archived.iter().map(String::as_str).collect();
             all.retain(|(e, _)| !gone.contains(e.id.as_str()));
         }
+        all.retain(|(e, s)| self.passes(e, s));
         all.sort_by_key(|(e, _)| std::cmp::Reverse(crate::podcast::when(e)));
         all
     }
@@ -294,18 +337,24 @@ impl GuiApp {
     pub(in crate::gui) fn archive_episodes(&mut self) {
         let Ok(days) = self.config.ui.podcast_keep.parse::<u64>() else { return };
         let mut spared: Vec<std::path::PathBuf> = self.podcasts.playing.iter().map(|(_, path)| path.clone()).collect();
-        spared.extend(Kept::read().starred.iter().map(|s| crate::podcast::cached(&s.url)));
+        let kept = Kept::read();
+        spared.extend(kept.starred.iter().map(|s| crate::podcast::cached(&s.url)));
+        spared.extend(kept.held.iter().map(|url| crate::podcast::cached(url)));
         let gone = crate::podcast::forget_older(days, &spared);
         if gone > 0 {
-            self.note(crate::gui::log::Kind::Podcast, tr!("{} geladene folgen nach {} tagen gelöscht", gone, days));
+            self.note(crate::gui::log::Kind::Podcast, tr!("{} heruntergeladene folgen nach {} tagen gelöscht", gone, days));
         }
     }
 
     pub(in crate::gui) fn forget_all_episodes(&mut self) {
         let playing = self.podcasts.playing.as_ref().map(|(_, path)| path.clone());
         crate::podcast::forget_all(playing.as_deref());
-        self.set_notice(tr!("geladene folgen gelöscht"));
-        self.note(crate::gui::log::Kind::Podcast, tr!("geladene folgen gelöscht"));
+        let mut kept = Kept::read();
+        kept.held.clear();
+        kept.write();
+        self.podcasts.kept = kept;
+        self.set_notice(tr!("heruntergeladene folgen gelöscht"));
+        self.note(crate::gui::log::Kind::Podcast, tr!("heruntergeladene folgen gelöscht"));
     }
 
     pub fn skip_episode(&mut self, seconds: f64) {
@@ -413,6 +462,7 @@ impl GuiApp {
         self.podcasts.found = None;
         self.podcasts.searching = None;
         self.podcasts.typed_at = None;
+        self.podcasts.set_search(None);
         let mut kept = Kept::read();
         kept.seen_at = chrono::Utc::now().timestamp();
         kept.write();
@@ -485,6 +535,8 @@ impl GuiApp {
     }
 
     pub(in crate::gui) fn podcasts_typed(&mut self) {
+        let search = self.query().and_then(|q| crate::podcast::query::Query::parse(&q));
+        self.podcasts.set_search(search);
         self.podcasts.typed_at = Some(Instant::now());
     }
 
@@ -525,6 +577,13 @@ impl GuiApp {
         if let Some((_, _, _, (have, of))) = &self.podcasts.fetching {
             let how_far = if *of > 0 { format!("{} %", have * 100 / of) } else { format!("{:.1} mb", *have as f64 / 1_000_000.0) };
             return Some(tr!("podcasts  lädt {}", how_far));
+        }
+        if let Some((_, _, _, (have, of))) = &self.podcasts.keeping {
+            let how_far = if *of > 0 { format!("{} %", have * 100 / of) } else { format!("{:.1} mb", *have as f64 / 1_000_000.0) };
+            return Some(match self.podcasts.to_fetch.len() {
+                0 => tr!("podcasts  lädt herunter {}", how_far),
+                n => tr!("podcasts  lädt herunter {} · noch {} folgen", how_far, n),
+            });
         }
         match self.podcasts.reading.len() {
             0 => None,
@@ -590,6 +649,12 @@ impl GuiApp {
             crate::podcast::forget(&file);
             self.note(crate::gui::log::Kind::Podcast, tr!("datei gelöscht: {}", episode.title));
         }
+        if self.podcasts.kept.is_held(&episode.url) {
+            let mut kept = Kept::read();
+            kept.let_go(&episode.url);
+            kept.write();
+            self.podcasts.kept = kept;
+        }
     }
 
     pub fn delete_episode_file(&mut self, episode: &Episode) {
@@ -604,6 +669,10 @@ impl GuiApp {
             }
             self.podcasts.fetching = None;
             self.player.set_reach(None);
+            let _ = std::fs::remove_file(crate::podcast::cached(&episode.url).with_extension("part"));
+        }
+        self.podcasts.to_fetch.retain(|(e, _)| e.id != episode.id);
+        if self.podcasts.keeping.take_if(|(e, ..)| e.id == episode.id).is_some() {
             let _ = std::fs::remove_file(crate::podcast::cached(&episode.url).with_extension("part"));
         }
         self.forget_episode(episode);
@@ -663,6 +732,10 @@ impl GuiApp {
         self.set_notice(tr!("{} folgen in der warteschlange", added));
     }
 
+    pub(in crate::gui) fn picked_to_fetch(&self) -> Vec<(Episode, Show)> {
+        self.podcasts.picked.iter().filter(|(e, _)| !crate::podcast::cached(&e.url).is_file() && !self.fetching_now(&e.id)).cloned().collect()
+    }
+
     pub fn forget_picked(&mut self) {
         let picked = std::mem::take(&mut self.podcasts.picked);
         for (episode, _) in &picked {
@@ -681,7 +754,11 @@ impl GuiApp {
             return vec![
                 (tr!("markierte in die warteschlange"), true),
                 (if all_archived { tr!("markierte zurückholen") } else { tr!("markierte archivieren") }, true),
-                (tr!("dateien der markierten löschen"), self.podcasts.picked.iter().any(|(e, _)| crate::podcast::cached(&e.url).is_file())),
+                if self.picked_to_fetch().is_empty() {
+                    (tr!("dateien der markierten löschen"), self.podcasts.picked.iter().any(|(e, _)| crate::podcast::cached(&e.url).is_file()))
+                } else {
+                    (tr!("markierte herunterladen"), true)
+                },
                 (if all_starred { tr!("markierte nicht mehr merken") } else { tr!("markierte merken") }, true),
                 (if all_heard { tr!("markierte als ungehört") } else { tr!("markierte als gehört") }, true),
             ];
@@ -693,7 +770,7 @@ impl GuiApp {
             (if kept.is_queued(&episode.id) { tr!("aus der warteschlange") } else { tr!("in die warteschlange") }, true),
             (if kept.is_archived(&episode.id) { tr!("zurückholen") } else { tr!("archivieren") }, true),
             (tr!("ab hier archivieren"), true),
-            (tr!("datei löschen"), fetched),
+            if fetched { (tr!("datei löschen"), true) } else { (tr!("herunterladen"), !self.fetching_now(&episode.id)) },
             (if kept.is_starred(&episode.id) { tr!("nicht mehr merken") } else { tr!("merken") }, true),
             (if kept.left(&episode.id).is_some_and(|l| l.done) { tr!("als ungehört markieren") } else { tr!("als gehört markieren") }, true),
         ]
@@ -707,7 +784,14 @@ impl GuiApp {
             match chosen {
                 0 => self.queue_picked(),
                 1 => self.archive_picked(),
-                2 => self.forget_picked(),
+                2 => {
+                    let to_fetch = self.picked_to_fetch();
+                    if to_fetch.is_empty() {
+                        self.forget_picked();
+                    } else {
+                        self.fetch_to_keep(to_fetch);
+                    }
+                }
                 3 => self.star_picked(),
                 _ => self.mark_picked_heard(),
             }
@@ -721,7 +805,8 @@ impl GuiApp {
             1 => self.queue_episode(&episode, &show),
             2 => self.archive_episode(&episode),
             3 => self.archive_from(at),
-            4 => self.delete_episode_file(&episode),
+            4 if crate::podcast::cached(&episode.url).is_file() => self.delete_episode_file(&episode),
+            4 => self.fetch_to_keep(vec![(episode, show)]),
             5 => self.star_episode(&episode, &show),
             _ => {
                 let heard = self.podcasts.kept.left(&episode.id).is_some_and(|l| l.done);
@@ -788,6 +873,42 @@ impl GuiApp {
             }
         }
         shows
+    }
+
+    pub(in crate::gui) fn podcasts_found(&self) -> Option<(Vec<FoundShow>, Vec<Show>)> {
+        let search = self.podcasts.search.as_ref()?;
+        let archived = self.config.ui.podcast_show_archived;
+        let followed: Vec<FoundShow> = if search.at_home() {
+            self.shows_in_order()
+                .into_iter()
+                .filter_map(|show| {
+                    let episodes = self.podcasts.matching_in(&show, archived);
+                    let lit = episodes > 0 || search.show_matches(&show);
+                    lit.then_some(FoundShow { show, episodes })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let directory: Vec<Show> = match &self.podcasts.found {
+            Some(found) => found.iter().filter(|s| !self.podcasts.kept.follows(&s.feed)).cloned().collect(),
+            _ => Vec::new(),
+        };
+        Some((followed, directory))
+    }
+
+    pub(in crate::gui) fn podcasts_listed(&self) -> Vec<Show> {
+        match self.podcasts_found() {
+            Some((followed, directory)) => followed.into_iter().map(|f| f.show).chain(directory).collect(),
+            None => self.shows_in_order(),
+        }
+    }
+
+    pub(in crate::gui) fn found_episodes(&self) -> Option<usize> {
+        if !self.podcasts.narrowed() {
+            return None;
+        }
+        Some(self.podcasts.matching_total(self.config.ui.podcast_show_archived)).filter(|n| *n > 0)
     }
 
     pub(in crate::gui) fn turn_podcast_order(&mut self) {
@@ -1140,6 +1261,81 @@ impl GuiApp {
         self.podcasts.episode = Some((episode, show));
     }
 
+    pub fn fetch_to_keep(&mut self, episodes: Vec<(Episode, Show)>) {
+        let mut kept = Kept::read();
+        let mut asked: Vec<String> = Vec::new();
+        for (episode, show) in episodes {
+            kept.hold(&episode.url);
+            if crate::podcast::cached(&episode.url).is_file() {
+                kept.fetched_now(&episode, &show);
+            } else if !self.fetching_now(&episode.id) {
+                asked.push(episode.title.clone());
+                self.podcasts.to_fetch.push_back((episode, show));
+            }
+        }
+        kept.write();
+        self.podcasts.kept = kept;
+        match asked.as_slice() {
+            [] => {}
+            [one] => self.set_notice(tr!("„{}“ wird heruntergeladen", one)),
+            many => self.set_notice(tr!("{} folgen werden heruntergeladen", many.len())),
+        }
+    }
+
+    pub fn fetching_now(&self, id: &str) -> bool {
+        let panel = &self.podcasts;
+        panel.fetching.as_ref().is_some_and(|(e, ..)| e.id == id) || panel.keeping.as_ref().is_some_and(|(e, ..)| e.id == id) || panel.to_fetch.iter().any(|(e, _)| e.id == id)
+    }
+
+    pub fn keeping_said(&self, id: &str) -> Option<String> {
+        if let Some((_, _, _, (have, of))) = self.podcasts.keeping.as_ref().filter(|(e, ..)| e.id == id) {
+            let how_far = if *of > 0 { format!("{} %", have * 100 / of) } else { format!("{:.1} mb", *have as f64 / 1_000_000.0) };
+            return Some(tr!("lädt herunter {}", how_far));
+        }
+        self.podcasts.to_fetch.iter().any(|(e, _)| e.id == id).then(|| tr!("lädt gleich herunter").to_string())
+    }
+
+    fn tend_fetches_to_keep(&mut self) {
+        if self.podcasts.keeping.is_none() {
+            while let Some((episode, show)) = self.podcasts.to_fetch.pop_front() {
+                if crate::podcast::cached(&episode.url).is_file() || self.podcasts.fetching.as_ref().is_some_and(|(e, ..)| e.id == episode.id) {
+                    continue;
+                }
+                let rx = crate::podcast::fetch_episode(&episode.url, episode.bytes);
+                self.podcasts.keeping = Some((episode, show, rx, (0, 0)));
+                break;
+            }
+        }
+        let Some((episode, show, rx, progress)) = &mut self.podcasts.keeping else { return };
+        let mut ended: Option<std::result::Result<(), String>> = None;
+        while let Ok(said) = rx.try_recv() {
+            match said {
+                Fetching::Under(have, of) => *progress = (have, of),
+                Fetching::Done(_) => ended = Some(Ok(())),
+                Fetching::Failed(why) => ended = Some(Err(why)),
+            }
+        }
+        let (episode, show) = (episode.clone(), show.clone());
+        match ended {
+            Some(Ok(())) => {
+                self.podcasts.keeping = None;
+                let mut kept = Kept::read();
+                kept.fetched_now(&episode, &show);
+                kept.write();
+                self.podcasts.kept = kept;
+                self.note(crate::gui::log::Kind::Podcast, tr!("heruntergeladen: {} — {}", show.title, episode.title));
+            }
+            Some(Err(why)) => {
+                self.podcasts.keeping = None;
+                tracing::warn!("podcast episode {}: {why}", episode.url);
+                let said = tr!("„{}“ lässt sich gerade nicht herunterladen", episode.title);
+                self.note(crate::gui::log::Kind::Podcast, format!("{said} ({why})"));
+                self.set_notice(said);
+            }
+            None => {}
+        }
+    }
+
     pub fn fetch_and_play(&mut self, episode: Episode, show: Show, at: Option<f64>) {
         if let Some((_, id)) = self.podcasts.streaming.take() {
             if self.playing_this_episode(&id) {
@@ -1150,7 +1346,11 @@ impl GuiApp {
                 }
             }
         }
-        let rx = crate::podcast::fetch_episode(&episode.url, episode.bytes);
+        self.podcasts.to_fetch.retain(|(e, _)| e.id != episode.id);
+        let rx = match self.podcasts.keeping.take_if(|(e, ..)| e.id == episode.id) {
+            Some((_, _, rx, _)) => rx,
+            None => crate::podcast::fetch_episode(&episode.url, episode.bytes),
+        };
         let there = crate::podcast::cached(&episode.url).is_file();
         crate::player::watch::note(format!(
             "folge laden: {} — {}{}",
@@ -1208,7 +1408,7 @@ impl GuiApp {
         let played_before = self.podcasts.playing_from.clone();
         if let Some((before, file)) = self.podcasts.playing.take() {
             let kept = Kept::read();
-            if before != episode.id && self.config.ui.podcast_keep == "gehört" && kept.left(&before).is_some_and(|l| l.done) && !kept.is_starred(&before) {
+            if before != episode.id && self.config.ui.podcast_keep == "gehört" && kept.left(&before).is_some_and(|l| l.done) && !kept.is_starred(&before) && !kept.holds_file(&file) {
                 crate::podcast::forget(&file);
             }
         }
@@ -1366,13 +1566,14 @@ impl GuiApp {
                 self.note(crate::gui::log::Kind::Podcast, tr!("neue folgen: {}", grown.join(", ")));
             }
         }
+        self.tend_fetches_to_keep();
         if !self.podcasts.open && self.podcasts.playing.is_none() && self.podcasts.fetching.is_none() && self.podcasts.reading.is_empty() {
             return;
         }
         if let Some(at) = self.podcasts.typed_at {
             if at.elapsed().as_secs_f32() >= TYPED_SECS {
                 self.podcasts.typed_at = None;
-                match self.query() {
+                match self.podcasts.search.clone().map(|q| q.term) {
                     Some(term) if crate::podcast::is_address(&term) => {
                         let url = term.trim().replacen("feed://", "https://", 1);
                         self.podcasts.searching = Some(crate::podcast::show_at_later(&url));
@@ -1501,7 +1702,7 @@ impl GuiApp {
                 Some(Ok(path)) => arrived = Some((episode.clone(), show.clone(), path)),
                 Some(Err(why)) => {
                     tracing::warn!("podcast episode {}: {why}", episode.url);
-                    let said = tr!("„{}“ lässt sich gerade nicht laden", episode.title);
+                    let said = tr!("„{}“ lässt sich gerade nicht herunterladen", episode.title);
                     self.note(crate::gui::log::Kind::Podcast, format!("{said} ({why})"));
                     self.set_notice(said);
                     self.podcasts.fetching = None;
@@ -1538,7 +1739,7 @@ impl GuiApp {
             self.player.set_reach(None);
             let mut kept = Kept::read();
             kept.fetched_now(&episode, &show);
-            self.note(crate::gui::log::Kind::Podcast, tr!("geladen: {} — {}", show.title, episode.title));
+            self.note(crate::gui::log::Kind::Podcast, tr!("heruntergeladen: {} — {}", show.title, episode.title));
             kept.write();
             self.podcasts.kept = kept;
         }
@@ -1547,11 +1748,11 @@ impl GuiApp {
             self.podcasts.streaming = None;
             let mut kept = Kept::read();
             kept.fetched_now(&episode, &show);
-            self.note(crate::gui::log::Kind::Podcast, tr!("geladen: {} — {}", show.title, episode.title));
+            self.note(crate::gui::log::Kind::Podcast, tr!("heruntergeladen: {} — {}", show.title, episode.title));
             kept.write();
             self.podcasts.kept = kept;
             if self.something_else_put_on() {
-                self.set_notice(tr!("geladen: {}", episode.title));
+                self.set_notice(tr!("heruntergeladen: {}", episode.title));
             } else {
                 self.keep_episode_place();
                 self.play_episode(&episode, &show, path, None);
@@ -1596,7 +1797,7 @@ impl GuiApp {
                         self.podcasts.kept = kept.clone();
                         self.podcasts.recount = true;
                     }
-                    if kept.left(&id).is_some_and(|l| l.done) && self.config.ui.podcast_keep == "gehört" && !kept.is_starred(&id) {
+                    if kept.left(&id).is_some_and(|l| l.done) && self.config.ui.podcast_keep == "gehört" && !kept.is_starred(&id) && !kept.holds_file(&path) {
                         crate::podcast::forget(&path);
                     }
                 }

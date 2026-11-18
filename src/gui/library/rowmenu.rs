@@ -149,6 +149,10 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
             ]
         }
         About::Episode(at) => app.episode_menu(at),
+        About::Podcast(at) => {
+            let follows = app.podcasts_listed().get(at).is_some_and(|s| app.podcasts.kept.follows(&s.feed));
+            vec![(if follows { tr!("nicht mehr folgen") } else { tr!("folgen") }, true)]
+        }
         About::Artist(_) => vec![(tr!("abspielen"), true), (tr!("über künstler:in"), true)]
             .into_iter()
             .chain(on_device.then_some((tr!("vom ipod entfernen…"), true)))
@@ -434,6 +438,13 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
             app.ask_to_delete_list(at);
             Ok(())
         }
+        (About::Podcast(at), Some(0)) => {
+            app.row_menu = None;
+            if let Some(show) = app.podcasts_listed().get(at).cloned() {
+                app.follow_podcast(&show);
+            }
+            Ok(())
+        }
         (About::Episode(at), Some(n)) => {
             app.row_menu = None;
             app.episode_menu_chosen(at, n);
@@ -504,7 +515,7 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
                 About::Queued(index) => app.player.queued().get(index).map(sung_by),
                 About::Listed(index) => app.editing_tracks.get(index).map(sung_by),
                 About::Artist(at) => app.artists.get(at).map(|a| a.name.clone()),
-                About::List(_) | About::Station(_) | About::Episode(_) => None,
+                About::List(_) | About::Station(_) | About::Episode(_) | About::Podcast(_) => None,
             };
             if let Some(name) = name {
                 app.about_artist(&name);

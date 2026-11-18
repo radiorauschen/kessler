@@ -6,6 +6,18 @@ the topmost version is the one being built.
 a line starting with `## ` is a version; one starting with `- ` is a change.
 everything else is skipped.
 
+## 1.5.266
+
+- **podcasts, search**: the search field now also searches the podcasts you follow and their episodes, at once as you type — by name, author, title and description; the first column shows „in deinen podcasts" (the podcasts something was found in, each with how many episodes match, and „folgen" to list all matching episodes) and, below it, „neue podcasts" from the directory; the episodes column narrows to what matches and counts it
+- **podcasts, download**: episodes can be downloaded without playing them — „herunterladen" on the episode's page, in its right-click menu, or for several marked at once; they download one after the other in the background („lädt herunter 34 %") and then stand under „heruntergeladen" (formerly „geladen")
+- **podcasts, kept**: an episode downloaded by hand stays after it has been heard and is not cleared by „heruntergeladene löschen nach"; only deleting it, or archiving it with „archivierte dateien löschen" on, lets it go
+- **podcasts, keyboard**: a podcast in the first column has a menu of its own — right click, or `v` on the one chosen — with „folgen" / „nicht mehr folgen", so a podcast found can be followed without the mouse
+- **record heads**: when the details do not fit beside the cover they wrap onto a third line; a new option „unter dem namen" (menu → ansicht) brings back the old single line; first start with 80 pt covers
+- **last.fm** at the bottom right says what the time means („last.fm zählt in 2:10", then „gezählt") and hides while paused; on the radio a pause no longer counts as listening
+- **small type** with a little more line spacing: episode and podcast descriptions, station details, notes in the menu
+- **small things**: in the radio the columns reach down into the foot as in the music; „beim öffnen zeigen" indented under the row it belongs to; the bottom right no longer shows the music search's counts while searching podcasts
+- **fixed**: on the mac at a zoom below 100 % the search field in „super kompakt" slid onto the window buttons; in the combined view `gg` (or `k` onto a record's first track) left the cover half hidden
+
 ## 1.5.248
 
 - **radio** steadier: a station is heard once two seconds of it have come in, and up to eight seconds are kept ahead; should the network still run dry, it waits for two seconds again — one pause rather than a stutter

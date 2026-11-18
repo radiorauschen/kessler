@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
 
 pub mod feed;
+pub mod query;
 
 pub use feed::{Chapter, Episode, Feed};
 
@@ -34,6 +35,8 @@ pub struct Kept {
     pub left: Vec<Left>,
     #[serde(default)]
     pub fetched: Vec<Fetched>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<String>,
     #[serde(default)]
     pub archived: Vec<String>,
     #[serde(default)]
@@ -174,6 +177,24 @@ impl Kept {
 
     pub fn is_begun(&self, id: &str) -> bool {
         self.left(id).is_some_and(|l| !l.done && l.at > 0.0)
+    }
+
+    pub fn is_held(&self, url: &str) -> bool {
+        self.held.iter().any(|h| h == url)
+    }
+
+    pub fn holds_file(&self, file: &Path) -> bool {
+        self.held.iter().any(|h| cached(h) == file)
+    }
+
+    pub fn hold(&mut self, url: &str) {
+        if !self.is_held(url) {
+            self.held.push(url.to_string());
+        }
+    }
+
+    pub fn let_go(&mut self, url: &str) {
+        self.held.retain(|h| h != url);
     }
 
     pub fn fetched_now(&mut self, episode: &Episode, show: &Show) {
@@ -1140,6 +1161,24 @@ mod tests {
         assert_eq!(back.validators.etag, "e");
     }
     use super::*;
+
+    #[test]
+    fn an_episode_fetched_by_hand_is_held() {
+        let old: Kept = toml::from_str("seen_at = 1").expect("read");
+        assert!(old.held.is_empty());
+        let mut kept = Kept::default();
+        assert!(!toml::to_string(&kept).expect("written").contains("held"));
+        kept.hold("https://example.org/a.mp3");
+        kept.hold("https://example.org/a.mp3");
+        assert_eq!(kept.held.len(), 1);
+        assert!(kept.is_held("https://example.org/a.mp3"));
+        assert!(kept.holds_file(&cached("https://example.org/a.mp3")));
+        assert!(!kept.holds_file(&cached("https://example.org/b.mp3")));
+        let back: Kept = toml::from_str(&toml::to_string(&kept).expect("written")).expect("read");
+        assert!(back.is_held("https://example.org/a.mp3"));
+        kept.let_go("https://example.org/a.mp3");
+        assert!(kept.held.is_empty());
+    }
 
     #[test]
     fn an_episode_stands_in_the_queue_once() {

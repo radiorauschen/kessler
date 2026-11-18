@@ -38,7 +38,8 @@ disagree — then fix this file.
   `row · head_line()`, baseline to baseline — in the music, the radio and the
   podcasts alike.
 - small lines one under another stand `text::SMALL_LINE` apart (the label
-  size at prose's leading): a station's facts, an episode's lines, the narrow
+  size at `SMALL_LEADING`, 1.5 — a little more open than the reading size's
+  prose at 1.32; small prose is set the same): a station's facts, an episode's lines, the narrow
   window's names, what stands under a podcast's name (`forms::say_under`).
 - figures stay regular whatever the row does; bold digits only make a column
   uneven.

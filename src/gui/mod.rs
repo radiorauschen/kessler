@@ -459,6 +459,7 @@ pub enum About {
     Artist(usize),
     Station(usize),
     Episode(usize),
+    Podcast(usize),
 }
 
 pub type ArtistAnchor = (Option<String>, usize, Option<i64>);
@@ -760,6 +761,7 @@ pub struct GuiApp {
     radio_heard: Option<Box<crate::radio::heard::Heard>>,
     pub aired: Vec<crate::radio::Aired>,
     station_noted: Option<String>,
+    pub(in crate::gui) radio_paused_since: Option<chrono::DateTime<chrono::Local>>,
     spins: Option<Box<crate::radio::spins::Watch>>,
     pub(in crate::gui) programme: Option<Box<crate::radio::programme::Programme>>,
     window_was: Option<[f32; 4]>,
@@ -941,6 +943,7 @@ impl GuiApp {
             radio_heard: None,
             aired: Vec::new(),
             station_noted: None,
+            radio_paused_since: None,
             spins: None,
             programme: None,
             source: Source::default(),
@@ -1532,8 +1535,9 @@ impl eframe::App for GuiApp {
         #[cfg(target_os = "linux")]
         crate::ipod::udisks::AUTO.store(self.config.ipod_mount, std::sync::atomic::Ordering::Relaxed);
         if let Some(placed) = macwindow::apply(frame) {
-            theme::set_titlebar(placed.band);
-            theme::set_buttons_end(placed.buttons_end);
+            let zoom = ctx.zoom_factor().max(0.1);
+            theme::set_titlebar(placed.band / zoom);
+            theme::set_buttons_end(placed.buttons_end / zoom);
         }
         if let Some(measure) = self.measure.as_mut() {
             measure::watch_repaints(ctx);

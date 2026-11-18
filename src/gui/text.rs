@@ -204,7 +204,9 @@ pub fn cased_within(
 
 pub const PARAGRAPH_LEADING: f32 = 1.32;
 
-pub const SMALL_LINE: f32 = super::theme::SIZE_LABEL * PARAGRAPH_LEADING;
+pub const SMALL_LEADING: f32 = 1.5;
+
+pub const SMALL_LINE: f32 = super::theme::SIZE_LABEL * SMALL_LEADING;
 
 pub fn paragraph(
     ui: &egui::Ui,
@@ -217,7 +219,8 @@ pub fn paragraph(
 }
 
 pub fn prose(ui: &egui::Ui, text: &str, role: Role, color: Color32, max_width: f32) -> Arc<Galley> {
-    wrapped(ui, text, role, color, max_width, Some(PARAGRAPH_LEADING))
+    let leading = if role.font().size <= super::theme::SIZE_LABEL { SMALL_LEADING } else { PARAGRAPH_LEADING };
+    wrapped(ui, text, role, color, max_width, Some(leading))
 }
 
 pub fn sized(ui: &egui::Ui, text: &str, role: Role, size: f32, color: Color32, max_width: f32) -> Arc<Galley> {

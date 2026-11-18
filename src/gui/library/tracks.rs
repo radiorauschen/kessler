@@ -156,7 +156,8 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
 
         let grouped = merged;
         let head_cover = app.config.ui.heading_covers.then(|| app.config.ui.heading_cover());
-        let two_lines = two_lines_beside(head_cover);
+        let plain = app.config.ui.heading_plain;
+        let two_lines = plain || two_lines_beside(head_cover);
         let shelf_order = app.track_order() == (SortField::Artist, SortOrder::Ascending);
         let groups = if grouped || shelf_order { runs_of(ui, &app.tracks, &app.compiled) } else { Default::default() };
         let in_one_piece = || {
@@ -188,11 +189,13 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 top > seen.bottom() || top + height < seen.top()
             };
             for (i, track) in app.tracks.iter().enumerate() {
+                let mut head_top: Option<f32> = None;
                 if subheads && groups.get(next_group).is_some_and(|&(start, _)| start == i) {
                     next_group += 1;
                     if i > 0 {
                         ui.add_space(ALBUM_HEAD_ABOVE);
                     }
+                    head_top = Some(ui.cursor().top());
                     let album = if track.album.trim().is_empty() { tr!("ohne album") } else { track.album.as_str() };
                     let said = match crate::db::grouping_artist(track) {
                         artist if !named_artist && !artist.is_empty() => format!("{album} · {artist}"),
@@ -206,12 +209,36 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         if i > 0 {
                             ui.add_space(ALBUM_HEAD_ABOVE);
                         }
+                        head_top = Some(ui.cursor().top());
                         let run = &app.tracks[start..(start + len).min(app.tracks.len())];
                         let track = run.iter().find(|t| !app.guests.contains(&t.id)).unwrap_or(track);
                         let compiled_run = run.iter().any(|t| app.compiled.contains(&t.id));
                         let artist = Some(crate::db::grouping_artist(track))
                             .filter(|a| !named_artist && !compiled_run && !a.is_empty());
-                        let height = album_head_height(head_cover, width, head_lines(artist.is_some(), two_lines), m);
+                        let mut said = heading_facts(&on_heading, run);
+                        if compiled_run {
+                            said.insert(0, tr!("kompilation").to_string());
+                        }
+                        let under = facts_line(
+                            &said,
+                            app.config.ui.heading_count.then_some(len),
+                            app.config.ui.merged_bitrate.then(|| heading_bitrate(run)).flatten().as_deref(),
+                        );
+                        let (under, artist) = if plain {
+                            let mut line: Vec<String> = artist.map(str::to_string).into_iter().collect();
+                            line.extend(said.iter().cloned());
+                            if app.config.ui.heading_count {
+                                line.push(if len == 1 { tr!("1 titel").to_string() } else { tr!("{} titel", text::count(len as u64)) });
+                            }
+                            line.extend(app.config.ui.merged_bitrate.then(|| heading_bitrate(run)).flatten());
+                            (vec![line.join(" · ")], None)
+                        } else if artist.is_none() && !two_lines {
+                            (split_facts(ui, &under, words_room(head_cover, width, m)), artist)
+                        } else {
+                            (vec![under], artist)
+                        };
+                        let lines = head_lines(artist.is_some(), two_lines);
+                        let height = album_head_height(head_cover, width, lines, under.len() - 1, m);
                         if off_screen(ui, height) {
                             ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
                         } else {
@@ -221,10 +248,6 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                                     && crate::db::sort_key(&t.album) == *album
                             })
                         });
-                        let mut said = heading_facts(&on_heading, run);
-                        if compiled_run {
-                            said.insert(0, tr!("kompilation").to_string());
-                        }
                         let taken = |at: usize| (more_than_the_cursor && picked.contains(&at)) || (focused && selected == at);
                         let whole = shown
                             && (start..start + run.len()).all(taken)
@@ -246,11 +269,10 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             width,
                             head_cover,
                             track,
-                            &said,
-                            app.config.ui.heading_count.then_some(len),
-                            app.config.ui.merged_bitrate.then(|| heading_bitrate(run)).flatten().as_deref(),
+                            &under,
                             artist,
                             two_lines,
+                            plain,
                             heard,
                             marked,
                             m,
@@ -272,7 +294,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 }
                 if off_screen(ui, m.row) {
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::hover());
-                    keep_visible(ui, rect, m, follow && selected == i);
+                    keep_visible(ui, with_head(rect, head_top), m, follow && selected == i);
                     continue;
                 }
                 let marked = shown && ((more_than_the_cursor && picked.contains(&i)) || (focused && selected == i));
@@ -290,7 +312,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 let on_device = device_mark.filter(|_| on_device.contains(&track.id));
                 let by = app.compiled.contains(&track.id).then(|| track.shown_artist());
                 let response = track_row(ui, width, track, state, on_device, by, &columns, m, palette);
-                keep_visible(ui, response.rect, m, follow && selected == i);
+                keep_visible(ui, with_head(response.rect, head_top), m, follow && selected == i);
                 note_cursor_row(ui, "tracks", response.rect, selected == i);
                 if response.drag_started() {
                     lifted = Some(i);
@@ -526,9 +548,49 @@ fn head_block(lines: usize, m: Metrics) -> f32 {
     m.row * (1.0 + crate::gui::theme::head_line() * lines.saturating_sub(1) as f32)
 }
 
-pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -> f32 {
+fn words_block(lines: usize, more: usize, m: Metrics) -> f32 {
+    head_block(lines, m) + text::SMALL_LINE * more as f32
+}
+
+pub(super) fn facts_line(facts: &[String], count: Option<usize>, bitrate: Option<&str>) -> String {
+    let mut under: Vec<String> = Vec::new();
+    if let Some(count) = count {
+        under.push(if count == 1 {
+            tr!("1 titel").to_string()
+        } else {
+            tr!("{} titel", text::count(count as u64))
+        });
+    }
+    under.extend(facts.iter().cloned());
+    under.extend(bitrate.map(str::to_string));
+    under.join(" · ")
+}
+
+pub(super) fn split_facts(ui: &Ui, said: &str, room: f32) -> Vec<String> {
+    let wide = |words: &str| text::full_line(ui, words, Role::Label, Color32::WHITE).size().x;
+    if wide(said) <= room {
+        return vec![said.to_string()];
+    }
+    let parts: Vec<&str> = said.split(" · ").collect();
+    let fit = (1..parts.len()).rev().find(|&n| wide(&parts[..n].join(" · ")) <= room);
+    match fit {
+        Some(n) => vec![parts[..n].join(" · "), parts[n..].join(" · ")],
+        None => vec![said.to_string()],
+    }
+}
+
+fn words_room(cover: Option<f32>, width: f32, m: Metrics) -> f32 {
+    let room = (width - m.marker_pad_x * 2.0).max(1.0);
+    match head_cover_layout(cover, width, 1, m) {
+        (size, false) if cover.is_some() => (room - size - ALBUM_HEAD_GAP).max(1.0),
+        _ => room,
+    }
+}
+
+pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, more: usize, m: Metrics) -> f32 {
     let (size, stacked) = head_cover_layout(cover, width, lines, m);
-    let tall = if stacked { size + ALBUM_HEAD_UNDER + head_block(lines, m) } else { size.max(head_block(lines, m)) };
+    let block = words_block(lines, more, m);
+    let tall = if stacked { size + ALBUM_HEAD_UNDER + block } else { size.max(block) };
     tall + m.marker_pad_x * 2.0 + m.marker_inset_y
 }
 
@@ -539,7 +601,7 @@ fn head_cover_layout(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -
             let size = size.min(room);
             (size, size >= STACKED_FROM || size > room / 3.0)
         }
-        None => (head_block(lines, m), false),
+        None => (words_block(lines, 0, m), false),
     }
 }
 
@@ -553,22 +615,22 @@ pub(super) fn album_head(
     width: f32,
     cover: Option<f32>,
     track: &crate::db::models::Track,
-    facts: &[String],
-    count: Option<usize>,
-    bitrate: Option<&str>,
+    under: &[String],
     artist: Option<&str>,
     two_lines: bool,
+    plain: bool,
     heard: bool,
     marked: RowState,
     m: Metrics,
     palette: &Palette,
 ) -> Response {
     let lines = head_lines(artist.is_some(), two_lines);
+    let more = under.len().saturating_sub(1);
     let (size, stacked) = head_cover_layout(cover, width, lines, m);
-    let block = head_block(lines, m);
+    let block = words_block(lines, more, m);
     let tall = if stacked { size } else { size.max(block) };
     let pad = m.marker_pad_x;
-    let height = album_head_height(cover, width, lines, m);
+    let height = album_head_height(cover, width, lines, more, m);
     let plate_height = height - m.marker_inset_y;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let plate = Rect::from_min_size(rect.min, Vec2::new(rect.width(), plate_height));
@@ -595,17 +657,7 @@ pub(super) fn album_head(
     };
     let title_colour = if heard { palette.accent } else { palette.ink };
 
-    let mut under: Vec<String> = Vec::new();
-    if let Some(count) = count {
-        under.push(if count == 1 {
-            tr!("1 titel").to_string()
-        } else {
-            tr!("{} titel", text::count(count as u64))
-        });
-    }
-    under.extend(facts.iter().cloned());
-    under.extend(bitrate.map(str::to_string));
-    let under = under.join(" · ");
+    let first = under.first().map(String::as_str).unwrap_or("");
 
     let step = m.row * crate::gui::theme::head_line();
     let top = if stacked { picture.bottom() + ALBUM_HEAD_UNDER } else { rect.top() + pad + (tall - block) / 2.0 };
@@ -623,8 +675,8 @@ pub(super) fn album_head(
     if two_lines {
         let cell = line(1);
         match artist {
-            Some(artist) if !under.is_empty() => {
-                let said = text::line_within(ui, &under, Role::Label, flac, (room * 2.0 / 3.0 - MARK_GAP).max(1.0));
+            Some(artist) if !first.is_empty() => {
+                let said = text::line_within(ui, first, Role::Label, flac, (room * 2.0 / 3.0 - MARK_GAP).max(1.0));
                 let artist_room = (room - said.size().x - MARK_GAP).max(1.0);
                 let artist_cell = Rect::from_min_size(cell.min, Vec2::new(artist_room, m.row));
                 cell_text(ui, artist_cell, response.id.with(1), artist, Role::Content, palette.mid, active, ground, m);
@@ -636,7 +688,8 @@ pub(super) fn album_head(
                 ui.painter().galley(at, said, flac);
             }
             Some(artist) => cell_text(ui, cell, response.id.with(1), artist, Role::Content, palette.mid, active, ground, m),
-            None => cell_text(ui, cell, response.id.with(1), &under, Role::Label, flac, active, ground, m),
+            None if plain => cell_text(ui, cell, response.id.with(1), first, Role::Content, palette.mid, active, ground, m),
+            None => cell_text(ui, cell, response.id.with(1), first, Role::Label, flac, active, ground, m),
         }
     } else {
         let mut at = 1;
@@ -644,7 +697,14 @@ pub(super) fn album_head(
             cell_text(ui, line(at), response.id.with(at), artist, Role::Content, palette.mid, active, ground, m);
             at += 1;
         }
-        cell_text(ui, line(at), response.id.with(at), &under, Role::Label, flac, active, ground, m);
+        for (k, words) in under.iter().enumerate() {
+            let cell = line(at).translate(Vec2::new(0.0, text::SMALL_LINE * k as f32));
+            cell_text(ui, cell, response.id.with(at + k), words, Role::Label, flac, active, ground, m);
+        }
     }
     response
+}
+
+fn with_head(row: Rect, head_top: Option<f32>) -> Rect {
+    head_top.map_or(row, |top| Rect::from_min_max(egui::pos2(row.left(), top.min(row.top())), row.max))
 }
