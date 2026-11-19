@@ -705,8 +705,8 @@ impl Known {
         if let Some(wiki) = &self.wiki {
             ui.add_space(BLOCK_AIR * 2.0);
             let said = if wiki.lang == lang { tr!("aus {}", "wikipedia") } else { tr!("aus {} ({})", "wikipedia", wiki.lang) };
-            say(ui, width, &said, Role::Label, palette.faint, m);
-            prose(ui, width, &cut(&wiki.text), Role::Content, palette.mid, m);
+            say(ui, width, &said, Role::Label, palette.heading(), m);
+            prose(ui, width, &cut(&wiki.text), Role::Content, palette.ink, m);
         } else if self.asking {
             ui.add_space(BLOCK_AIR * 2.0);
             let dots = ".".repeat(1 + (ui.input(|i| i.time) / 0.4) as usize % 3);
@@ -714,8 +714,8 @@ impl Known {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         } else if !self.intro.description.is_empty() {
             ui.add_space(BLOCK_AIR * 2.0);
-            say(ui, width, tr!("vom sender selbst"), Role::Label, palette.faint, m);
-            prose(ui, width, &cut(&self.intro.description), Role::Content, palette.mid, m);
+            say(ui, width, tr!("vom sender selbst"), Role::Label, palette.heading(), m);
+            prose(ui, width, &cut(&self.intro.description), Role::Content, palette.ink, m);
         }
     }
 
@@ -734,7 +734,7 @@ impl Known {
             return None;
         }
         ui.add_space(BLOCK_AIR * 2.0);
-        say(ui, width, tr!("mehr lesen"), Role::Label, palette.faint, m);
+        say(ui, width, tr!("mehr lesen"), Role::Label, palette.heading(), m);
         let mut clicked = None;
         for (word, url) in &links {
             if link_action(ui, width, word, m, palette) {
@@ -836,7 +836,7 @@ fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                 say(ui, width, said_here, Role::Content, palette.faint, m);
                 if let Some(said) = said.as_deref().filter(|s| !s.is_empty()) {
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, tr!("der sender sagt gerade"), Role::Label, palette.faint, m);
+                    say(ui, width, tr!("der sender sagt gerade"), Role::Label, palette.heading(), m);
                     paragraph(ui, width, said, Role::Content, palette.ink, m);
                 }
                 for (head, artists) in [(tr!("zuletzt hier gehört"), &before), (tr!("gemerkt von hier"), &kept)] {
@@ -844,7 +844,7 @@ fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                         continue;
                     }
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, head, Role::Label, palette.faint, m);
+                    say(ui, width, head, Role::Label, palette.heading(), m);
                     for artist in artists.iter() {
                         if link_action(ui, width, &crate::gui::theme::lower(artist), m, palette) {
                             look_up = Some(artist.clone());
@@ -864,11 +864,11 @@ fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
             }
             if let Some(about) = about.as_deref().filter(|a| !a.is_empty()) {
                 ui.add_space(BLOCK_AIR);
-                prose(ui, width, about, Role::Content, palette.mid, m);
+                prose(ui, width, about, Role::Content, palette.ink, m);
             }
             if !links.is_empty() {
                 ui.add_space(BLOCK_AIR * 2.0);
-                say(ui, width, tr!("mehr lesen"), Role::Label, palette.faint, m);
+                say(ui, width, tr!("mehr lesen"), Role::Label, palette.heading(), m);
                 for (words, url) in &links {
                     if link_action(ui, width, &crate::gui::theme::lower(words), m, palette) {
                         open_url = Some(url.clone());

@@ -64,7 +64,7 @@ pub(super) fn lyrics_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     }
                     return;
                 };
-                say(ui, width, &tr!("aus {}", crate::lang::t(words.from.name())), Role::Label, palette.faint, m);
+                say(ui, width, &tr!("aus {}", crate::lang::t(words.from.name())), Role::Label, palette.heading(), m);
                 if words.instrumental {
                     say(ui, width, tr!("ohne worte"), Role::Content, palette.mid, m);
                 } else {

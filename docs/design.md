@@ -36,22 +36,39 @@ disagree — then fix this file.
   in `Content`, the second tone.
 - from a title to the first line under it: a heading's line step,
   `row · head_line()`, baseline to baseline — in the music, the radio and the
-  podcasts alike.
+  podcasts alike. a record's head, an episode's page and a podcast's head set
+  their title, the name under it and the facts the same way: title in the bold
+  cut and the ink, the name in the plain cut and the second tone, the facts
+  small in the third, each a heading's step under the line before
+  (`podcast_col::title_lines`, as `tracks::album_head`).
 - small lines one under another stand `text::SMALL_LINE` apart (the label
   size at `SMALL_LEADING`, 1.5 — a little more open than the reading size's
   prose at 1.32; small prose is set the same): a station's facts, an episode's lines, the narrow
-  window's names, what stands under a podcast's name (`forms::say_under`).
+  window's names.
 - figures stay regular whatever the row does; bold digits only make a column
   uneven.
 
 ## tones (`Palette`)
 
-- `ink` — what is read; what is under the pointer.
-- `mid` — the second tone: facts, controls at rest.
-- `faint` — the quietest: explanations, empty-list sentences, archived rows.
-- `accent` — what plays, what is chosen as a view, and news. also `geladen`
-  and `gemerkt` on an episode. not for decoration.
-- `heading()` — the column heads.
+one colour for each kind of word, the same in every scheme — the colours
+serve the system, so a head reads as a head and a fact as a fact whichever
+scheme is on:
+
+| kind | for | tone |
+|---|---|---|
+| head | column heads, heads inside a column (`mitglieder`, `hören`, `heute`, `aus wikipedia`) | `heading()` |
+| name | a record, a track, an episode, a member | `ink` |
+| second name | the artist under a record, the podcast under an episode | `mid` |
+| facts | years, counts, bitrate, day, length, `auch in …` — small | `faint` |
+| reading text | wikipedia, an episode's or a podcast's description | `ink` |
+| action | `abspielen`, `herunterladen`, a name in the library to click | `mid`, the ink under the pointer |
+| note | empty lists, explanations in the menu | `faint` |
+| what plays | the track, the episode, the station — and news | `accent` |
+
+- every scheme names its own `heading`, apart from `faint`, `mid` and
+  `accent` (the test `the_heads_stand_apart` holds it there): a head in the
+  facts' colour read as one more line of facts.
+- `accent` is not for decoration, nor for a view that is chosen.
 - `ground`, `rule`, `field`, `hover`, `marked()` — the surfaces.
 - the sharpest tone (ink, accent or mid, whichever stands out most from the
   ground: `sharpest()` in controls.rs) for marks that have to be seen on the
@@ -66,9 +83,17 @@ disagree — then fix this file.
   0.08 s. pointed at from elsewhere (`pointed`) wears it too.
 - **chosen / active**: the darker plate (`marker_colour`) where the column
   has the keyboard (`selected` + `focused`); bold where it has not.
-- **playing / open view**: the arrow before the name (`lead_arrow`, sliding
-  in over `ARROW_SECS` 0.16 s) and the accent. the views over the names —
-  `alle`, `zuletzt`, `geladen`, `gemerkt` — have it while chosen.
+- **playing**: the arrow before the name (`lead_arrow`, sliding in over
+  `ARROW_SECS` 0.16 s) and the accent — the track, the episode, the station,
+  and the artist or podcast whose it is.
+- **views** over the names — `alle`, `zuletzt`, `kompilationen` over the
+  artists; `alle`, `offen`, `heruntergeladen`, `gemerkt` over the podcasts —
+  are muted, in the second tone: they are not names. chosen, they have the
+  arrow (and the darker plate where the column has the keys), never the
+  accent. a chosen name is bold and on the plate, no arrow.
+- **chosen** is in the ink and the bold cut in every list — a played row of
+  a queue, a view over the names, a station heard alike; only a row whose
+  file is gone stays in the second tone.
 - the darker plate goes where the last click went: on what is chosen in the
   column clicked last, nowhere else — the others keep their arrow, accent or
   bold.
@@ -100,8 +125,10 @@ disagree — then fix this file.
   word at its end does — then no plate on the name. a count at rest at the
   end becomes the word under the pointer (`leeren`). air under a head
   `HEAD_AIR` 6; between blocks `BLOCK_AIR` 8.
-- **section heads inside a list** (`heute`, `diese woche`, `älter`) in
-  `Label`, faint, with a block's air before each but the first.
+- **section heads inside a list or a page** (`heute`, `diese woche`,
+  `älter`, `kapitel`, `aus wikipedia`, `mitglieder`, `hören`) in `Label` and
+  the heads' colour (`heading()`), with a block's air before each but the
+  first.
 - **edges fade** instead of cutting: `FADE_HEIGHT` 28 at top and foot; under
   the last row `LIST_END_AIR` (the fade's height), so the end reads as an
   end.

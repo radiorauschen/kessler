@@ -30,6 +30,7 @@ pub const PART: &[(&str, &str)] = &[
     ("mitglieder", "メンバー"),
     ("in gruppen", "所属グループ"),
     ("auch in", "こちらにも"),
+    ("(ehemalig)", "（元メンバー）"),
     ("auch in {}", "{} にも"),
     ("erst wenn die suche nach künstler:innen fertig ist", "アーティストの検索が終わってから"),
     ("erst wenn die suche nach jahren oder genres fertig ist", "年やジャンルの検索が終わってから"),

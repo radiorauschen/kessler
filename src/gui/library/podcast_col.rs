@@ -257,19 +257,10 @@ fn show_page(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
     let (area, _) = ui.allocate_exact_size(Vec2::new(width, side), Sense::hover());
     let picture = Rect::from_min_size(egui::pos2(content_rect(area, m).left(), area.top()), Vec2::splat(side));
     picture_at(app, ui, picture, palette, &crate::podcast::artwork_path(show), &show.title);
-    ui.add_space(BLOCK_AIR * 2.0);
-    paragraph(ui, width, &show.title, Role::ContentBold, palette.ink, m);
+    ui.add_space(super::tracks::ALBUM_HEAD_UNDER);
     let makers = if feed.people.is_empty() { feed.author.clone() } else { feed.people.join(", ") };
-    if !makers.is_empty() {
-        say(ui, width, &makers, Role::Label, palette.mid, m);
-    }
-    if let Some(said) = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive()) {
-        if makers.is_empty() {
-            say(ui, width, &said, Role::Label, palette.faint, m);
-        } else {
-            say_under(ui, width, &said, Role::Label, palette.faint, m);
-        }
-    }
+    let rhythm = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive()).unwrap_or_default();
+    title_lines(ui, width, &show.title, &makers, &rhythm, m, palette);
     if !feed.link.is_empty() {
         ui.add_space(BLOCK_AIR);
         let shown = feed.link.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.").trim_end_matches('/');
@@ -279,7 +270,7 @@ fn show_page(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
     }
     if !feed.about.is_empty() {
         ui.add_space(BLOCK_AIR * 2.0);
-        prose(ui, width, &feed.about, Role::Label, palette.faint, m);
+        prose(ui, width, &feed.about, Role::Label, palette.ink, m);
     }
     links_block(ui, width, &feed.about_links, m, palette);
 }
@@ -314,18 +305,9 @@ fn show_head(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
     let column = Rect::from_min_size(egui::pos2(left - m.marker_pad_x, top.y), Vec2::new(beside + m.marker_pad_x * 2.0, side));
     let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(column).layout(egui::Layout::top_down(egui::Align::Min)));
     let w = column.width();
-    paragraph(&mut inner, w, &show.title, Role::ContentBold, palette.ink, m);
     let makers = if feed.people.is_empty() { feed.author.clone() } else { feed.people.join(", ") };
-    if !makers.is_empty() {
-        say(&mut inner, w, &makers, Role::Label, palette.mid, m);
-    }
-    if let Some(said) = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive()) {
-        if makers.is_empty() {
-            say(&mut inner, w, &said, Role::Label, palette.faint, m);
-        } else {
-            say_under(&mut inner, w, &said, Role::Label, palette.faint, m);
-        }
-    }
+    let rhythm = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive()).unwrap_or_default();
+    title_lines(&mut inner, w, &show.title, &makers, &rhythm, m, palette);
     if !feed.link.is_empty() {
         let shown = feed.link.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.").trim_end_matches('/');
         if link_action(&mut inner, w, shown, m, palette) {
@@ -353,7 +335,7 @@ fn show_head(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
             let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head).trim_end().to_string();
             format!("{cut} …")
         };
-        prose(ui, width, &about, Role::Label, palette.faint, m);
+        prose(ui, width, &about, Role::Label, palette.ink, m);
         if open || !long {
             links_block(ui, width, &feed.about_links, m, palette);
         }
@@ -376,7 +358,7 @@ fn podcast_info_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette,
     };
     scrolled(ui, "podcast-info", palette, |ui| {
         if let Some((episode, _)) = &playing {
-            say(ui, width, tr!("läuft"), Role::Label, palette.faint, m);
+            say(ui, width, tr!("läuft"), Role::Label, palette.heading(), m);
             paragraph(ui, width, &episode.title, Role::Content, palette.ink, m);
             ui.add_space(BLOCK_AIR * 2.0);
         }
@@ -498,14 +480,14 @@ fn shows_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width:
         }
         let all = panel.chosen.is_none() && !panel.only_fetched && !panel.only_starred && !panel.only_open;
         let here = panel.focus == 0;
-        let state = RowState { selected: all, focused: all && here, arrow: all, playing: all, ..Default::default() };
+        let state = RowState { selected: all, focused: all && here, arrow: all, muted: true, ..Default::default() };
         let new = panel.new_total();
         let figure = if new > 0 { tr!("{} neu", new) } else { String::new() };
         if name_row(ui, egui::Id::unique("podcast-newest"), width, tr!("alle"), &figure, Role::Label, state, m, palette).clicked() {
             *asked = Some(Asked::Choose(None));
         }
         let open = panel.open_count();
-        let state = RowState { selected: panel.only_open, focused: panel.only_open && here, arrow: panel.only_open, playing: panel.only_open, ..Default::default() };
+        let state = RowState { selected: panel.only_open, focused: panel.only_open && here, arrow: panel.only_open, muted: true, ..Default::default() };
         let figure = if open > 0 { open.to_string() } else { String::new() };
         if name_row(ui, egui::Id::unique("podcast-open"), width, tr!("offen"), &figure, Role::Label, state, m, palette).clicked() {
             *asked = Some(Asked::Open);
@@ -519,15 +501,15 @@ fn shows_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width:
             (size, hidden) if hidden >= size => tr!("{} mb archiviert", mb(size)),
             (size, hidden) => tr!("{} mb · {} archiviert", size.div_ceil(1_000_000), hidden.div_ceil(1_000_000)),
         };
-        let state = RowState { selected: panel.only_fetched, focused: panel.only_fetched && here, arrow: panel.only_fetched, playing: panel.only_fetched, ..Default::default() };
+        let state = RowState { selected: panel.only_fetched, focused: panel.only_fetched && here, arrow: panel.only_fetched, muted: true, ..Default::default() };
         if name_row(ui, egui::Id::unique("podcast-fetched"), width, tr!("heruntergeladen"), &figure, Role::Label, state, m, palette).clicked() {
             *asked = Some(Asked::Fetched);
         }
         let starred = panel.kept.starred.len();
         if starred > 0 || panel.only_starred {
-            let state = RowState { selected: panel.only_starred, focused: panel.only_starred && here, arrow: panel.only_starred, playing: panel.only_starred, ..Default::default() };
+            let state = RowState { selected: panel.only_starred, focused: panel.only_starred && here, arrow: panel.only_starred, muted: true, ..Default::default() };
             let figure = if starred > 0 { starred.to_string() } else { String::new() };
-            if name_row(ui, egui::Id::unique("podcast-starred"), width, tr!("gemerkt"), &figure, Role::Label, state, m, palette).clicked() {
+            if name_row(ui, egui::Id::unique("podcast-starred"), width, tr!("gemerkt|folge"), &figure, Role::Label, state, m, palette).clicked() {
                 *asked = Some(Asked::Starred);
             }
         }
@@ -538,7 +520,7 @@ fn shows_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width:
         for (i, show) in app.shows_in_order().iter().enumerate() {
             let chosen = panel.chosen.as_ref().is_some_and(|c| c.feed == show.feed);
             let new = panel.new_by_show.get(&show.feed).copied().unwrap_or(0);
-            show_row(ui, ("podcast-show", i), i, width, show, true, false, chosen, here, new, None, m, palette, asked, &panel.follow);
+            show_row(ui, ("podcast-show", i), i, width, show, true, false, chosen, here, app.sounding_podcast(&show.feed), new, None, m, palette, asked, &panel.follow);
         }
     });
 }
@@ -555,7 +537,7 @@ fn found_shows(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: 
         ui.add_space(HEAD_AIR);
         if let Some(n) = episodes {
             let all = panel.chosen.is_none() && !panel.only_fetched && !panel.only_starred && !panel.only_open;
-            let state = RowState { selected: all, focused: all && here, arrow: all, playing: all, ..Default::default() };
+            let state = RowState { selected: all, focused: all && here, arrow: all, muted: true, ..Default::default() };
             if name_row(ui, egui::Id::unique("podcast-found-episodes"), width, tr!("folgen|episoden"), &n.to_string(), Role::Label, state, m, palette).clicked() {
                 *asked = Some(Asked::Choose(None));
             }
@@ -567,7 +549,7 @@ fn found_shows(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: 
         }
         for (i, found) in followed.iter().enumerate() {
             let chosen = panel.chosen.as_ref().is_some_and(|c| c.feed == found.show.feed);
-            show_row(ui, ("podcast-found-followed", i), i, width, &found.show, true, false, chosen, here, 0, Some(found.episodes), m, palette, asked, &panel.follow);
+            show_row(ui, ("podcast-found-followed", i), i, width, &found.show, true, false, chosen, here, app.sounding_podcast(&found.show.feed), 0, Some(found.episodes), m, palette, asked, &panel.follow);
         }
         ui.add_space(m.row + BLOCK_AIR);
     }
@@ -580,7 +562,7 @@ fn found_shows(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: 
     }
     for (i, show) in directory.iter().enumerate() {
         let follows = panel.kept.follows(&show.feed);
-        show_row(ui, ("podcast-found", i), followed.len() + i, width, show, follows, true, panel.chosen.as_ref() == Some(show), true, 0, None, m, palette, asked, &panel.follow);
+        show_row(ui, ("podcast-found", i), followed.len() + i, width, show, follows, true, panel.chosen.as_ref() == Some(show), true, app.sounding_podcast(&show.feed), 0, None, m, palette, asked, &panel.follow);
     }
 }
 
@@ -595,6 +577,7 @@ fn show_row(
     found: bool,
     chosen: bool,
     here: bool,
+    sounding: bool,
     new: usize,
     matches: Option<usize>,
     m: Metrics,
@@ -616,7 +599,7 @@ fn show_row(
         None => tr!("{} neu", new),
     };
     let figure = if word.is_empty() && (new > 0 || matches.is_some()) { count.as_str() } else { word };
-    let state = RowState { selected: chosen, focused: chosen && here, arrow: chosen, playing: chosen, offering: over, ..Default::default() };
+    let state = RowState { selected: chosen, focused: chosen && here, playing: sounding, offering: over, ..Default::default() };
     let response = name_row(ui, egui::Id::unique(salt), width, &show.title, figure, Role::Label, state, m, palette);
     if follow.borrow().as_deref() == Some(show.feed.as_str()) {
         response.scroll_to_me(Some(egui::Align::Center));
@@ -639,7 +622,7 @@ fn episodes_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wid
     let title = match &chosen {
         Some(show) => show.title.as_str(),
         None if panel.only_fetched => tr!("heruntergeladen"),
-        None if panel.only_starred => tr!("gemerkt"),
+        None if panel.only_starred => tr!("gemerkt|folge"),
         None if panel.only_open => tr!("offen"),
         None => tr!("alle"),
     };
@@ -698,7 +681,7 @@ fn episodes_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wid
                     if last_age.is_some() {
                         ui.add_space(BLOCK_AIR);
                     }
-                    say(ui, width, age.said(), Role::Label, palette.faint, m);
+                    say(ui, width, age.said(), Role::Label, palette.heading(), m);
                     last_age = Some(age);
                 }
             }
@@ -958,9 +941,7 @@ fn episode_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
         let picture = Rect::from_min_size(egui::pos2(content_rect(area, m).left(), area.top()), Vec2::splat(side));
         crate::podcast::fetch_episode_art(&episode.artwork);
         picture_at(app, ui, picture, palette, &crate::podcast::picture_for(&episode, &show), &show.title);
-        ui.add_space(BLOCK_AIR * 2.0);
-        paragraph(ui, width, &episode.title, Role::ContentBold, palette.ink, m);
-        say(ui, width, &show.title, Role::Label, palette.mid, m);
+        ui.add_space(super::tracks::ALBUM_HEAD_UNDER);
         let mut facts: Vec<String> = Vec::new();
         if let Some(day) = day_of(&episode) {
             facts.push(day);
@@ -974,60 +955,56 @@ fn episode_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
                 facts.push(tr!("bleibt").to_string());
             }
         }
-        if !facts.is_empty() {
-            say_under(ui, width, &facts.join(" · "), Role::Label, palette.faint, m);
-        }
-        ui.add_space(BLOCK_AIR);
+        title_lines(ui, width, &episode.title, &show.title, &facts.join(" · "), m, palette);
+        ui.add_space(BLOCK_AIR * 2.0);
+        let mut hearing: Vec<Entry> = Vec::new();
         let fetching = panel.fetching.as_ref().filter(|(e, ..)| e.id == episode.id);
         if let Some((_, _, _, (have, of))) = fetching {
             let how_far = if *of > 0 { format!("{} %", have * 100 / of) } else { format!("{:.1} mb", *have as f64 / 1_000_000.0) };
-            say(ui, width, &tr!("lade … {}", how_far), Role::Label, palette.accent, m);
-        } else if !app.playing_this_episode(&episode.id) {
+            hearing.push(Entry::Said(tr!("lade … {}", how_far)));
+        } else if app.playing_this_episode(&episode.id) {
+            hearing.push(Entry::Action(app.sleep_said(), Box::new(Asked::Sleep)));
+        } else {
             let left = panel.kept.left(&episode.id).filter(|l| !l.done && l.at > 0.0);
-            let word = match left {
+            let play = match left {
                 Some(l) => tr!("weiter bei {}", text::duration(l.at as u64)),
                 None => tr!("abspielen").to_string(),
             };
-            if device_action(ui, width, &word, m, palette) {
-                *asked = Some(Asked::Play(episode.clone(), show.clone()));
-            }
-            let queued = panel.kept.is_queued(&episode.id);
-            let word = if queued { tr!("aus der warteschlange") } else { tr!("in die warteschlange") };
-            if device_action(ui, width, word, m, palette) {
-                *asked = Some(Asked::Queue(episode.clone(), show.clone()));
-            }
+            hearing.push(Entry::Action(play, Box::new(Asked::Play(episode.clone(), show.clone()))));
+            let queue = if panel.kept.is_queued(&episode.id) { tr!("aus der warteschlange") } else { tr!("in die warteschlange") };
+            hearing.push(Entry::Action(queue.to_string(), Box::new(Asked::Queue(episode.clone(), show.clone()))));
+        }
+        let mut groups: Vec<(&str, Vec<Entry>)> = vec![(tr!("hören"), hearing)];
+        if fetching.is_none() {
+            let mut file: Vec<Entry> = Vec::new();
             if crate::podcast::is_fetched(&episode.url) {
-                if device_action(ui, width, tr!("datei löschen"), m, palette) {
-                    *asked = Some(Asked::Forget(episode.clone()));
-                }
+                file.push(Entry::Action(tr!("datei löschen").to_string(), Box::new(Asked::Forget(episode.clone()))));
             } else if let Some(said) = app.keeping_said(&episode.id) {
-                say(ui, width, &said, Role::Label, palette.accent, m);
-            } else if device_action(ui, width, tr!("herunterladen"), m, palette) {
-                *asked = Some(Asked::FetchToKeep(vec![(episode.clone(), show.clone())]));
+                file.push(Entry::Said(said));
+                file.push(Entry::Action(tr!("herunterladen abbrechen").to_string(), Box::new(Asked::Forget(episode.clone()))));
+            } else {
+                file.push(Entry::Action(tr!("herunterladen").to_string(), Box::new(Asked::FetchToKeep(vec![(episode.clone(), show.clone())]))));
             }
+            groups.push((tr!("datei"), file));
         }
-        let starred = panel.kept.is_starred(&episode.id);
-        if device_action(ui, width, if starred { tr!("nicht mehr merken") } else { tr!("merken") }, m, palette) {
-            *asked = Some(Asked::Star(episode.clone(), show.clone()));
-        }
+        let star = if panel.kept.is_starred(&episode.id) { tr!("nicht mehr merken") } else { tr!("merken|folge") };
+        let archive = if panel.kept.is_archived(&episode.id) { tr!("nicht mehr archivieren") } else { tr!("archivieren") };
         let heard = panel.kept.left(&episode.id).is_some_and(|l| l.done);
-        if device_action(ui, width, if heard { tr!("als ungehört markieren") } else { tr!("als gehört markieren") }, m, palette) {
-            *asked = Some(Asked::Heard(episode.clone(), !heard));
-        }
-        if device_action(ui, width, tr!("teilen"), m, palette) {
-            *asked = Some(Asked::Share(episode.clone(), show.clone()));
-        }
-        if app.playing_this_episode(&episode.id) && device_action(ui, width, &app.sleep_said(), m, palette) {
-            *asked = Some(Asked::Sleep);
-        }
-        let word = if panel.kept.is_archived(&episode.id) { tr!("nicht mehr archivieren") } else { tr!("archivieren") };
-        if device_action(ui, width, word, m, palette) {
-            *asked = Some(Asked::Archive(episode.clone()));
-        }
+        let mark = if heard { tr!("als ungehört markieren") } else { tr!("als gehört markieren") };
+        groups.push((
+            tr!("liste"),
+            vec![
+                Entry::Action(star.to_string(), Box::new(Asked::Star(episode.clone(), show.clone()))),
+                Entry::Action(archive.to_string(), Box::new(Asked::Archive(episode.clone()))),
+                Entry::Action(mark.to_string(), Box::new(Asked::Heard(episode.clone(), !heard))),
+                Entry::Action(tr!("teilen").to_string(), Box::new(Asked::Share(episode.clone(), show.clone()))),
+            ],
+        ));
+        action_groups(ui, width, groups, m, palette, asked);
         let chapters: Vec<Chapter> = panel.chapters.as_ref().filter(|(id, _)| *id == episode.id).map(|(_, c)| c.clone()).unwrap_or_default();
         if !chapters.is_empty() {
             ui.add_space(BLOCK_AIR * 2.0);
-            say(ui, width, tr!("kapitel"), Role::Label, palette.faint, m);
+            say(ui, width, tr!("kapitel"), Role::Label, palette.heading(), m);
             let now = app.playing_this_episode(&episode.id).then(|| app.player.position().as_secs_f64());
             let on_rule = now.and_then(|_| pointed_chapter(ui.ctx(), ON_THE_RULE));
             let mut here = None;
@@ -1051,7 +1028,7 @@ fn episode_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
         }
         if !episode.about.is_empty() {
             ui.add_space(BLOCK_AIR * 2.0);
-            prose(ui, width, &episode.about, Role::Label, palette.faint, m);
+            prose(ui, width, &episode.about, Role::Label, palette.ink, m);
         }
         links_block(ui, width, &episode.links, m, palette);
         let inner = (width - m.marker_pad_x * 2.0).max(40.0);
@@ -1223,7 +1200,7 @@ fn episode_row(
     cell_text(ui, facts_cell, id.with(1), facts, Role::Label, facts_colour, active, ground, m);
     let mut x = left;
     let third = top + to_facts + small;
-    for (on, word) in [(starred, tr!("gemerkt"))] {
+    for (on, word) in [(starred, tr!("gemerkt|folge"))] {
         if !on {
             continue;
         }
@@ -1262,4 +1239,79 @@ fn day_of(episode: &Episode) -> Option<String> {
 fn local_day(episode: &Episode) -> Option<chrono::NaiveDate> {
     let at = crate::podcast::when(episode);
     (at > 0).then(|| chrono::DateTime::from_timestamp(at, 0)).flatten().map(|d| d.with_timezone(&chrono::Local).date_naive())
+}
+
+enum Entry {
+    Action(String, Box<Asked>),
+    Said(String),
+}
+
+fn action_groups(ui: &mut Ui, width: f32, groups: Vec<(&str, Vec<Entry>)>, m: Metrics, palette: &Palette, asked: &mut Option<Asked>) {
+    let wants: Vec<f32> = groups
+        .iter()
+        .map(|(head, entries)| {
+            let words = entries.iter().map(|entry| match entry {
+                Entry::Action(word, _) => text::line(ui, word, Role::Content, palette.mid).size().x,
+                Entry::Said(said) => text::line(ui, said, Role::Label, palette.mid).size().x,
+            });
+            words.chain([text::line(ui, head, Role::Label, palette.mid).size().x]).fold(0.0, f32::max) + 2.0 * m.marker_pad_x
+        })
+        .collect();
+    let draw = |ui: &mut Ui, w: f32, head: &str, entries: Vec<Entry>, asked: &mut Option<Asked>| {
+        say(ui, w, head, Role::Label, palette.heading(), m);
+        for entry in entries {
+            match entry {
+                Entry::Action(word, does) => {
+                    if device_action(ui, w, &word, m, palette) {
+                        *asked = Some(*does);
+                    }
+                }
+                Entry::Said(said) => say(ui, w, &said, Role::Label, palette.accent, m),
+            }
+        }
+    };
+    let wanted: f32 = wants.iter().sum::<f32>() + CELL_GAP * wants.len().saturating_sub(1) as f32;
+    if wanted <= width {
+        let extra = (width - wants.iter().sum::<f32>()) / wants.len().max(1) as f32;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for ((head, entries), want) in groups.into_iter().zip(&wants) {
+                let w = (want + extra).floor();
+                ui.allocate_ui_with_layout(Vec2::new(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| draw(ui, w, head, entries, asked));
+            }
+        });
+    } else {
+        for (i, (head, entries)) in groups.into_iter().enumerate() {
+            if i > 0 {
+                ui.add_space(BLOCK_AIR * 2.0);
+            }
+            draw(ui, width, head, entries, asked);
+        }
+    }
+}
+
+fn title_lines(ui: &mut Ui, width: f32, title: &str, name: &str, facts: &str, m: Metrics, palette: &Palette) {
+    let room = (width - m.marker_pad_x * 2.0).max(60.0);
+    let step = m.row * crate::gui::theme::head_line();
+    let title = text::paragraph(ui, title, Role::ContentBold, palette.ink, room);
+    let name = (!name.is_empty()).then(|| text::line_within(ui, name, Role::Content, palette.mid, room));
+    let facts = (!facts.is_empty()).then(|| text::line_within(ui, facts, Role::Label, palette.faint, room));
+    let first = text::row_line(ui, m.row, Role::Content);
+    let title_base = first + text::last_baseline(&title) - text::baseline(&title);
+    let name_base = title_base + step;
+    let facts_base = if name.is_some() { name_base + step } else { name_base };
+    let bottom = match (&name, &facts) {
+        (_, Some(f)) => facts_base - text::baseline(f) + f.size().y,
+        (Some(n), None) => name_base - text::baseline(n) + n.size().y,
+        (None, None) => title_base - text::baseline(&title) + title.size().y,
+    };
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, bottom.max(m.row)), Sense::hover());
+    let left = content_rect(rect, m).left();
+    ui.painter().galley(egui::pos2(left, rect.top() + first - text::baseline(&title)), title, palette.ink);
+    if let Some(n) = name {
+        ui.painter().galley(egui::pos2(left, rect.top() + name_base - text::baseline(&n)), n, palette.mid);
+    }
+    if let Some(f) = facts {
+        ui.painter().galley(egui::pos2(left, rect.top() + facts_base - text::baseline(&f)), f, palette.faint);
+    }
 }

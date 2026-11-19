@@ -408,12 +408,12 @@ const KEYS_FIELD_AIR: f32 = 8.0;
 
 fn caption_in(ui: &mut Ui, word: &str, palette: &Palette, indent: f32) {
     const ABOVE: f32 = 6.0;
-    let g = text::line(ui, word, Role::Label, palette.faint);
+    let g = text::line(ui, word, Role::Label, palette.heading());
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), row_height() + ABOVE), Sense::hover());
     let line = text::row_line(ui, row_height(), Role::Label);
     let at = egui::pos2(rect.left() + indent, text::on_line(&g, rect.top() + ABOVE, line));
-    ui.painter().galley(at, g, palette.faint);
+    ui.painter().galley(at, g, palette.heading());
 }
 
 const INDENT: f32 = 20.0;
@@ -790,14 +790,14 @@ fn heading(ui: &mut Ui, label: &str, palette: &Palette) {
     if TAB_WORD.with(|word| word.get() == label) {
         return;
     }
-    let g = text::line(ui, label, Role::Label, palette.faint);
+    let g = text::line(ui, label, Role::Label, palette.heading());
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), row_height()), Sense::hover());
     let at = egui::pos2(
         rect.left(),
         text::on_line(&g, rect.top(), text::row_line(ui, row_height(), Role::Label)),
     );
-    ui.painter().galley(at, g, palette.faint);
+    ui.painter().galley(at, g, palette.heading());
 }
 
 pub fn render(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metrics) {
