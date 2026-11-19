@@ -1090,7 +1090,7 @@ impl Palette {
                 rule: rgb(0xE4E4E6),
                 hover: rgb(0xF6F6F6),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x8A55B8)),
             },
             Theme::MacosDunkel => Self {
                 ground: rgb(0x1E1E1E),
@@ -1104,7 +1104,7 @@ impl Palette {
                 rule: rgb(0x333335),
                 hover: rgb(0x262628),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xB58CE0)),
             },
             Theme::GnomeHell => Self {
                 ground: rgb(0xFAFAFB),
@@ -1118,7 +1118,7 @@ impl Palette {
                 rule: rgb(0xDEDEE0),
                 hover: rgb(0xF2F2F3),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x9141AC)),
             },
             Theme::GnomeDunkel => Self {
                 ground: rgb(0x222226),
@@ -1132,7 +1132,7 @@ impl Palette {
                 rule: rgb(0x3F3F43),
                 hover: rgb(0x29292D),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xDC8ADD)),
             },
             Theme::SolarisiertHell => Self {
                 ground: rgb(0xFDF6E3),
@@ -1146,7 +1146,7 @@ impl Palette {
                 rule: rgb(0xEEE8D5),
                 hover: rgb(0xF7F0DD),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x6C71C4)),
             },
             Theme::SolarisiertDunkel => Self {
                 ground: rgb(0x002B36),
@@ -1160,7 +1160,7 @@ impl Palette {
                 rule: rgb(0x073642),
                 hover: rgb(0x013640),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x8F93D8)),
             },
             Theme::Nord => Self {
                 ground: rgb(0x2E3440),
@@ -1174,7 +1174,7 @@ impl Palette {
                 rule: rgb(0x3B4252),
                 hover: rgb(0x343B49),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xB48EAD)),
             },
             Theme::IpodClassic => {
                 const PANEL: Color32 = rgb(0xCBCFC1);
@@ -1192,7 +1192,7 @@ impl Palette {
                     rule: mix(0.20),
                     hover: mix(0.04),
                     lit_dots: None,
-                    heading: None,
+                    heading: Some(mix(0.74)),
                 }
             }
             Theme::Dracula => Self {
@@ -1207,7 +1207,7 @@ impl Palette {
                 rule: rgb(0x3A3D51),
                 hover: rgb(0x2F3141),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xBD93F9)),
             },
             Theme::Sublime => Self {
                 ground: rgb(0x303841),
@@ -1221,7 +1221,7 @@ impl Palette {
                 rule: rgb(0x3D454E),
                 hover: rgb(0x353D46),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xC695C6)),
             },
             Theme::Soulseek => Self {
                 ground: rgb(0xD4D0C8),
@@ -1235,7 +1235,7 @@ impl Palette {
                 rule: rgb(0xB5B1A8),
                 hover: rgb(0xDDDAD3),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x007070)),
             },
 
             Theme::NordFrost => Self {
@@ -1250,7 +1250,7 @@ impl Palette {
                 rule: rgb(0x74AFC0),
                 hover: rgb(0x84BCCC),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x5E3F6B)),
             },
             Theme::Hudson => Self {
                 ground: rgb(0x1A46B8),
@@ -1264,7 +1264,7 @@ impl Palette {
                 rule: rgb(0xB89A2E),
                 hover: rgb(0x1F4CBF),
                 lit_dots: None,
-                heading: Some(rgb(0xFFD83A)),
+                heading: Some(rgb(0xFF9F8F)),
             },
             Theme::PcEngine => Self {
                 ground: rgb(0xECEAE4),
@@ -1278,7 +1278,7 @@ impl Palette {
                 rule: rgb(0xAEB8DE),
                 hover: rgb(0xE6E3DC),
                 lit_dots: None,
-                heading: Some(rgb(0xD9561A)),
+                heading: Some(rgb(0x4F6A12)),
             },
             Theme::PcFx => Self {
                 ground: rgb(0xFFFFFF),
@@ -1320,7 +1320,7 @@ impl Palette {
                 rule: rgb(0x2E2F33),
                 hover: rgb(0x222326),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xE0B040)),
             },
             Theme::FmTowns => Self {
                 ground: rgb(0xFFFBFF),
@@ -1334,7 +1334,7 @@ impl Palette {
                 rule: rgb(0xC6C3C6),
                 hover: rgb(0xF7F3F7),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x3A6BB0)),
             },
             Theme::Koen => Self {
                 ground: rgb(0x33312E),
@@ -1348,7 +1348,7 @@ impl Palette {
                 rule: rgb(0x5A4538),
                 hover: rgb(0x3A3835),
                 lit_dots: Some(rgb(0x5AB7EF)),
-                heading: Some(rgb(0xFF7A4A)),
+                heading: Some(rgb(0x5AB7EF)),
             },
             Theme::NordHell => Self {
                 ground: rgb(0xECEFF4),
@@ -1362,7 +1362,7 @@ impl Palette {
                 rule: rgb(0xD8DEE9),
                 hover: rgb(0xE8EBF1),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x8A6584)),
             },
             Theme::DraculaHell => Self {
                 ground: rgb(0xFFFBEB),
@@ -1376,7 +1376,7 @@ impl Palette {
                 rule: rgb(0xE8E0C6),
                 hover: rgb(0xFBF6E4),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x036A96)),
             },
             Theme::SublimeHell => Self {
                 ground: rgb(0xF7F9FA),
@@ -1390,7 +1390,7 @@ impl Palette {
                 rule: rgb(0xE1E6EA),
                 hover: rgb(0xF1F4F5),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x7E4F96)),
             },
             Theme::IpodDunkel => Self {
                 ground: rgb(0x21251C),
@@ -1404,7 +1404,7 @@ impl Palette {
                 rule: rgb(0x363A30),
                 hover: rgb(0x262A21),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x7FA7C8)),
             },
             Theme::SoulseekDunkel => Self {
                 ground: rgb(0x2B2A27),
@@ -1418,7 +1418,7 @@ impl Palette {
                 rule: rgb(0x403F3A),
                 hover: rgb(0x302F2C),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x4FB3B3)),
             },
             Theme::NordFrostDunkel => Self {
                 ground: rgb(0x1C2A33),
@@ -1432,7 +1432,7 @@ impl Palette {
                 rule: rgb(0x2C3E48),
                 hover: rgb(0x21303A),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xB48EAD)),
             },
             Theme::HudsonHell => Self {
                 ground: rgb(0xFFF3C4),
@@ -1502,7 +1502,7 @@ impl Palette {
                 rule: rgb(0xD9D8D2),
                 hover: rgb(0xE6E5E1),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x8A6A10)),
             },
             Theme::FmTownsDunkel => Self {
                 ground: rgb(0x211F21),
@@ -1516,7 +1516,7 @@ impl Palette {
                 rule: rgb(0x3A363A),
                 hover: rgb(0x272427),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x7FA4E0)),
             },
             Theme::PaysageDHiver => Self {
                 ground: rgb(0x0A0A0A),
@@ -1530,7 +1530,7 @@ impl Palette {
                 rule: rgb(0x2A2A2A),
                 hover: rgb(0x141414),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xB4B4B4)),
             },
             Theme::PaysageDHiverHell => Self {
                 ground: rgb(0xD9D9D9),
@@ -1544,7 +1544,7 @@ impl Palette {
                 rule: rgb(0xC2C2C2),
                 hover: rgb(0xD1D1D1),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x2C2C2C)),
             },
             Theme::CocoIchibanya => Self {
                 ground: rgb(0xFFEFA0),
@@ -1558,7 +1558,7 @@ impl Palette {
                 rule: rgb(0xF0CF5A),
                 hover: rgb(0xFFEA98),
                 lit_dots: None,
-                heading: Some(rgb(0xC2410C)),
+                heading: Some(rgb(0x3F6E2A)),
             },
             Theme::CocoIchibanyaDunkel => Self {
                 ground: rgb(0x2E1A0C),
@@ -1586,7 +1586,7 @@ impl Palette {
                 rule: rgb(0xCBCAC5),
                 hover: rgb(0xDEDDD9),
                 lit_dots: Some(rgb(0xD0506A)),
-                heading: None,
+                heading: Some(rgb(0x8B6BB5)),
             },
             Theme::RunebendingDunkel => Self {
                 ground: rgb(0x1F1F21),
@@ -1600,7 +1600,7 @@ impl Palette {
                 rule: rgb(0x3A3A3D),
                 hover: rgb(0x2A2A2C),
                 lit_dots: Some(rgb(0x8C7CF0)),
-                heading: None,
+                heading: Some(rgb(0x8C7CF0)),
             },
             Theme::Rubrik => Self {
                 ground: rgb(0xD3E4CF),
@@ -1614,7 +1614,7 @@ impl Palette {
                 rule: rgb(0xBACFB4),
                 hover: rgb(0xCCDEC7),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x7A5A10)),
             },
             Theme::RubrikDunkel => Self {
                 ground: rgb(0x162019),
@@ -1628,7 +1628,7 @@ impl Palette {
                 rule: rgb(0x324238),
                 hover: rgb(0x1C2720),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0xD8B060)),
             },
             Theme::WilderMann => Self {
                 ground: rgb(0x282828),
@@ -1656,7 +1656,7 @@ impl Palette {
                 rule: rgb(0xD5C4A1),
                 hover: rgb(0xF4E9C1),
                 lit_dots: Some(rgb(0xAF3A03)),
-                heading: Some(rgb(0xB57614)),
+                heading: Some(rgb(0x8F3F71)),
             },
             Theme::Ochsenblut => Self {
                 ground: rgb(0x1D2021),
@@ -1740,7 +1740,7 @@ impl Palette {
                 rule: rgb(0x00FF00),
                 hover: rgb(0x00FFFF),
                 lit_dots: None,
-                heading: None,
+                heading: Some(rgb(0x008000)),
             },
             Theme::KoenHell => Self {
                 ground: rgb(0xEFE6D2),
@@ -3439,6 +3439,23 @@ mod sliding_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_heads_stand_apart() {
+        let apart = |a: Color32, b: Color32| {
+            let (p, q) = (Lab::of(a), Lab::of(b));
+            ((p.l - q.l).powi(2) + (p.a - q.a).powi(2) + (p.b - q.b).powi(2)).sqrt()
+        };
+        for theme in Theme::all() {
+            let p = theme.palette();
+            let name = theme.name();
+            let head = p.heading.unwrap_or_else(|| panic!("{name}: no colour for the heads"));
+            assert!(apart(head, p.faint) >= 0.09, "{name}: heads near the facts, {:.3}", apart(head, p.faint));
+            assert!(apart(head, p.accent) >= 0.09, "{name}: heads near the accent, {:.3}", apart(head, p.accent));
+            assert!(apart(head, p.mid) >= 0.075, "{name}: heads near the second tone, {:.3}", apart(head, p.mid));
+            assert!(contrast(head, p.ground) >= 3.0, "{name}: heads only {:.1}:1 on the ground", contrast(head, p.ground));
+        }
+    }
 
     #[test]
     fn the_tones_under_stand_in_order() {

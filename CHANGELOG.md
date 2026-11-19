@@ -6,6 +6,16 @@ the topmost version is the one being built.
 a line starting with `## ` is a version; one starting with `- ` is a change.
 everything else is skipped.
 
+## 1.5.273
+
+- **colours as a system**, the same in every view and every scheme: heads (column heads and the heads inside a column — „aus wikipedia", „mitglieder", „kapitel", „heute", the menu's) in a colour of their own; reading text — wikipedia, a station's, a podcast's and an episode's description — in the names' ink; small facts (years, dates, counts, bitrate) in the third tone; what can be clicked in the second tone; the accent only for what plays
+- **head colours**: every scheme now names its own, clearly apart from the facts, the second tone and the accent — 27 schemes had none and set their heads like the facts; they take a colour from where they come from (solarized's violet, nord's aurora, adwaita's purple, dracula, gruvbox …); runebending's heads in lilac; hudson's and coco壱番屋's no longer look like the accent; a test keeps every scheme that way
+- **chosen** is in the ink and bold in every list — a played row of the queue and a chosen view too, in music, radio and podcasts; the views over the podcasts („alle", „offen", „heruntergeladen", „gemerkt") are set like „alle", „zuletzt", „kompilationen" over the artists, and a podcast has the arrow and the accent only while its episode plays
+- **episode page**: what can be done to it in three groups under small heads — „hören", „datei", „liste" — side by side where the column is wide enough, else one under another; „datei löschen" also while it plays, and „herunterladen abbrechen" for a download under way or waiting (also in the right-click menu)
+- **title, name and facts** set alike everywhere: an episode's page and a podcast's head set their title, podcast or makers and facts as a record's head does — the same cuts, tones and steps
+- **members**: a former member in the same colour as the current ones, with „(ehemalig)" after the years; the second tone stays for names in your library that can be clicked
+- **english**: an episode's „merken" is „bookmark" now, not „keep"
+
 ## 1.5.266
 
 - **podcasts, search**: the search field now also searches the podcasts you follow and their episodes, at once as you type — by name, author, title and description; the first column shows „in deinen podcasts" (the podcasts something was found in, each with how many episodes match, and „folgen" to list all matching episodes) and, below it, „neue podcasts" from the directory; the episodes column narrows to what matches and counts it

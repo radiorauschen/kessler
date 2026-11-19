@@ -74,8 +74,8 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 }
                 if show_facts && !info.found.disambiguation.is_empty() {
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, &tr!("aus {}", "musicbrainz"), Role::Label, palette.faint, m);
-                    paragraph(ui, width, &info.found.disambiguation, Role::Content, palette.mid, m);
+                    say(ui, width, &tr!("aus {}", "musicbrainz"), Role::Label, palette.heading(), m);
+                    paragraph(ui, width, &info.found.disambiguation, Role::Content, palette.ink, m);
                 }
 
                 let trouble = app.artist.trouble.as_ref().filter(|(k, _)| *k == key);
@@ -108,9 +108,9 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             Some(lang) => tr!("aus {} ({})", from, lang),
                             None => tr!("aus {}", from),
                         };
-                        say(ui, width, &said, Role::Label, palette.faint, m);
+                        say(ui, width, &said, Role::Label, palette.heading(), m);
                     }
-                    prose(ui, width, about, Role::Content, palette.mid, m);
+                    prose(ui, width, about, Role::Content, palette.ink, m);
                 }
                 let on_radio = app.artist.name.clone().and_then(|name| app.heard_on_radio(&name));
                 let radio_fact = |ui: &mut Ui, heard: &crate::radio::heard::Hearing| {
@@ -123,14 +123,14 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 if mine.is_none() {
                     if let Some(heard) = &on_radio {
                         ui.add_space(BLOCK_AIR * 2.0);
-                        say(ui, width, tr!("zuletzt gehört"), Role::Label, palette.faint, m);
+                        say(ui, width, tr!("zuletzt gehört"), Role::Label, palette.heading(), m);
                         radio_fact(ui, heard);
                     }
                 }
                 if let Some(mine) = mine {
                     let today = chrono::Local::now().date_naive();
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, tr!("in deiner bibliothek"), Role::Label, palette.faint, m);
+                    say(ui, width, tr!("in deiner bibliothek"), Role::Label, palette.heading(), m);
                     fact(
                         ui,
                         tr!("alben"),
@@ -159,7 +159,7 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
 
                 if !info.own.note.is_empty() {
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, tr!("notiz"), Role::Label, palette.faint, m);
+                    say(ui, width, tr!("notiz"), Role::Label, palette.heading(), m);
                     prose(ui, width, &info.own.note, Role::Content, palette.ink, m);
                 }
 
@@ -177,8 +177,9 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         continue;
                     }
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, heading, Role::Label, palette.faint, m);
+                    say(ui, width, heading, Role::Label, palette.heading(), m);
                     for tie in ties.iter().take(ARTIST_TIES) {
+                        let colour = if in_library(&tie.name).is_some() { palette.mid } else { palette.ink };
                         match in_library(&tie.name) {
                             Some(at) => {
                                 if device_action(ui, width, &tie.name, m, palette) {
@@ -186,7 +187,6 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                                 }
                             }
                             None => {
-                                let colour = if tie.current { palette.ink } else { palette.mid };
                                 match other_row(ui, width, &tie.name, colour, m, palette) {
                                     Some(Other::Visit) => visit = Some(tie.name.clone()),
                                     Some(Other::Copy) => copied = Some(tie.name.clone()),
@@ -195,6 +195,12 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             }
                         }
                         let mut aside = tie.years.clone();
+                        if !tie.current {
+                            if !aside.is_empty() {
+                                aside.push(' ');
+                            }
+                            aside.push_str(tr!("(ehemalig)"));
+                        }
                         if !tie.also.is_empty() {
                             if !aside.is_empty() {
                                 aside.push_str(" · ");
@@ -209,7 +215,7 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
 
                 if show_similar && !info.found.similar.is_empty() {
                     ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, tr!("ähnliche künstler:innen"), Role::Label, palette.faint, m);
+                    say(ui, width, tr!("ähnliche künstler:innen"), Role::Label, palette.heading(), m);
                     for other in info.found.similar.iter().take(ARTIST_SIMILAR) {
                         let plain = crate::library::artistinfo::plain(other);
                         let here = app
@@ -264,7 +270,7 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     });
                 }
                 ui.add_space(BLOCK_AIR * 2.0);
-                say(ui, width, tr!("mehr lesen"), Role::Label, palette.faint, m);
+                say(ui, width, tr!("mehr lesen"), Role::Label, palette.heading(), m);
                 for link in &links {
                     if link_action(ui, width, &link.label, m, palette) {
                         open_url = Some(link.url.clone());

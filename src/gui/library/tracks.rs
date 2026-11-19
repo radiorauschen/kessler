@@ -201,7 +201,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         artist if !named_artist && !artist.is_empty() => format!("{album} · {artist}"),
                         _ => album.to_string(),
                     };
-                    say(ui, width, &said, Role::Label, palette.faint, m);
+                    say(ui, width, &said, Role::Label, palette.heading(), m);
                 }
                 if let Some(&(start, len)) = groups.get(next_group).filter(|_| grouped) {
                     if start == i {
@@ -607,7 +607,7 @@ fn head_cover_layout(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -
 
 const STACKED_FROM: f32 = 140.0;
 
-const ALBUM_HEAD_UNDER: f32 = 10.0;
+pub(super) const ALBUM_HEAD_UNDER: f32 = 10.0;
 
 pub(super) fn album_head(
     ui: &mut Ui,

@@ -1628,7 +1628,7 @@ colours round. most come from machines that never left japan:
 | `fm towns` | townsos: white windows, the pink title bar, the red menu bar |
 | `公園` | a park in japan in autumn, with a shōwa playground's kitsch wet gravel, names in the yellow of the bar's joint, a tiled mint beside them, salmon figures, tangerine heads, the red bar as the marker, the covers in the yellow — the marked one in the blue of the pole; by day a warm gravel, green, salmon and the pole's blue for the heads|
 | `coco壱番屋` | the curry house's sign: its yellow, paled as the ground, the curry's brown as the words, dark gold figures, curry-orange heads, a curry red for what plays; dark, the roux as the ground, rice-white words, golden rice beside them, terracotta figures, the sign's yellow for the heads|
-| `runebending` | (the colourful `runebender` beside it is gone, as are `famicom`, `disk system` and `virtual boy` — a config naming one opens on `pc engine`) runebender the other way round, for the type: the grounds a quiet warm grey, everything behind the words a shade of it, and the colour all in the words — names in ink, what stands beside them in the grid's green, the figures in its orange, what plays in the comb's violet; dark, the toolbar's black with the green and orange lifted and pink for what plays|
+| `runebending` | (the colourful `runebender` beside it is gone, as are `famicom`, `disk system` and `virtual boy` — a config naming one opens on `pc engine`) runebender the other way round, for the type: the grounds a quiet warm grey, everything behind the words a shade of it, and the colour all in the words — names in ink, what stands beside them in the grid's green, the figures in its orange, what plays in the comb's violet, the column heads in a lilac of their own; dark, the toolbar's black with the green and orange lifted, pink for what plays and the comb's lilac for the heads|
 | `rubrik` | rubrication, as old books were printed: black and red on a verdigris paper — names in black, what stands beside them in the rubricator's red, the figures in a slate blue-grey, what plays in blue, nothing behind the words but the paper a shade darker; dark, by lamplight, cream on a dark paper with a warmer red and a lighter blue|
 | `wilder mann` | gruvbox's colours, every kind of thing in one of its own, so a head, a name, what stands beside it, a figure and what plays are told apart before they are read: column heads in yellow, names in gruvbox's cream, what stands beside them in blue, figures in grey, what plays in red; by day on gruvbox's light ground in its deeper colours. named after the „wilder mann", the brace figure of a hessian half-timbered house|
 | `ochsenblut` | the same idea in the ox-blood red the timbers were painted: heads in red, what stands beside the names in orange, what plays in green, the marked row a dark red; by day on pale plaster|
@@ -2501,7 +2501,10 @@ is in it** for a group — the members, current first, with their years and
 the other groups each of them is also in — and **which groups** a person
 plays in. musicbrainz says so; the first six members are asked about one by
 one, at its pace, so a group takes some seconds longer the first time.
-names that are in your library are a click away. where nothing linked bandcamp
+names that are in your library are a click away, in the second tone; the
+others stand in the ink, a former member as a current one, with `(ehemalig)`
+after the years in the small line under the name — which is set in the
+name's colour, not the heads'. where nothing linked bandcamp
 or discogs, the column offers a search there instead.
 
 **menu → bibliothek → über künstler:innen → exportieren → `als markdown…`** writes everything gathered, one page an
@@ -2613,9 +2616,11 @@ columns, so it can go again as easily as it came. choosing `musik` or
   is and the day, then `heruntergeladen` and how far it was heard — `noch 18:29`, `noch nicht gehört` or `fertig
   gehört`; the row's picture is always the podcast's, the episode's own
   stands in the third column). the one playing has the arrow before its
-  title, an archived one's picture is quieter, and the podcast chosen in the
-  first column — or `alle`, or `heruntergeladen` — wears the arrow and the darker
-  plate, as a chosen view does everywhere. a right click opens its menu:
+  title, an archived one's picture is quieter. in the first column `alle`,
+  `offen`, `heruntergeladen` and `gemerkt` are views, set as `alle` and
+  `zuletzt` over the artists: in the second tone, the one chosen with the
+  arrow; a podcast chosen is bold on the darker plate, and the one whose
+  episode plays has the arrow and the accent. a right click opens its menu:
   `abspielen`, `in die warteschlange`, `archivieren`, `ab hier archivieren`
   — this one and every older one under it, to clear a long `alle` down — and
   `datei löschen` — or, for one not fetched, `herunterladen` —; on one of several
@@ -2689,12 +2694,19 @@ going.
   is read, screened as a station's is) — or, the episode's own where the
   feed gives it one (`itunes:image` in the item), fetched as it is looked at
   or played and then standing in its row in the list too, its title, its
-  podcast, the day it came out, how long it plays, `heruntergeladen` once fetched;
-  `abspielen` (or `weiter bei 12:30`); `datei löschen` for one fetched, to
-  have the room back (not while it plays), and for one not fetched `herunterladen`,
-  to have it without playing it (see below); `in die warteschlange` / `aus der
-  warteschlange`; `archivieren` / `nicht mehr archivieren` (an episode
-  archived is greyed in the lists, or left out of them — see below); its
+  podcast (set as a record's head sets its title and artist under the
+  cover: the same cuts, tones and steps), the day it came out, how long it plays, `heruntergeladen` once fetched;
+  then what can be done to it, in three groups under small heads, each its
+  words one under another, the groups side by side where the column has room
+  for them (each as wide as its longest word, the rest shared out), else one
+  under another: `hören` — `abspielen` (or `weiter bei 12:30`) and `in die
+  warteschlange` / `aus der warteschlange`, while it plays the sleep timer,
+  while it is fetched to play how far —; `datei` — `datei löschen` for one
+  fetched, to have the room back (playing, it stops first), for one not
+  fetched `herunterladen`, to have it without playing it (see below), and
+  while it downloads how far and `herunterladen abbrechen` —; `liste` —
+  `merken`, `archivieren` (an episode archived is greyed in the lists, or
+  left out of them — see below), `als gehört markieren`, `teilen`. its
   **chapters**, where it has any — numbered as a record's tracks are, the
   same numbers the timeline shows, lit while the hand is on that chapter
   there; listed in the feed (podlove's `psc:chapter`), in a file the feed
@@ -2839,7 +2851,9 @@ radio's columns too — a drag holds until kessler is quit).
   this way is kept: heard, its file stays, and `heruntergeladene löschen nach` does
   not take it either — its page says `heruntergeladen · bleibt`. only `datei
   löschen`, `alle heruntergeladenen löschen`, or archiving it with `archivierte
-  dateien löschen` on let it go. kept as `held` in `podcasts.toml`.
+  dateien löschen` on let it go. `herunterladen abbrechen` (on its page, or in
+  the right-click menu in the place of `herunterladen`) calls a download off,
+  waiting or under way. kept as `held` in `podcasts.toml`.
 - **kept.** the podcasts followed and where each episode was left (every
   fifteen seconds while it plays, and when another starts), in
   `podcasts.toml` beside the settings. at the foot of the first column, how

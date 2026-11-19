@@ -34,6 +34,7 @@ pub const PART: &[(&str, &str)] = &[
     ("mitglieder", "members"),
     ("in gruppen", "in groups"),
     ("auch in", "also in"),
+    ("(ehemalig)", "(former)"),
     ("auch in {}", "also in {}"),
     ("erst wenn die suche nach künstler:innen fertig ist", "once the search for artists is done"),
     ("erst wenn die suche nach jahren oder genres fertig ist", "once the search for years or genres is done"),

@@ -152,9 +152,7 @@ impl RowState {
     }
 
     fn role(self) -> Role {
-        if self.spent && !self.playing {
-            Role::Content
-        } else if self.selected || self.playing {
+        if self.selected || self.playing {
             Role::ContentBold
         } else {
             Role::Content
@@ -175,8 +173,8 @@ impl RowState {
             p.mid
         } else if self.playing {
             p.accent
-        } else if self.spent && self.selected {
-            p.mid
+        } else if self.selected {
+            p.ink
         } else if self.spent {
             p.faint
         } else if self.muted {
@@ -1393,9 +1391,11 @@ mod tests {
             selected: true,
             ..spent
         };
-        assert_eq!(chosen.primary(&p), p.mid);
-        assert_eq!(chosen.primary(&p), chosen.secondary(&p));
-        assert_eq!(chosen.role(), Role::Content);
+        assert_eq!(chosen.primary(&p), p.ink);
+        assert_eq!(chosen.role(), Role::ContentBold);
+        let view = RowState { muted: true, selected: true, ..Default::default() };
+        assert_eq!(view.primary(&p), p.ink);
+        assert_eq!(view.role(), Role::ContentBold);
     }
 
     #[test]

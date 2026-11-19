@@ -671,9 +671,15 @@ impl GuiApp {
             self.player.set_reach(None);
             let _ = std::fs::remove_file(crate::podcast::cached(&episode.url).with_extension("part"));
         }
+        let waiting = self.podcasts.to_fetch.len();
         self.podcasts.to_fetch.retain(|(e, _)| e.id != episode.id);
+        let mut called_off = self.podcasts.to_fetch.len() < waiting;
         if self.podcasts.keeping.take_if(|(e, ..)| e.id == episode.id).is_some() {
             let _ = std::fs::remove_file(crate::podcast::cached(&episode.url).with_extension("part"));
+            called_off = true;
+        }
+        if called_off {
+            self.set_notice(tr!("„{}“ wird nicht heruntergeladen", episode.title));
         }
         self.forget_episode(episode);
         self.podcasts.recount = true;
@@ -770,8 +776,14 @@ impl GuiApp {
             (if kept.is_queued(&episode.id) { tr!("aus der warteschlange") } else { tr!("in die warteschlange") }, true),
             (if kept.is_archived(&episode.id) { tr!("zurückholen") } else { tr!("archivieren") }, true),
             (tr!("ab hier archivieren"), true),
-            if fetched { (tr!("datei löschen"), true) } else { (tr!("herunterladen"), !self.fetching_now(&episode.id)) },
-            (if kept.is_starred(&episode.id) { tr!("nicht mehr merken") } else { tr!("merken") }, true),
+            if fetched {
+                (tr!("datei löschen"), true)
+            } else if self.keeping_said(&episode.id).is_some() {
+                (tr!("herunterladen abbrechen"), true)
+            } else {
+                (tr!("herunterladen"), !self.fetching_now(&episode.id))
+            },
+            (if kept.is_starred(&episode.id) { tr!("nicht mehr merken") } else { tr!("merken|folge") }, true),
             (if kept.left(&episode.id).is_some_and(|l| l.done) { tr!("als ungehört markieren") } else { tr!("als gehört markieren") }, true),
         ]
     }
@@ -805,7 +817,7 @@ impl GuiApp {
             1 => self.queue_episode(&episode, &show),
             2 => self.archive_episode(&episode),
             3 => self.archive_from(at),
-            4 if crate::podcast::cached(&episode.url).is_file() => self.delete_episode_file(&episode),
+            4 if crate::podcast::cached(&episode.url).is_file() || self.keeping_said(&episode.id).is_some() => self.delete_episode_file(&episode),
             4 => self.fetch_to_keep(vec![(episode, show)]),
             5 => self.star_episode(&episode, &show),
             _ => {
@@ -1387,6 +1399,10 @@ impl GuiApp {
         let now = self.sounding_now();
         let other = now.1 && now.0 != 3;
         other && self.podcasts.fetch_asked_over.as_ref().is_some_and(|before| *before != now)
+    }
+
+    pub fn sounding_podcast(&self, feed: &str) -> bool {
+        self.playing_episode() && self.podcasts.playing_from.as_ref().is_some_and(|(_, show)| show.feed == feed)
     }
 
     pub fn playing_this_episode(&self, id: &str) -> bool {

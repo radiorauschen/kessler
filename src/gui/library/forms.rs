@@ -165,15 +165,6 @@ pub(super) fn say(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Colo
     ui.painter().galley(at, g, colour);
 }
 
-pub(super) fn say_under(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, text::SMALL_LINE), Sense::hover());
-    let content = content_rect(rect, m);
-    let g = text::line_within(ui, words, role, colour, content.width());
-    let line = text::row_line(ui, m.row, Role::Content) + text::SMALL_LINE - m.row;
-    let at = egui::pos2(content.left(), text::on_line(&g, rect.top(), line));
-    ui.painter().galley(at, g, colour);
-}
-
 pub(super) fn prompt_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) -> Rect {
     let width = ui.available_width();
     let blink = ui.input(|i| i.time).rem_euclid(1.06) < 0.62;
@@ -539,7 +530,7 @@ pub(super) fn details_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &
                 match line {
                     Line::Section(name) => {
                         ui.add_space(m.row * 0.5);
-                        say(ui, width, name, Role::Label, palette.faint, m);
+                        say(ui, width, name, Role::Label, palette.heading(), m);
                     }
                     Line::Field { label, value } => {
                         let left = m.marker_pad_x + label_width;
