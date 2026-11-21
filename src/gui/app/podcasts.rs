@@ -35,6 +35,8 @@ const LOOK_AGAIN_ON_OPEN_SECS: u64 = 5 * 60;
 
 pub const EPISODES_PAGE: usize = 80;
 
+pub type Seen<'a> = (std::borrow::Cow<'a, Episode>, std::borrow::Cow<'a, Show>);
+
 pub type Underway = (Episode, Show, Receiver<Fetching>, (u64, u64));
 
 type Answer<T> = Receiver<std::result::Result<T, String>>;
@@ -139,10 +141,16 @@ impl PodcastPanel {
     }
 
     pub fn episodes(&self, archived: bool) -> (Vec<(Episode, Show)>, usize) {
+        let (page, total) = self.episodes_seen(archived);
+        (page.into_iter().map(|(e, s)| (e.into_owned(), s.into_owned())).collect(), total)
+    }
+
+    pub fn episodes_seen(&self, archived: bool) -> (Vec<Seen<'_>>, usize) {
+        use std::borrow::Cow;
         if self.only_fetched || self.only_starred || self.only_open {
             let all = self.listed(archived);
             let total = all.len();
-            let page = all.into_iter().take(EPISODES_PAGE + self.more).map(|(e, s)| (e.into_owned(), s.into_owned())).collect();
+            let page = all.into_iter().take(EPISODES_PAGE + self.more).collect();
             return (page, total);
         }
         let shows: Vec<&Show> = match &self.chosen {
@@ -179,7 +187,7 @@ impl PodcastPanel {
             .filter_map(|&(s, i)| {
                 let show = shows.get(s as usize)?;
                 let episode = self.feeds.get(&show.feed)?.episodes.get(i as usize)?;
-                Some((episode.clone(), (*show).clone()))
+                Some((Cow::Borrowed(episode), Cow::Borrowed(*show)))
             })
             .collect();
         (page, indices.len())
@@ -201,12 +209,26 @@ impl PodcastPanel {
         h.finish()
     }
 
+    fn as_in_feed(&self, episode: Episode, show: Show) -> (std::borrow::Cow<'_, Episode>, std::borrow::Cow<'_, Show>) {
+        use std::borrow::Cow;
+        let live = self.feeds.get(&show.feed).and_then(|feed| feed.episodes.iter().find(|e| e.id == episode.id));
+        match live {
+            Some(live) if live.url == episode.url => (Cow::Borrowed(live), Cow::Owned(show)),
+            Some(live) => {
+                let mut kept = live.clone();
+                kept.url = episode.url;
+                (Cow::Owned(kept), Cow::Owned(show))
+            }
+            None => (Cow::Owned(episode), Cow::Owned(show)),
+        }
+    }
+
     pub(in crate::gui) fn listed(&self, archived: bool) -> Vec<(std::borrow::Cow<'_, Episode>, std::borrow::Cow<'_, Show>)> {
         use std::borrow::Cow;
         let mut all: Vec<(Cow<'_, Episode>, Cow<'_, Show>)> = if self.only_fetched {
-            self.kept.fetched_episodes().into_iter().map(|(e, s)| (Cow::Owned(e), Cow::Owned(s))).collect()
+            self.kept.fetched_episodes().into_iter().map(|(e, s)| self.as_in_feed(e, s)).collect()
         } else if self.only_starred {
-            self.kept.starred.iter().map(crate::podcast::Fetched::episode).map(|(e, s)| (Cow::Owned(e), Cow::Owned(s))).collect()
+            self.kept.starred.iter().map(crate::podcast::Fetched::episode).map(|(e, s)| self.as_in_feed(e, s)).collect()
         } else if self.only_open {
             let mut open = self.open_episodes();
             open.retain(|(e, s)| self.passes(e, s));
@@ -465,7 +487,7 @@ impl GuiApp {
         self.podcasts.set_search(None);
         let mut kept = Kept::read();
         kept.seen_at = chrono::Utc::now().timestamp();
-        kept.write();
+        kept.write_soon();
         self.podcasts.kept = kept;
         self.podcasts.recount = true;
         if self.query().is_some() {
@@ -620,14 +642,26 @@ impl GuiApp {
     }
 
     pub fn podcast_info(&mut self) {
-        self.podcasts.info_open = !self.podcasts.info_open;
         if self.podcasts.info_open {
+            self.close_podcast_info();
+            return;
+        }
+        self.podcasts.info_open = true;
+        {
             self.log_open = false;
             self.eq_open = false;
             let show = self.podcasts.playing_from.clone().filter(|(e, _)| self.playing_this_episode(&e.id)).map(|(_, s)| s).or_else(|| self.podcasts.chosen.clone());
             if let Some(show) = show.filter(|s| !self.podcasts.feeds.contains_key(&s.feed)) {
                 self.read_feed(&show);
             }
+        }
+    }
+
+    pub fn close_podcast_info(&mut self) {
+        self.podcasts.info_open = false;
+        if self.config.ui.podcast_queue {
+            self.config.ui.podcast_queue = false;
+            self.save_config();
         }
     }
 
@@ -1868,6 +1902,20 @@ impl GuiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_down_episodes_are_listed_as_their_feed_has_them() {
+        let mut panel = PodcastPanel::default();
+        let show = Show { title: "a".into(), feed: "https://x/a".into(), ..Default::default() };
+        let full = Episode { id: "a1".into(), url: "https://x/a1.mp3".into(), about: "notes".into(), ..Default::default() };
+        panel.kept.starred.push(crate::podcast::Fetched::of(&full, &show));
+        panel.only_starred = true;
+        let listed = panel.listed(true);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0.about, "", "no feed read: only what was written down");
+        panel.feeds.insert(show.feed.clone(), Feed { episodes: vec![full], ..Default::default() });
+        assert_eq!(panel.listed(true)[0].0.about, "notes");
+    }
 
     #[test]
     fn all_comes_a_page_at_a_time() {

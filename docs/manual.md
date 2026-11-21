@@ -393,7 +393,11 @@ next sync. each copy first asks the device whether it still has room, so
 converted files, whose size is not known before, cannot fill it. a sync
 leaves a backup of the database beside it (`iTunesDB.kessler-backup.<time>`);
 only the newest 10 stay. `beim anschliessen: abgleichen` does nothing when
-there is nothing to do.
+there is nothing to do. the database's header keeps what itunes wrote into
+it — its language and the library's own number — and where nothing did,
+kessler writes the window's language and a number of its own, which stay
+from then on. the ipod's own settings (`iPod_Control/Device/Preferences`:
+backlight, clicker, equaliser, language) are never touched.
 
 | model | sync |
 | --- | --- |
@@ -745,6 +749,7 @@ else, and accents are optional on both sides: `bjork` finds björk and so
 does `björk`. `Esc` clears it. `←` `→` move the caret through what is typed,
 `alt` with them a word at a time, `cmd` with them (or home and end) to
 either end; a letter goes in, `backspace` and `delete` come out, at the
+caret — with `alt` a word at a time, `cmd`+`backspace` everything before the
 caret, and the letter under the block stays legible in it. `↑` `↓` still
 move through the list.
 
@@ -752,7 +757,8 @@ the column heads are the sort control. click one to sort by it, click it again
 to turn it round. every head stands in the same tone, the one holding the
 order too — its arrow says so — and under the pointer wears the light plate
 the words in the header do. `vol` in the top line has a rule to drag beside
-it.
+it; scrolling with the pointer on it turns it too, up or right for louder
+(a notch of a wheel is two points), its figure showing for a moment.
 
 both rules — the timeline and `vol` — **swell** under the pointer instead of
 switching states: over about an eighth of a second the line thickens from
@@ -764,7 +770,9 @@ disc — in muto (and muto mono) square, as is the mark beside a scrolled
 list: the face's own ends are square; the knob there an upright bar as four
 points wide and twelve tall. the bar keeps its width all the way and only
 grows in height, from the line's thickness, so it slides out of the rule
-above and below rather than growing out of a point.
+above and below rather than growing out of a point. square, their corners —
+the rules', their fill's, the bar's and the scrolled list's mark — are broken
+by half a point: not rounded, only less hard.
 
 a quick flick on a trackpad coasts a quarter of a second rather than half,
 so a list thrown against its end springs back less far — the bounce came
@@ -831,6 +839,31 @@ darstellung → bilder, in the scheme's field, ink and second tone — or, off,
 shows the cover itself. it is made on a thread of its own whenever the
 track, the setting or the scheme changes, and written into the menu while it
 is open.
+
+on a macbook with a touch bar, the same section has `touch bar` under it,
+and only there: `was spielt` (`[ui] touchbar`, on by default) fills the
+strip while kessler's window is in front — the system gives it back to its
+own controls, and to whichever app is in front, otherwise. on the left the
+cover of what plays — a station's picture, an episode's — 30 points square,
+and beside it title · artist on one line (a station's name and what it says
+it plays, an episode and its podcast), cut short at the end where it is long
+(at most 180 points), small as the window writes them unless
+`grossbuchstaben` is on; `kessler` while nothing is loaded. a little way on,
+30 points tall and as wide as the bar leaves it up to the keys, a picture in light grey dots on the bar's black, as `bild`
+(`[ui] touchbar_view`) says: `wie im suchfeld` (the default: whichever
+kopfzeile → `im suchfeld` shows, nothing while it shows nothing), any of the
+field's pictures by name — `vektorskop` … `kessler saga`, `zeiger` — whatever
+the field shows, or `aus`. each is drawn in cells as big as in the field and
+screened the same way, on memory of its own; the needles in cells of a
+point. it goes while nothing sounds. on the right ←, play or pause (whichever
+a press does) and →, which do what the keys in the header do; a station has
+no ←. where the bar is too full the picture goes first, then the title, never
+the cover or the keys. `ganze leiste` (`[ui] touchbar_whole`, off; only while
+there is a picture) lets the picture fill the bar beside the cover instead,
+as wide as the bar is, with no title and no keys: a touch on it plays or pauses.
+the system's own controls (escape, the control strip) stay where they are; an
+app cannot hide them, but system settings → keyboard → touch bar settings can
+(the control strip off), which leaves kessler nearly the whole bar.
 
 on linux the same symbol stands in the panel's tray, under menu →
 darstellung → `systemleiste`: as a status notifier item over d-bus, which
@@ -911,10 +944,12 @@ the side columns have their settings under menu → spalten: under
 `steckbrief` (kind, origin, years, style, musicbrainz's note), `wikipedia`,
 `bibliothek und radio`, `mitglieder, gruppen`, `ähnliche künstler:innen`
 (`[ui] info_picture`, `info_facts`, `info_wikipedia`, `info_library`,
-`info_ties`, `info_similar`, all on). while `bild` is shown, `bildbreite`
-(`[ui] info_picture_wide`) says how wide the picture is: `fest`, 176 points
-at most (the default), or `spaltenbreite`, as wide as the column — a
-station's picture in the radio's column alike; `liedtext` sets the words at
+`info_ties`, `info_similar`, all on). while `bild` is shown, `bildformat`
+(`[ui] info_picture_wide`) says its shape: `quadrat`, a square of 176 points
+at most (the default), or `original`, the picture in its own shape as wide
+as the column and no taller than four fifths of that — for an artist
+wikipedia's picture uncut where there is one, else the square; a station's
+picture in the radio's column alike, as it came; `liedtext` sets the words at
 content size or `klein` (`[ui] lyrics_size`) and whether timed words scroll
 along (`mitlaufen`, `[ui] lyrics_follow`); `log` shows or leaves out each
 kind (`[ui] log_hidden`, the kinds' words) and `exportieren` writes the
@@ -1077,7 +1112,7 @@ internet archive read it off its scans; the odd misread word remains.
 umlauts are the small letters with two dots above; misaki has no capital
 umlauts nor the low „, so kessler draws them in its manner. the row goes
 round nichts → vektorskop → schlange → mandelbrot → leben → kugel →
-zarathustra → kessler saga and back to nichts. how many steps a second the
+zarathustra → kessler saga → zeiger and back to nichts. how many steps a second the
 quiet pictures take — all of them alike — is `bildrate`, set in straight
 under `im suchfeld` in darstellung (`[ui] field_rate`; the saga alone had
 its own): 1; 2; 4 (the default), on the clock's own quarter seconds, so no
@@ -1117,6 +1152,71 @@ dots, as many pixels to a dot as the field's height allows for the figure
 walks on — on a retina mac the field is 52 pixels, two a dot; the screen
 saver draws it the same way, bigger) — and what goes by behind it stops a
 cell short of it, so it always reads in front.
+
+the walk goes in parts of 480 steps — two minutes at 4 a second. most of
+them are as above; about one in three is something else, each kind rare, the
+same part always the same kind:
+
+- **wide** (one part in twenty): after a while the view draws back, in half
+  steps, until four cells of the scene make one — the figure a few dots tall,
+  still whole — and it crosses wide ground, half the way empty, past
+  buildings far bigger than anything else in the saga: a tower under a
+  broken pediment, a front with a round window and a keystone, arcades in
+  curves one before the other, a ziggurat with a ball on top and a column
+  beside it, solids stacked like toys, a square gate with a square turned in
+  it. what stands between dissolves as the view goes back; the sky and the
+  ground stay. before the part is over it comes close again.
+- **companion** (one in fourteen): a small dog-like creature comes in from
+  behind, walks just ahead of the figure at its pace for most of the part,
+  and runs on out at the right.
+- **night** (one in sixteen): stars come out, some going out and on again,
+  now and then one a small cross, and a thin moon stands up at the right; they go again at the part's end.
+- **rain** (one in twenty-five), slanting streaks; **snow** (one in
+  thirty-three), flakes drifting down.
+- **still** (begun in one part in twenty-five, and going on through the
+  two after it — about six minutes): next to nothing comes in from the
+  right, whatever the music does, so the country empties as what is there
+  goes out at the left; what is far off, which would take minutes, fades
+  cell by cell as into haze. then the figure walks through open ground, a
+  grain on it here and there, small stars in the sky — single dots, now
+  and then a cross of five — until the world fills again.
+
+besides, very seldom, a creature comes the other way, or trots the same way
+slower and is passed. every creature is made differently — longer or
+shorter, its legs long or short, its ears up or hanging, its tail up, down
+or wagging. among the big things far off, one in eight is a front under a
+broken pediment with a ball in its gap, or a ball on a cube beside a
+column.
+
+`zeiger`: two moving-needle instruments behind the field, as a tuner of the
+seventies had them under a strip of glass — the field is the window, and
+each instrument a thin arc of scale
+with a needle in the ink the field's other pictures are drawn in, turning on a pivot below the field's edge, so
+only its upper part is seen — short ticks standing on the arc, five along the
+level's and one in the middle of the balance's. arcs, ticks and needles are a
+cell thin, in cells of a
+point — finer than the other pictures', two dots across on a retina screen —
+and screened by the same method — all but the needles' edges, softened a
+little so they do not step as they turn; the words under the arcs are set in misaki,
+a dot of it a cell, between the scale and the needles, which pass over them.
+on the left `pegel`, how loud it is (from 36 db below full scale to full
+scale); while a station plays it reads
+`feldstärke`, how much the network has brought ahead of what is heard —
+half the store's room is full scale, so a stalling stream sinks it. on the
+right `mitte`, where the sound stands between the two speakers: upright
+while they are balanced, leaning to whichever side is louder. the needles are not set to their reading but pulled towards it, a
+spring and a damper on a little mass, so they take a moment to get there, go
+a hair past and settle; paused, the left one sinks to its stop and the right
+one comes upright. the needles take `bildrate` steps a second —
+set in straight under `im suchfeld` while `zeiger` is chosen (`[ui]
+meter_rate`): 24, 12 (the default), 8 or 4 — while they move and the window
+is in front, and none otherwise. every one of those is a whole number of steps
+to the quarter second, on the same clock the time and the rule under the
+title tick on, so each frame the clock asks for is one of theirs and none
+comes in between; each frame is the whole window drawn, so the rate is what
+they cost. the scale and the words are drawn once for a size, a screen and a
+word, and only the strips the needles were in and are in are drawn again; the other places the field's pictures go — the
+menu's head, the touch bar, the screen saver — have no picture for them.
 
 **the scope.** a vectorscope draws two signals
 against each other, one across and one up, and lets the beam trace whatever
@@ -1244,7 +1344,10 @@ many tracks, the year, the genre, and always last the bitrate.
 without an artist to name the facts stand right under the name, and go on
 to a third line, broken after a `·`, where they do not fit beside the cover. beside a small
 cover the lines can be taller than the cover; then the cover stands in their
-middle. the heading answers the hand as the album's row
+middle. otherwise the lines stand in the cover's middle as the eye sees it:
+as much room from the cover's top edge to the x-height of the name as from
+the baseline of the last line to its bottom edge. a station's name and facts
+stand beside its picture the same way. the heading answers the hand as the album's row
 does: a click takes all its tracks, a double-click puts the whole record,
 and only it, at the end of the queue and plays it, a pull carries it, a
 right-click opens the album's menu. the list is always in the shelf's own
@@ -1529,6 +1632,9 @@ a 120 hz screen otherwise draws every move of the pointer twice as often as
 anybody can follow. nothing the hand does is lost: what came in meanwhile is
 taken by the next frame. the scope and the clock ask for fewer frames than
 this anyway and are not slowed.
+
+on a mac a frame waits for the screen behind at most one other, so what the
+hand does is shown a refresh sooner (some 8 ms at 120 hz).
 
 with nothing playing and the pointer still, the window draws nothing at all
 — resting on a row included, unless its title is too long and runs along.
@@ -1831,6 +1937,15 @@ and a note of how much; kessler reads the note — itunes' `iTunSMPB`, or the
 track's edit list — and cuts it off, so two halves of one piece meet sample
 for sample. menu → `lückenlos` turns the hand-over off.
 
+on a mac, when the sound would go on out of the built-in speakers because
+the headphones are gone — airpods taken out or put in their case, a
+bluetooth set switched off, a cable pulled from the jack — kessler pauses,
+as a phone does, whatever plays: a track, a station or an episode. switching
+the output to the speakers by hand counts too; going the other way, onto
+headphones, changes nothing. menu → wiedergabe → `pause ohne kopfhörer`
+(`[ui] pause_unplugged`, on by default) turns it off; the row is there only
+on a mac.
+
 every file is **read ahead**: decoded on a thread of its own about three
 seconds before it is heard, so the sound card only ever takes finished
 samples from a store. a machine busy with something else — rendering, an
@@ -1885,13 +2000,17 @@ beside the settings every minute and on closing. the music from before the
 count began is taken, once, from the library: every track's plays times its
 length; the radio and the podcasts count from then on. where the build has
 muto, über names it too, `muto — eine schrift von rade matic`, one line; a
-click opens radematic.com. `neue version` asks github, only when clicked,
+click opens radematic.com. `neue version` asks github, when clicked,
 for the newest release and compares its number with the one built: `das ist
 die neueste`, or `1.4.140 ist da — öffnen`, which opens the release's page —
 on a mac the signed and notarized disk image instead, from the release
 `mac` (the version's own release has only what is built for linux);
 nothing is downloaded by kessler itself. where github does not show the releases, the row
-says `nicht zu sehen` (`KESSLER_UPDATE_ENDPOINT` for a stand-in). it names the
+says `nicht zu sehen` (`KESSLER_UPDATE_ENDPOINT` for a stand-in). set in
+under it, `beim start nachsehen` (`[ui] update_on_start`, off) asks at every
+start as well; a newer one is then said at the foot for a while, `kessler
+1.5.310 ist da — menü → allgemein → neue version`, and nothing is said when
+there is none or no answer. it names the
 developer, `entwickler` → `windpark soft`; a click opens its page,
 windparkbooks.de/soft. it folds out `lizenzen`: first
 kessler's own, `gpl-3.0` (gnu general public license, version 3 or later; a
@@ -1974,7 +2093,9 @@ switched on, `ipod` while one is plugged in; with only one of them on there
 is nothing to choose and no switch — but that one's word stands there,
 underlined, for two and a half seconds after arriving in it (the window
 opening, a view switched off, `c` and a digit, a view switched on from
-everything off) and then fades; under the pointer it comes back. the search
+everything off) and then fades; under the pointer it comes back. under
+`super kompakt` its room closes after it, so the volume and the rest of the
+line move over into it, and the word stays away until the view changes. the search
 field names what it looks for in every view (see the radio's). all the words
 stand alike, in the second tone and the regular cut, each as wide as it is,
 18 points apart; the one open is underlined by a line as heavy as the face's
@@ -2447,9 +2568,17 @@ gives — never by name, because „coil" by name is a spring — in the window'
 language first, **deezer** for a square picture when the name is exactly
 theirs, and **last.fm**, when a key is set up, for tags, similar artists and
 a biography where wikipedia has none. what they said is kept in
-`artists/<key>.toml` and `.jpg` beside the library database, and read from
-there from then on — the column works without a network. `neu suchen` asks
-again, replacing what was found and nothing else.
+`artists/<key>.toml`, `.jpg` (the square picture) and `-full.jpg` (wikipedia's
+uncut, else the same) beside the library database, and read from there from
+then on — the column works without a network. `neu suchen` asks again,
+replacing what was found and nothing else; an artist looked up before there
+was an uncut picture shows the square until then.
+
+at the foot of the column, under `quellen`, as a book lists its sources at
+its end: where the picture shown is from — `wikimedia commons` or
+`wikipedia` with who made it and under which licence, as wikimedia says, or
+`deezer`; `bild: eigenes` for one chosen by hand — where the text is from,
+and `steckbrief: musicbrainz`, each a link to the page it is from.
 while they are being asked, the column says so under the picture —
 `lade informationen`, its dots counting up from one to three and round
 again.
@@ -2646,11 +2775,12 @@ columns, so it can go again as easily as it came. choosing `musik` or
   over the list, with `ausblenden`, and the list jumped as it came and
   went). so do an episode that will not fetch and a search that fails. `t`
   shows the log in the queue's place, and takes it away again. `i` shows
-  `informationen` in the queue's place, as on the radio and in the music:
+  `informationen` in the queue's place, as on the radio and in the music —
+  `i` again, or `schliessen` at its head, puts the column away, the queue
+  under it with it (`w` brings that back) —:
   the page of the podcast playing — picture, makers, how often it comes, its
   site, what it is about — with the episode playing over it, or, while none
-  plays, the chosen podcast's; `i` again puts it away, and it and the log
-  take each other's place. the darker plate on `alle`, `heruntergeladen`, `gemerkt`
+  plays, the chosen podcast's; it and the log take each other's place. the darker plate on `alle`, `heruntergeladen`, `gemerkt`
   or a podcast goes over to an episode as soon as one is clicked, as it does
   between the music's columns; the view keeps its arrow. `heruntergeladen` with
   nothing fetched says so. the episode's column offers `teilen`: its title
@@ -2682,8 +2812,9 @@ column's head under the pointer, looks — at rest that place says how many
 podcasts are followed, or how many a search found, as the stations' head
 does — (the feeds are still read once as the view first opens, to have
 something to show). an episode out since the podcasts were last left, and
-not yet begun, heard or archived, is new: a dot in the accent before its
-title, how many beside each podcast in the first column and as `{n} neu`
+not yet begun, heard or archived, is new: `neu` (`new`, `新`), small and set
+close in the ground on a small plate of the accent in the top right corner of
+its picture, the same air round its letters on every side; how many beside each podcast in the first column and as `{n} neu`
 beside `alle` (only the podcasts' own view says it). leaving the podcasts
 counts as having looked (`seen_at` in `podcasts.toml`); the very first time,
 nothing is new. the head offers `folgen` / `nicht mehr folgen` for the
@@ -2693,14 +2824,22 @@ going.
 - **the episode** — the third: the podcast's picture (fetched once its feed
   is read, screened as a station's is) — or, the episode's own where the
   feed gives it one (`itunes:image` in the item), fetched as it is looked at
-  or played and then standing in its row in the list too, its title, its
+  or played and then standing in its row in the list too — on the page a
+  wider one where the feed gives it beside its square (`media:thumbnail`, an
+  image's `media:content`, with its size or without — one without is taken
+  once it is seen to be wider than tall), as the square is often cut from
+  it; a picture that is
+  not square stands in its own proportions, as wide as the column and at most
+  four fifths as tall as wide (a taller one narrower, never squeezed) — its title, its
   podcast (set as a record's head sets its title and artist under the
   cover: the same cuts, tones and steps), the day it came out, how long it plays, `heruntergeladen` once fetched;
   then what can be done to it, in three groups under small heads, each its
   words one under another, the groups side by side where the column has room
-  for them (each as wide as its longest word, the rest shared out), else one
-  under another: `hören` — `abspielen` (or `weiter bei 12:30`) and `in die
-  warteschlange` / `aus der warteschlange`, while it plays the sleep timer,
+  for them (all three equally wide, so none moves when a word in another
+  changes), else in two columns — the first two one under the other, the last
+  beside them — and only where two do not fit either one under another: `hören` — `abspielen` (or `weiter bei 12:30`) and `in die
+  warteschlange` / `aus der warteschlange`, while it plays `pause` (or `play`
+  while it is held, as the header's key says it) and the sleep timer,
   while it is fetched to play how far —; `datei` — `datei löschen` for one
   fetched, to have the room back (playing, it stops first), for one not
   fetched `herunterladen`, to have it without playing it (see below), and
@@ -2720,7 +2859,10 @@ going.
   wears, in the super compact one small in the scheme's sharpest tone, and
   its row in the list wears the hover plate; the other way round, pointing
   at a row in the list lights its stretch of the timeline; and what it is
-  about — and, the pictures its notes show, under them, each as wide as the
+  about, at content size as a station's text and an artist's are (a
+  podcast's own description too); an episode reached through `heruntergeladen`
+  or `gemerkt` shows its page as its feed has it, notes and wide picture and
+  all, where the feed is read — and, the pictures its notes show, under them, each as wide as the
   column and as tall as it is (screened as the covers are; the one-point
   counting pixels left out). the links in what it is about — its own `<a>`s
   by their words, and any address written out — stand under it, a click
@@ -2729,7 +2871,10 @@ going.
 
   the podcast chosen has a head over its episodes, as a record's stands over
   its tracks: its picture, and beside it its name, who makes it (the feed's
-  `podcast:person`s, else its author), how often it comes out — read off the
+  `podcast:person`s, else its author), then in the facts' colour who is
+  behind it where that is someone else — its author under the people, else
+  its owner (`itunes:owner`), `new york times opinion`, `npr` — and how often
+  it comes out — read off the
   days of its last episodes: daily, several times a week, weekly, every
   other week or monthly, on which day mostly, and about when the next is due
   — and its site as a link, and where the feed names one (`podcast:funding`)
@@ -2741,9 +2886,13 @@ going.
   have none, their episodes being of many podcasts. the same page, at full
   size, is what `i` shows of the podcast playing. the pictures are read two
   at a time, each made small as it is read, and let go of once they have not
-  been seen for half a minute. they are kept small on the disk too: apple's
-  pictures — most podcasts' — are asked for at 600 × 600 rather than the
-  3000 × 3000 a feed names, and any other is made no bigger than 600 points
+  been seen for half a minute. they are kept small on the disk too: where the
+  server a picture is on makes one at another size, it is asked for at about
+  600 dots rather than the 3000 × 3000 a feed names — apple's (most
+  podcasts'), simplecast's, imgix's (megaphone and others, bounded so a wide
+  one stays wide), acast's, npr's, squarespace's and substack's; a signed
+  address is left as it is, and where the smaller one does not come, the one
+  the feed names is fetched — and any other is made no bigger than 600 points
   as it is fetched, one at a time; one kept big before is made small the
   next time it is read; and fetched one after the other on one thread of
   their own, which hands the memory back after each (two at a time on a
@@ -2841,6 +2990,13 @@ radio's columns too — a drag holds until kessler is quit).
   there. heard to its end (within half a minute of it), its file goes again.
   an episode is no song: it is not scrobbled, counted as a play, or looked
   up for words or an artist.
+- **times and addresses in the notes.** in what an episode says about
+  itself, the times it gives (`00:13:31 …`, `ab 1:02:15`) and the addresses
+  it names (`npr.org/…`, `https://…`, a mail address) stand in the second
+  tone, in the ink with a hand under the pointer: a time goes there in the
+  episode playing, or starts the episode there; an address opens in the
+  browser (a mail address in the mail program). a podcast's own description
+  has its addresses to click the same way.
 - **downloaded without playing.** `herunterladen` — on the episode's page, in its
   right-click menu, and for several picked at once — fetches it in the
   background while nothing plays, one after the other beside an episode
@@ -2878,6 +3034,16 @@ the menu has a tab of its own for them while they are on:
   episode listed; `heruntergeladene löschen nach` clears files away by itself,
   archived or not.
 - `alle heruntergeladenen löschen`, with what they take beside it.
+- `ordner` · `im finder zeigen` (`im dateimanager zeigen` on linux): the
+  folder the episodes are fetched into — `podcasts/` in kessler's data folder
+  (`~/Library/Application Support/kessler` on a mac, `~/.local/share/kessler`
+  on linux) — in the file manager. a file deleted there is played from the
+  net again. an episode is fetched into a `.part` beside its file and
+  renamed once whole, so a broken fetch never passes for an episode; a fetch
+  broken off — the connection gone, kessler quit — goes on from where it
+  stopped the next time it is asked for, where the server can send a part,
+  else from the start. one broken off more than a week ago is thrown away
+  at the start.
 - `bilder neu laden`: every podcast's picture let go of and fetched again
   (they are kept in `podcast-art/` in kessler's data folder).
 - `podcasts importieren…` and `podcasts exportieren…`: the podcasts
@@ -2945,7 +3111,11 @@ the next frame within 50 ms, not those asking for one in a quarter of a
 second or in two. click the row again to
 stop; the file is then shown in the finder. started with
 `KESSLER_MESSUNG=<file>` in the environment, the window measures from its
-first frame into that file.
+first frame into that file. a frame that takes longer than 40 ms gets a line
+of its own at once, `langsames bild: 92 ms — titel 80, kopf 6, tasten 2, rest
+4 · gedrückt: cmd+1`: its three longest steps, logic and drawing (`kopf`,
+`erste spalte`, `alben`, `titel`, `vierte spalte`, `seite`, `fuss`, `menü`
+and so on), the rest together, and what was pressed in that frame.
 
 the podcasts say what they do too, each in a line of its own with the time
 and the memory held at that moment (`· 330 mb` at its end, as every line

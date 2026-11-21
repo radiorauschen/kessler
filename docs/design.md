@@ -82,7 +82,14 @@ scheme is on:
 - **hover**: the light plate (`hover_colour`), fading in over `HOVER_FADE`
   0.08 s. pointed at from elsewhere (`pointed`) wears it too.
 - **chosen / active**: the darker plate (`marker_colour`) where the column
-  has the keyboard (`selected` + `focused`); bold where it has not.
+  has the keyboard (`selected` + `focused`); bold where it has not. the plate
+  comes and goes over `HOVER_FADE` as the hover does, and a name's colour
+  crosses over in the same time when it changes — to the ink as it is
+  chosen, to the accent as it starts to play (`eased_colour`); a row first
+  scrolled into sight stands in its colour at once.
+- every scheme but rgb has its marker a little quieter and its hover a
+  little stronger than drawn (`Palette::plates_retuned`), so the two plates
+  sit nearer each other: where the hand is, and what it passes over.
 - **playing**: the arrow before the name (`lead_arrow`, sliding in over
   `ARROW_SECS` 0.16 s) and the accent — the track, the episode, the station,
   and the artist or podcast whose it is.
@@ -129,9 +136,11 @@ scheme is on:
   `älter`, `kapitel`, `aus wikipedia`, `mitglieder`, `hören`) in `Label` and
   the heads' colour (`heading()`), with a block's air before each but the
   first.
-- **edges fade** instead of cutting: `FADE_HEIGHT` 28 at top and foot; under
-  the last row `LIST_END_AIR` (the fade's height), so the end reads as an
-  end.
+- **edges fade** instead of cutting: at most `FADE_HEIGHT` 20 at top and
+  foot, growing in — deeper and stronger together — over the first
+  `FADE_GROWS_OVER` 48 points that go under the edge, along an eased curve
+  with no edge of its own; under the last row `LIST_END_AIR` (the fade's
+  height), so the end reads as an end.
 - **empty**: one sentence in `faint` saying what would be there and how it
   gets there.
 
@@ -142,8 +151,15 @@ scheme is on:
   it is drawn at its whole width, seen through the room it has so far (the
   library's fourth column, the radio's side, the podcasts' queue).
 - a narrow window's strip of columns slides by its offset over 0.22 s.
+- a record's head whose words go from beside its cover to under it (or
+  back) as the column narrows or widens does it over the same 0.22 s: the
+  words fade out where they were and in where they go, the cover moves, and
+  the head's height eases, so what stands below follows rather than jumps
+  (`tracks::heads_stack`).
 - the timeline and the volume swell under the pointer over `SWELL_TIME`
-  0.13 s; their knob grows out of the line.
+  0.13 s; their knob grows out of the line. with a face whose ends are square
+  the rules' corners are broken by half a point (`RULE_CORNER_CUT`), a pixel
+  on a sharp screen — less hard, not round.
 - a name turning bold thickens over `WEIGHT_SECS` 0.12 s.
 - scrolling: no bars; a flick coasts `KINETIC_DECAY` 0.15 s, which is also
   how far the rubber band stretches at a list's end.
@@ -157,7 +173,9 @@ scheme is on:
 - **drop line**: a hair of 2 in the ink where something carried would land.
 - **corners**: `MARKER_RADIUS` 2 for every plate.
 - **pictures**: screened (dithered) as the covers are, `picture_at` for a
-  square, `wide_picture` for any shape; decoded on a thread and kept small.
+  square, `wide_picture` for any shape — in its own proportions, a picture
+  taller than allowed narrower rather than squeezed; decoded on a thread and
+  kept small.
 
 ## the masthead
 

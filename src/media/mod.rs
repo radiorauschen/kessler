@@ -231,6 +231,19 @@ fn update(now: Option<&NowPlaying>) {
             )
         }
     }
+    #[cfg(kessler_touchbar)]
+    {
+        let (state, title, artist) = match now {
+            Some(now) => (if now.playing { 1 } else { 2 }, text(&now.title), text(&now.artist)),
+            None => (0, text(""), text("")),
+        };
+        let artwork = text(
+            &now.and_then(|n| n.artwork.as_ref())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        unsafe { kessler_touchbar_update(state, title.as_ptr(), artist.as_ptr(), artwork.as_ptr()) }
+    }
     #[cfg(all(target_os = "linux", feature = "gui"))]
     linux::update(now);
     #[cfg(not(any(kessler_media, all(target_os = "linux", feature = "gui"))))]
@@ -510,5 +523,150 @@ mod tests {
         assert_eq!(text("olson").to_str(), Ok("olson"));
         assert_eq!(text("ol\0son").to_str(), Ok("ol son"));
         assert_eq!(text("").to_str(), Ok(""));
+    }
+}
+
+#[cfg(kessler_route)]
+extern "C" {
+    fn kessler_route_start();
+    fn kessler_route_poll() -> i32;
+}
+
+pub fn route_available() -> bool {
+    cfg!(kessler_route)
+}
+
+pub fn route_start() {
+    #[cfg(kessler_route)]
+    unsafe {
+        kessler_route_start()
+    }
+}
+
+pub fn route_poll() -> Option<Command> {
+    #[cfg(kessler_route)]
+    unsafe {
+        Command::from_code(kessler_route_poll())
+    }
+    #[cfg(not(kessler_route))]
+    None
+}
+
+#[cfg(kessler_touchbar)]
+extern "C" {
+    fn kessler_touchbar_show(show: i32, lower: i32, whole: i32, station: i32);
+    fn kessler_touchbar_update(
+        state: i32,
+        title: *const std::os::raw::c_char,
+        artist: *const std::os::raw::c_char,
+        artwork: *const std::os::raw::c_char,
+    );
+    fn kessler_touchbar_poll() -> i32;
+    fn kessler_touchbar_picture(rgba: *const u8, wide: i32, tall: i32);
+    fn kessler_touchbar_picture_wide() -> i32;
+}
+
+const TOUCH_BAR_MODELS: &[&str] = &[
+    "MacBookPro13,2",
+    "MacBookPro13,3",
+    "MacBookPro14,2",
+    "MacBookPro14,3",
+    "MacBookPro15,1",
+    "MacBookPro15,2",
+    "MacBookPro15,3",
+    "MacBookPro15,4",
+    "MacBookPro16,1",
+    "MacBookPro16,2",
+    "MacBookPro16,3",
+    "MacBookPro16,4",
+    "MacBookPro17,1",
+    "Mac14,7",
+];
+
+fn has_touch_bar(model: &str) -> bool {
+    TOUCH_BAR_MODELS.contains(&model.trim())
+}
+
+#[cfg(kessler_touchbar)]
+fn hardware_model() -> Option<String> {
+    let name = std::ffi::CString::new("hw.model").ok()?;
+    let mut buffer = [0u8; 64];
+    let mut length = buffer.len();
+    let read = unsafe {
+        libc::sysctlbyname(name.as_ptr(), buffer.as_mut_ptr().cast(), &mut length, std::ptr::null_mut(), 0)
+    };
+    if read != 0 {
+        return None;
+    }
+    let bytes = &buffer[..length.min(buffer.len())];
+    let bytes = bytes.split(|&b| b == 0).next().unwrap_or(bytes);
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+pub fn touchbar_available() -> bool {
+    #[cfg(kessler_touchbar)]
+    {
+        static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *HAS.get_or_init(|| hardware_model().is_some_and(|model| has_touch_bar(&model)))
+    }
+    #[cfg(not(kessler_touchbar))]
+    {
+        let _ = has_touch_bar;
+        false
+    }
+}
+
+pub fn touchbar_show(show: bool, lower: bool, whole: bool, station: bool) {
+    #[cfg(kessler_touchbar)]
+    unsafe {
+        kessler_touchbar_show(i32::from(show), i32::from(lower), i32::from(whole), i32::from(station))
+    }
+    #[cfg(not(kessler_touchbar))]
+    let _ = (show, lower, whole, station);
+}
+
+pub fn touchbar_picture(picture: Option<(&[u8], usize, usize)>) {
+    #[cfg(kessler_touchbar)]
+    {
+        let (rgba, wide, tall) = picture.unwrap_or((&[], 0, 0));
+        if rgba.len() != wide * tall * 4 {
+            return;
+        }
+        unsafe { kessler_touchbar_picture(rgba.as_ptr(), wide as i32, tall as i32) }
+    }
+    #[cfg(not(kessler_touchbar))]
+    let _ = picture;
+}
+
+pub fn touchbar_picture_wide() -> Option<usize> {
+    #[cfg(kessler_touchbar)]
+    {
+        let wide = unsafe { kessler_touchbar_picture_wide() };
+        usize::try_from(wide).ok().filter(|&w| w > 0)
+    }
+    #[cfg(not(kessler_touchbar))]
+    None
+}
+
+pub fn touchbar_poll() -> Option<Command> {
+    #[cfg(kessler_touchbar)]
+    unsafe {
+        Command::from_code(kessler_touchbar_poll())
+    }
+    #[cfg(not(kessler_touchbar))]
+    None
+}
+
+#[cfg(test)]
+mod touch_bar_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_macbooks_with_a_strip_have_one() {
+        assert!(has_touch_bar("MacBookPro16,1"));
+        assert!(has_touch_bar("Mac14,7\n"));
+        assert!(!has_touch_bar("MacBookPro16,5"));
+        assert!(!has_touch_bar("MacBookAir10,1"));
+        assert!(!has_touch_bar("Mac14,2"));
     }
 }

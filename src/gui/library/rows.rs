@@ -141,39 +141,42 @@ pub(super) fn cell_text(
     }
 }
 
-const QUICK_FADE: f32 = 6.0;
+const FADE_GROWS_OVER: f32 = 48.0;
+
+const FADE_STEPS: usize = 8;
 
 pub(in crate::gui) fn paint_fade(ui: &Ui, viewport: Rect, hidden_above: f32, hidden_below: f32, palette: &Palette) {
     let ground = palette.ground;
-    let height = FADE_HEIGHT.min(viewport.height() / 3.0);
-    if height <= 0.0 {
+    let most = FADE_HEIGHT.min(viewport.height() / 3.0);
+    if most <= 0.0 {
         return;
     }
-    let strength = |hidden: f32| hidden / QUICK_FADE;
-
-    let band = |rect: Rect, solid_at_top: bool, strength: f32| {
-        if strength <= 0.01 {
+    let smooth = |t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let band = |edge: f32, inwards: f32, grown: f32| {
+        if grown <= 0.01 {
             return;
         }
-        let solid = ground.gamma_multiply(strength.clamp(0.0, 1.0));
-        let clear = Color32::TRANSPARENT;
-        let (top, bottom) = if solid_at_top { (solid, clear) } else { (clear, solid) };
+        let depth = most * (0.35 + 0.65 * grown);
         let mut mesh = egui::Mesh::default();
-        mesh.colored_vertex(rect.left_top(), top);
-        mesh.colored_vertex(rect.right_top(), top);
-        mesh.colored_vertex(rect.left_bottom(), bottom);
-        mesh.colored_vertex(rect.right_bottom(), bottom);
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(1, 2, 3);
+        for step in 0..=FADE_STEPS {
+            let along = step as f32 / FADE_STEPS as f32;
+            let y = edge + inwards * depth * along;
+            let colour = ground.gamma_multiply(grown * (1.0 - smooth(along)));
+            mesh.colored_vertex(egui::pos2(viewport.left(), y), colour);
+            mesh.colored_vertex(egui::pos2(viewport.right(), y), colour);
+            if step > 0 {
+                let at = (step as u32) * 2;
+                mesh.add_triangle(at - 2, at - 1, at);
+                mesh.add_triangle(at - 1, at, at + 1);
+            }
+        }
         ui.painter().add(egui::Shape::mesh(mesh));
     };
-
-    band(Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), height)), true, strength(hidden_above));
-    band(
-        Rect::from_min_size(egui::pos2(viewport.left(), viewport.bottom() - height), Vec2::new(viewport.width(), height)),
-        false,
-        strength(hidden_below),
-    );
+    band(viewport.top(), 1.0, smooth(hidden_above / FADE_GROWS_OVER));
+    band(viewport.bottom(), -1.0, smooth(hidden_below / FADE_GROWS_OVER));
 }
 
 pub(super) fn paint_side_fade(ui: &Ui, slot: Rect, gone: f32, palette: &Palette) {
@@ -392,11 +395,12 @@ pub(in crate::gui) fn paint_extent(
         egui::pos2(viewport.right() + OUTSIDE, viewport.top() + top),
         Vec2::new(width, length),
     );
-    ui.painter().rect_filled(
-        mark,
-        if crate::gui::theme::square_ends() { 0.0 } else { width / 2.0 },
-        palette.mid.gamma_multiply(shown * (0.55 + 0.3 * lift)),
-    );
+    let colour = palette.mid.gamma_multiply(shown * (0.55 + 0.3 * lift));
+    if crate::gui::theme::square_ends() {
+        super::paint_rule(ui, mark, colour);
+    } else {
+        ui.painter().rect_filled(mark, width / 2.0, colour);
+    }
 }
 
 pub(super) const EXTENT_MIN_LENGTH: f32 = 18.0;
@@ -503,7 +507,7 @@ pub(super) fn queue_row(
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    paint_marker(ui, rect, state, m, palette);
+    paint_marker(ui, rect, response.id, state, m, palette);
     paint_hover(ui, rect, &response, state, m, palette);
 
     let hovered = response.hovered();
@@ -512,7 +516,7 @@ pub(super) fn queue_row(
 
     let beside = if state.gone { crate::lang::t(GONE) } else { artist };
     let to_come = !(state.gone || state.spent || state.playing || state.selected);
-    let title_colour = if to_come { palette.mid } else { state.primary(palette) };
+    let title_colour = eased_colour(ui, response.id, if to_come { palette.mid } else { state.primary(palette) });
     let beside_colour = if to_come { palette.mid } else { state.secondary(palette) };
 
     let wanted = text::full_line(ui, title, state.role(), title_colour)
@@ -610,7 +614,7 @@ pub(super) fn name_row(
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    paint_marker(ui, rect, state, m, palette);
+    paint_marker(ui, rect, response.id, state, m, palette);
     paint_hover(ui, rect, &response, state, m, palette);
 
     let hovered = response.hovered() || state.pointed;
@@ -637,14 +641,15 @@ pub(super) fn name_row(
 
     let line = text::row_line(ui, m.row, Role::Content);
     let cell = Rect::from_min_max(content.left_top(), egui::pos2(name_right, content.bottom()));
-    let lead = lead_arrow(ui, id, cell, line, state.playing || state.arrow, state.primary(palette));
+    let ink = eased_colour(ui, response.id, state.primary(palette));
+    let lead = lead_arrow(ui, id, cell, line, state.playing || state.arrow, ink);
     cell_text(
         ui,
         Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max),
         id,
         name,
         state.role(),
-        state.primary(palette),
+        ink,
         state.selected || hovered,
         ground,
         m,
@@ -682,7 +687,7 @@ pub(super) fn columned_row(
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    paint_marker(ui, rect, state, m, palette);
+    paint_marker(ui, rect, response.id, state, m, palette);
     paint_hover(ui, rect, &response, state, m, palette);
     let hovered = response.hovered();
     let ground = behind(ui, state, hovered, palette);
@@ -698,14 +703,15 @@ pub(super) fn columned_row(
     }
     let line = text::row_line(ui, m.row, Role::Content);
     let cell = Rect::from_min_max(content.left_top(), egui::pos2(right, content.bottom()));
-    let lead = lead_arrow(ui, id, cell, line, state.playing, state.primary(palette));
+    let ink = eased_colour(ui, response.id, state.primary(palette));
+    let lead = lead_arrow(ui, id, cell, line, state.playing, ink);
     cell_text(
         ui,
         Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max),
         id,
         name,
         if bold && !state.plated() { Role::ContentBold } else { state.role() },
-        state.primary(palette),
+        ink,
         state.selected || hovered,
         ground,
         m,
@@ -909,7 +915,7 @@ pub(super) fn track_row(
     if !ui.is_rect_visible(rect) {
         return response;
     }
-    paint_marker(ui, rect, state, m, palette);
+    paint_marker(ui, rect, response.id, state, m, palette);
     paint_hover(ui, rect, &response, state, m, palette);
 
     let hovered = response.hovered();
@@ -994,13 +1000,14 @@ pub(super) fn track_row(
     };
     let title_room = title_width + spare;
     let title_cell = Rect::from_min_size(egui::pos2(x, rect.top()), Vec2::new(title_room, m.row));
+    let ink = eased_colour(ui, egui::Id::unique(("track-ink", track.id)), state.primary(palette));
     let lead = lead_arrow(
         ui,
         egui::Id::unique(("track-arrow", track.id)),
         title_cell,
         text::row_line(ui, m.row, Role::Content),
         state.playing && !state.gone,
-        state.primary(palette),
+        ink,
     );
     cell_text(
         ui,
@@ -1008,7 +1015,7 @@ pub(super) fn track_row(
         egui::Id::unique(("track-title", track.id)),
         track.display_title(),
         state.role(),
-        state.primary(palette),
+        ink,
         state.selected || hovered,
         ground,
         m,

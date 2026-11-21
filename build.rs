@@ -6,7 +6,11 @@ fn main() {
 
     println!("cargo:rustc-check-cfg=cfg(kessler_media)");
     println!("cargo:rustc-check-cfg=cfg(kessler_tray)");
+    println!("cargo:rustc-check-cfg=cfg(kessler_touchbar)");
+    println!("cargo:rustc-check-cfg=cfg(kessler_route)");
     println!("cargo:rerun-if-changed=src/media/statusbar.m");
+    println!("cargo:rerun-if-changed=src/media/touchbar.m");
+    println!("cargo:rerun-if-changed=src/media/route.c");
 
     let source = "src/media/macos.m";
     println!("cargo:rerun-if-changed={source}");
@@ -82,6 +86,57 @@ fn main() {
     println!("cargo:rustc-cfg=kessler_media");
 
     menu_bar(&compiler, arch, &out);
+    touch_bar(&compiler, arch, &out);
+    route(&compiler, arch, &out);
+}
+
+fn route(compiler: &str, arch: &str, out: &std::path::Path) {
+    let source = "src/media/route.c";
+    let object = out.join("kessler_route.o");
+    let archive = out.join("libkesslerroute.a");
+    let mut command = Command::new(compiler);
+    if !arch.is_empty() {
+        command.args(["-arch", arch]);
+    }
+    let compiled = command.args(["-c", "-O2", "-Wall", "-o"]).arg(&object).arg(source).status();
+    if !matches!(compiled, Ok(status) if status.success()) {
+        println!("cargo:warning=kessler: {source} liess sich nicht übersetzen; ohne kopfhörer wird nicht pausiert");
+        return;
+    }
+    let archived = Command::new("ar").arg("crs").arg(&archive).arg(&object).status();
+    if !matches!(archived, Ok(status) if status.success()) {
+        println!("cargo:warning=kessler: ar konnte {} nicht bauen; ohne kopfhörer wird nicht pausiert", archive.display());
+        return;
+    }
+    println!("cargo:rustc-link-lib=static=kesslerroute");
+    println!("cargo:rustc-link-lib=framework=CoreAudio");
+    println!("cargo:rustc-cfg=kessler_route");
+}
+
+fn touch_bar(compiler: &str, arch: &str, out: &std::path::Path) {
+    let source = "src/media/touchbar.m";
+    let object = out.join("kessler_touchbar.o");
+    let archive = out.join("libkesslertouchbar.a");
+    let mut command = Command::new(compiler);
+    if !arch.is_empty() {
+        command.args(["-arch", arch]);
+    }
+    let compiled = command
+        .args(["-c", "-fobjc-arc", "-O2", "-Wall", "-o"])
+        .arg(&object)
+        .arg(source)
+        .status();
+    if !matches!(compiled, Ok(status) if status.success()) {
+        println!("cargo:warning=kessler: {source} liess sich nicht übersetzen; die touch bar bleibt leer");
+        return;
+    }
+    let archived = Command::new("ar").arg("crs").arg(&archive).arg(&object).status();
+    if !matches!(archived, Ok(status) if status.success()) {
+        println!("cargo:warning=kessler: ar konnte {} nicht bauen; die touch bar bleibt leer", archive.display());
+        return;
+    }
+    println!("cargo:rustc-link-lib=static=kesslertouchbar");
+    println!("cargo:rustc-cfg=kessler_touchbar");
 }
 
 fn menu_bar(compiler: &str, arch: &str, out: &std::path::Path) {

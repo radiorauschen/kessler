@@ -27,6 +27,7 @@ impl GuiApp {
         if let Err(e) = self.close_filter() {
             self.set_status(format!("{e}"));
         }
+        self.music_focus = Some(self.focus);
         self.radio = Some(Box::new(crate::radio::Radio::open()));
         self.switch_sides(View::Music, View::Radio);
     }
@@ -172,6 +173,9 @@ impl GuiApp {
             return;
         }
         self.radio_typed_at = None;
+        if let Some(focus) = self.music_focus.take() {
+            self.focus = focus;
+        }
         if self.config.ui.radio_info != self.artist_open {
             self.config.ui.radio_info = self.artist_open;
             self.save_config();

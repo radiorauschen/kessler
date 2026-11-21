@@ -778,6 +778,8 @@ pub fn apply(
     let mut db = ItunesDb {
         version: existing.version,
         db_id: existing.db_id,
+        language: existing.language,
+        library_id: existing.library_id,
         tracks: kept,
         playlists: Vec::new(),
     };
@@ -1761,6 +1763,8 @@ mod tests {
         let mut db = ItunesDb {
             version: 0x13,
             db_id: 5,
+            language: [0, 0],
+            library_id: 0,
             tracks: vec![on_device(&a, 1), on_device(&b, 2)],
             playlists: Vec::new(),
         };
@@ -1803,6 +1807,8 @@ mod tests {
         ItunesDb {
             version: 0x13,
             db_id: 1,
+            language: [0, 0],
+            library_id: 0,
             tracks: tracks
                 .iter()
                 .map(|(t, id)| to_ipod_track(t, *id, PathBuf::from(format!("iPod_Control/Music/F00/{id}.mp3")), 1))
@@ -2143,6 +2149,8 @@ mod tests {
         let mut db = ItunesDb {
             version: 0x13,
             db_id: 5,
+            language: [0, 0],
+            library_id: 0,
             tracks: vec![converted],
             playlists: Vec::new(),
         };

@@ -1182,6 +1182,13 @@ fn general_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
             app.set_status(tr!("der browser liess sich nicht öffnen"));
         }
     }
+    set_in(ui, |ui| {
+        let on = app.config.ui.update_on_start;
+        if toggle(ui, tr!("beim start nachsehen"), on, AN_AUS, palette).clicked() {
+            app.config.ui.update_on_start = !on;
+            app.save_config();
+        }
+    });
 
     ui.add_space(row_height());
     heading(ui, tr!("funktionen"), palette);
@@ -1294,6 +1301,13 @@ fn podcasts_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if size > 0 && row(ui, tr!("alle heruntergeladenen löschen"), &format!("{:.1} mb", size as f64 / 1_000_000.0), true, palette).clicked() {
         app.forget_all_episodes();
     }
+    if row(ui, tr!("ordner"), crate::lang::t(super::reveal::WORD), true, palette).clicked() {
+        let dir = crate::podcast::cache_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = super::reveal::show(&dir) {
+            app.set_status(e);
+        }
+    }
     if row(ui, "", tr!("bilder neu laden"), true, palette).clicked() {
         app.reload_podcast_pictures();
     }
@@ -1360,7 +1374,7 @@ fn shown(at: usize) -> bool {
         IPOD => IPOD_ON.load(std::sync::atomic::Ordering::Relaxed),
         RADIO => RADIO_ON.load(std::sync::atomic::Ordering::Relaxed),
         PODCASTS => PODCASTS_ON.load(std::sync::atomic::Ordering::Relaxed),
-        MENUBAR => crate::media::tray_available(),
+        MENUBAR => crate::media::tray_available() || crate::media::touchbar_available(),
         _ => true,
     }
 }
@@ -1946,7 +1960,20 @@ fn header_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
                 app.save_config();
             }
         }
-        let quiet = super::library::FieldPicture::from_name(&app.config.ui.field_picture) != super::library::FieldPicture::Scope;
+        let needles = super::library::FieldPicture::from_name(&app.config.ui.field_picture) == super::library::FieldPicture::Meter;
+        if app.config.ui.field_spectrum && needles {
+            let rate = super::library::meter_rate(app.config.ui.meter_rate);
+            if row(ui, tr!("bildrate"), &tr!("{} schritte/s", rate), true, palette).clicked() {
+                let rates = super::library::METER_RATES;
+                let at = rates.iter().position(|&r| r == rate).map_or(1, |i| (i + 1) % rates.len());
+                app.config.ui.meter_rate = rates[at];
+                app.save_config();
+            }
+        }
+        let quiet = !matches!(
+            super::library::FieldPicture::from_name(&app.config.ui.field_picture),
+            super::library::FieldPicture::Scope | super::library::FieldPicture::Meter
+        );
         if app.config.ui.field_spectrum && quiet {
             let rate = super::library::field_rate(app.config.ui.field_rate);
             let said = tr!("{} schritte/s", rate);
@@ -2017,6 +2044,10 @@ fn radio_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
 }
 
 fn menubar_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
+    if !crate::media::tray_available() {
+        touch_bar_rows(app, ui, palette);
+        return;
+    }
     let named = if cfg!(target_os = "linux") { tr!("systemleiste") } else { tr!("menüleiste") };
     heading(ui, named, palette);
     let mode = super::menubar::Mode::from_name(&app.config.ui.menubar);
@@ -2055,6 +2086,47 @@ fn menubar_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
                     app.save_config();
                 }
             });
+        }
+    }
+    if crate::media::touchbar_available() {
+        ui.add_space(row_height());
+    }
+    touch_bar_rows(app, ui, palette);
+}
+
+fn touch_bar_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
+    if !crate::media::touchbar_available() {
+        return;
+    }
+    heading(ui, tr!("touch bar"), palette);
+    let on = app.config.ui.touchbar;
+    if toggle(ui, tr!("was spielt"), on, AN_AUS, palette).clicked() {
+        app.config.ui.touchbar = !on;
+        app.save_config();
+    }
+    if on {
+        use super::library::FieldPicture;
+        let view = app.config.ui.touchbar_view.clone();
+        let said = match view.as_str() {
+            "aus" => tr!("aus"),
+            "suchfeld" | "" => tr!("wie im suchfeld"),
+            name => FieldPicture::from_name(name).said(),
+        };
+        if row(ui, tr!("bild|touch bar"), said, true, palette).clicked() {
+            let next = match view.as_str() {
+                "suchfeld" | "" => FieldPicture::Scope.name(),
+                "aus" => "suchfeld",
+                name => FieldPicture::from_name(name).next().map_or("aus", FieldPicture::name),
+            };
+            app.config.ui.touchbar_view = next.to_string();
+            app.save_config();
+        }
+        if app.config.ui.touchbar_view != "aus" {
+            let whole = app.config.ui.touchbar_whole;
+            if toggle(ui, tr!("ganze leiste"), whole, AN_AUS, palette).clicked() {
+                app.config.ui.touchbar_whole = !whole;
+                app.save_config();
+            }
         }
     }
 }
@@ -2470,6 +2542,13 @@ fn playback_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
             app.save_config();
         }
     }
+    if crate::media::route_available() {
+        let on = app.config.ui.pause_unplugged;
+        if toggle(ui, tr!("pause ohne kopfhörer"), on, AN_AUS, palette).clicked() {
+            app.config.ui.pause_unplugged = !on;
+            app.save_config();
+        }
+    }
 
     let level = crate::player::leveling::Level::from_name(&app.config.player.leveling);
     let on = level != crate::player::leveling::Level::Off;
@@ -2754,7 +2833,7 @@ fn sides_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
         }
         if label == "bild" && on {
             let wide = app.config.ui.info_picture_wide;
-            if toggle(ui, "bildbreite", wide, ("spaltenbreite", "fest"), palette).clicked() {
+            if toggle(ui, "bildformat", wide, ("original", "quadrat"), palette).clicked() {
                 app.config.ui.info_picture_wide = !wide;
                 app.save_config();
             }

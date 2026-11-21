@@ -10,6 +10,7 @@ pub(in crate::gui) enum FieldPicture {
     Ball,
     Book,
     Saga,
+    Meter,
 }
 
 impl FieldPicture {
@@ -22,6 +23,7 @@ impl FieldPicture {
             Self::Ball => "kugel",
             Self::Book => "zarathustra",
             Self::Saga => "kessler saga",
+            Self::Meter => "zeiger",
         }
     }
 
@@ -33,6 +35,7 @@ impl FieldPicture {
             "kugel" => Self::Ball,
             "zarathustra" => Self::Book,
             "kessler saga" => Self::Saga,
+            "zeiger" => Self::Meter,
             _ => Self::Scope,
         }
     }
@@ -46,6 +49,7 @@ impl FieldPicture {
             Self::Ball => tr!("kugel"),
             Self::Book => tr!("zarathustra"),
             Self::Saga => tr!("kessler saga"),
+            Self::Meter => tr!("zeiger"),
         }
     }
 
@@ -57,7 +61,8 @@ impl FieldPicture {
             Self::Life => Some(Self::Ball),
             Self::Ball => Some(Self::Book),
             Self::Book => Some(Self::Saga),
-            Self::Saga => None,
+            Self::Saga => Some(Self::Meter),
+            Self::Meter => None,
         }
     }
 }
@@ -84,7 +89,7 @@ pub(in crate::gui) fn field_tick(app: &GuiApp) -> f64 {
 }
 
 pub(in crate::gui) fn on_the_second(app: &GuiApp) -> bool {
-    let quiet = FieldPicture::from_name(&app.config.ui.field_picture) != FieldPicture::Scope;
+    let quiet = !matches!(FieldPicture::from_name(&app.config.ui.field_picture), FieldPicture::Scope | FieldPicture::Meter);
     app.config.ui.field_spectrum && quiet && field_rate(app.config.ui.field_rate) <= 1
 }
 
@@ -220,7 +225,7 @@ pub(in crate::gui) fn grey_of(
     let rows = art.rows();
     art.cell = (height / rows.max(1)).max(1);
     let grey = match picture {
-        FieldPicture::Scope => None,
+        FieldPicture::Scope | FieldPicture::Meter => None,
         FieldPicture::Snake => {
             let snake = match &mut art.snake {
                 Some(snake) if snake.fits(key, width, height) => snake,
@@ -1253,9 +1258,34 @@ struct Scene<'a> {
     columns: i64,
     heard: &'a SagaHeard,
     since: Option<i64>,
+    turn: Turn,
+    into: i64,
+    span: i64,
 }
 
 impl Scene<'_> {
+    fn ramp(&self) -> f32 {
+        eased(self.into, self.span)
+    }
+
+    fn quiet_at(&self, came: i64) -> f32 {
+        match turn_at(came, self.since) {
+            (Turn::Still, into, span) => eased(into, span),
+            _ => 0.0,
+        }
+    }
+
+    fn zoom(&self) -> f32 {
+        if self.turn != Turn::Wide {
+            return 1.0;
+        }
+        let from_edge = (self.into - ZOOM_WAIT).min(self.span - 1 - ZOOM_WAIT - self.into);
+        if from_edge < 0 {
+            return 1.0;
+        }
+        (1.0 + 0.5 * (from_edge / ZOOM_STEP) as f32).min(FARTHEST)
+    }
+
     fn offset(&self, plane: Plane) -> i64 {
         (self.tick * plane.num).div_euclid(plane.den)
     }
@@ -1271,7 +1301,8 @@ impl Scene<'_> {
         }
         let stretch = if mix(came.div_euclid(SAGA_STRETCH), 40).is_multiple_of(3) { 0.12 } else { 1.0 };
         let music = self.heard.at(came).map_or(0.7, |level| (0.2 + level * 5.0).clamp(0.2, 1.0));
-        stretch * music
+        let still = 1.0 - 0.96 * self.quiet_at(came);
+        stretch * music * still
     }
 
     fn keeps(&self, plane: Plane, chunk: i64, wide: i64, likely: f32) -> bool {
@@ -1294,10 +1325,14 @@ fn chunk_of(scene: &Scene, plane: Plane, x: i64, wide: i64) -> (i64, i64, u64, i
     (chunk, world.rem_euclid(wide), mix(chunk, plane.salt), world)
 }
 
+fn hazed(scene: &Scene, world: i64, y: i64) -> bool {
+    scene.turn == Turn::Still && (mix(world * 64 + y, 76) % 1000) as f32 / 1000.0 < scene.ramp() * 0.97
+}
+
 fn far(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 16;
     let (chunk, x, h, world) = chunk_of(scene, FAR, x, WIDE);
-    if !scene.keeps(FAR, chunk, WIDE, 0.8) {
+    if !scene.keeps(FAR, chunk, WIDE, 0.8) || hazed(scene, world, y) {
         return false;
     }
     let lit = match h % 6 {
@@ -1359,7 +1394,7 @@ fn far(scene: &Scene, x: i64, y: i64) -> bool {
 fn birds(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 28;
     let (chunk, x, h, world) = chunk_of(scene, SKY, x, WIDE);
-    if scene.loud_at(SKY, world) < 0.12 || !h.is_multiple_of(2) {
+    if scene.loud_at(SKY, world) < 0.12 || !h.is_multiple_of(2) || scene.quiet_at(scene.came_in(SKY, world)) > 0.3 {
         return false;
     }
     let (bx, by) = (6 + (h >> 8) as i64 % 16, 2 + (h >> 16) as i64 % 8);
@@ -1371,7 +1406,7 @@ fn birds(scene: &Scene, x: i64, y: i64) -> bool {
 fn clouds(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 48;
     let (chunk, x, h, world) = chunk_of(scene, HIGH, x, WIDE);
-    if !scene.keeps(HIGH, chunk, WIDE, 0.45) {
+    if !scene.keeps(HIGH, chunk, WIDE, 0.45) || hazed(scene, world, y) {
         return false;
     }
     let (at, base) = (4 + (h >> 8) as i64 % 12, 3 + (h >> 16) as i64 % 5);
@@ -1499,6 +1534,9 @@ fn landmarks(scene: &Scene, x: i64, y: i64) -> bool {
     if !(0..40).contains(&x) {
         return false;
     }
+    if h % 8 == 7 {
+        return if (h >> 20) % 2 == 0 { pediment_front(x, y) } else { ball_on_cube(x, y) };
+    }
     match h % 6 {
         4 => {
             let dx = x - 19;
@@ -1568,8 +1606,11 @@ fn landmarks(scene: &Scene, x: i64, y: i64) -> bool {
 fn ground(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 7;
     let (chunk, x, h, world) = chunk_of(scene, GROUND, x, WIDE);
-    if y == FLOOR && mix(world, 5).is_multiple_of(4) && scene.fullness(GROUND, world) > 0.3 {
-        return true;
+    if y == FLOOR && mix(world, 5).is_multiple_of(4) {
+        let still = scene.quiet_at(scene.came_in(GROUND, world)) > 0.5 && mix(world, 6).is_multiple_of(3);
+        if still || scene.fullness(GROUND, world) > 0.3 {
+            return true;
+        }
     }
     if !scene.keeps(GROUND, chunk, WIDE, 0.5) {
         return false;
@@ -1608,6 +1649,324 @@ fn front(scene: &Scene, x: i64, y: i64) -> bool {
         let reach = 4 + (h >> 16) as i64 % 4;
         let (dx, dy) = (x - 30, y - (FLOOR + 1));
         dx * dx + dy * dy * 2 <= reach * reach * 2 && !mix(world * 64 + y, 7).is_multiple_of(7)
+    }
+}
+
+fn pediment_front(x: i64, y: i64) -> bool {
+    let (left, right, eave) = (6, 32, FLOOR - 15);
+    let middle = (left + right) / 2;
+    if !(left..=right).contains(&x) || y > FLOOR {
+        return false;
+    }
+    if y < eave {
+        let up = eave - y;
+        let edge = (x - middle).abs() == (right - middle) - 2 * up || (x - middle).abs() == (right - middle) - 2 * up - 1;
+        let gap = (x - middle).abs() <= 3;
+        let ball = (x - middle).pow(2) + (y - (eave - 6)).pow(2) * 2 <= 4;
+        return (edge && !gap && up <= 6) || ball;
+    }
+    let wall = x == left || x == right || y == eave || y == eave + 1;
+    let windows = (x - left) % 4 == 2 && (y - eave) % 4 == 3 && y < FLOOR - 5 && (x - middle).abs() > 2;
+    let door = {
+        let (dx, dy) = (x - middle, y - (FLOOR - 4));
+        (dx.abs() == 3 && dy >= 0) || (dy < 0 && dx * dx + dy * dy * 3 >= 7 && dx * dx + dy * dy * 3 <= 12)
+    };
+    wall || windows || door
+}
+
+fn ball_on_cube(x: i64, y: i64) -> bool {
+    let cube = (14..=26).contains(&x) && (FLOOR - 9..=FLOOR).contains(&y) && (x == 14 || x == 26 || y == FLOOR - 9 || (x + y) % 4 == 0);
+    let (dx, dy) = (x - 20, y - (FLOOR - 15));
+    let ring = dx * dx + dy * dy;
+    let ball = (20..=30).contains(&ring) || (ring <= 4 && dx < 0 && dy < 0);
+    let shaft = (4..=6).contains(&x) && (FLOOR - 16..=FLOOR).contains(&y) && (x != 5 || y % 2 == 0);
+    let capital = (1..=9).contains(&x) && (y == FLOOR - 18 || (y == FLOOR - 17 && (2..=8).contains(&x)));
+    let base = (3..=7).contains(&x) && y == FLOOR;
+    cube || ball || shaft || capital || base
+}
+
+const ERA: i64 = 480;
+
+const TURN_EASE: i64 = 40;
+
+const ZOOM_WAIT: i64 = 30;
+const ZOOM_STEP: i64 = 3;
+const FARTHEST: f32 = 4.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Turn {
+    Plain,
+    Wide,
+    Companion,
+    Night,
+    Rain,
+    Snow,
+    Still,
+}
+
+fn drawn_turn(era: i64) -> Turn {
+    match mix(era, 70) % 100 {
+        0..=4 => Turn::Wide,
+        5..=11 => Turn::Companion,
+        12..=17 => Turn::Night,
+        18..=21 => Turn::Rain,
+        22..=24 => Turn::Snow,
+        25..=28 => Turn::Still,
+        _ => Turn::Plain,
+    }
+}
+
+fn turn_of(era: i64) -> Turn {
+    if drawn_turn(era - 1) == Turn::Still || drawn_turn(era - 2) == Turn::Still {
+        Turn::Still
+    } else {
+        drawn_turn(era)
+    }
+}
+
+fn turn_at(tick: i64, since: Option<i64>) -> (Turn, i64, i64) {
+    let era = tick.div_euclid(ERA);
+    let counts = |era: i64| !since.is_some_and(|since| era * ERA < since);
+    if !counts(era) {
+        return (Turn::Plain, tick.rem_euclid(ERA), ERA);
+    }
+    let turn = turn_of(era);
+    if turn != Turn::Still {
+        return (turn, tick.rem_euclid(ERA), ERA);
+    }
+    let (mut first, mut last) = (era, era);
+    while era - first < 8 && counts(first - 1) && turn_of(first - 1) == Turn::Still {
+        first -= 1;
+    }
+    while last - era < 8 && turn_of(last + 1) == Turn::Still {
+        last += 1;
+    }
+    (turn, tick - first * ERA, (last - first + 1) * ERA)
+}
+
+fn eased(into: i64, span: i64) -> f32 {
+    let from_edge = into.min(span - 1 - into).max(0);
+    (from_edge as f32 / TURN_EASE as f32).min(1.0)
+}
+
+fn creature(look: u64, step: i64, x: i64, y: i64) -> bool {
+    let long = 5 + (look % 6) as i64;
+    let legs = 1 + ((look >> 4) % 3) as i64;
+    let body = FLOOR - legs;
+    let head = long;
+    let ear_up = (look >> 8).is_multiple_of(2);
+    let snout = !(look >> 9).is_multiple_of(3);
+    let tail = (look >> 12) % 3;
+    if y > FLOOR {
+        return false;
+    }
+    let trunk = (body - 1..=body).contains(&y) && (0..long).contains(&x) && !(y == body - 1 && (x == 0 || x == long - 1) && long > 6);
+    let skull = (body - 3..=body - 1).contains(&y) && (head - 1..=head + 1).contains(&x);
+    let nose = snout && y == body - 1 && x == head + 2;
+    let eye = y == body - 3 && x == head + 1;
+    let ear = if ear_up { y == body - 4 && x == head - 1 } else { (body - 3..=body - 2).contains(&y) && x == head - 2 };
+    let tail_at = match tail {
+        0 => (y == body - 2 && x == -1) || (y == body - 3 && x == -2),
+        1 => y == body && x == -1 || (y == body + 1 && x == -2 && legs > 1),
+        _ => {
+            let up = step.rem_euclid(2) == 0;
+            (y == body - 1 && x == -1) || (y == if up { body - 2 } else { body - 1 } && x == -2)
+        }
+    };
+    let legs_at = y > body && {
+        let stride = step.rem_euclid(2) == 0;
+        let low = y == FLOOR && legs > 1;
+        let feet: [i64; 4] = if stride && low { [0, 2, long - 3, long - 1] } else { [1, 1, long - 2, long - 2] };
+        feet.contains(&x)
+    };
+    (trunk || skull || nose || ear || tail_at || legs_at) && !eye
+}
+
+fn creatures(scene: &Scene, x: i64, y: i64) -> bool {
+    const WIDE: i64 = 300;
+    for (plane, facing_right) in [(TOWARD, false), (ALONG, true)] {
+        let (chunk, x, h, _) = chunk_of(scene, plane, x, WIDE);
+        if !scene.keeps(plane, chunk, WIDE, 0.07) {
+            continue;
+        }
+        let x = x - 40;
+        let step = if facing_right { scene.tick.div_euclid(2) } else { scene.tick };
+        let x = if facing_right { x } else { 14 - x };
+        if (-3..20).contains(&x) && creature(h, step, x, y) {
+            return true;
+        }
+    }
+    false
+}
+
+const TOWARD: Plane = Plane { num: 3, den: 2, salt: 23 };
+const ALONG: Plane = Plane { num: 1, den: 2, salt: 24 };
+
+fn companion(scene: &Scene, ahead: i64, x: i64, y: i64) -> bool {
+    if scene.turn != Turn::Companion {
+        return false;
+    }
+    const RUN: i64 = 36;
+    let look = mix(scene.tick.div_euclid(ERA), 71);
+    let into = scene.into;
+    let at = if into < RUN {
+        -16 + (ahead + 16) * into / RUN
+    } else if into > ERA - RUN {
+        ahead + (scene.columns + 4 - ahead) * (into - (ERA - RUN)) / RUN
+    } else {
+        ahead
+    };
+    let step = if (RUN..=ERA - RUN).contains(&into) { scene.tick.div_euclid(2) } else { scene.tick };
+    creature(look, step, x - at, y)
+}
+
+fn night(scene: &Scene, x: i64, y: i64) -> bool {
+    let night = scene.turn == Turn::Night;
+    if !(night || scene.turn == Turn::Still) || y >= FLOOR - 6 {
+        return false;
+    }
+    let ramp = scene.ramp();
+    let moon = night && {
+        let (cx, cy) = (scene.columns * 4 / 5, 5);
+        let (dx, dy) = (x - cx, y - cy);
+        let (sx, sy) = (dx + 2, dy + 1);
+        ramp > 0.4 && dx * dx + dy * dy <= 20 && sx * sx + sy * sy > 16
+    };
+    let every = if night { 97 } else { 151 };
+    let world = x + scene.offset(HIGH);
+    let star = |wx: i64, wy: i64| -> Option<bool> {
+        let h = mix(wx * 64 + wy, 72);
+        let there = h.is_multiple_of(every)
+            && wy < FLOOR - 7
+            && ((h >> 8) % 1000) as f32 / 1000.0 < ramp
+            && (scene.tick + (h >> 20) as i64).rem_euclid(9) != 0;
+        there.then_some((h >> 32).is_multiple_of(4))
+    };
+    let shines = star(world, y).is_some()
+        || [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| star(world + dx, y + dy) == Some(true));
+    moon || shines
+}
+
+fn weather(scene: &Scene, x: i64, y: i64) -> bool {
+    if y >= FLOOR {
+        return false;
+    }
+    let ramp = scene.ramp();
+    match scene.turn {
+        Turn::Rain => {
+            let lane = x + y.div_euclid(2);
+            let h = mix(lane, 73);
+            let falls = (y - scene.tick * 3 + (h >> 8) as i64 % 40).rem_euclid(14);
+            h.is_multiple_of(5) && falls < 3 && ((h >> 16) % 1000) as f32 / 1000.0 < ramp
+        }
+        Turn::Snow => {
+            let drift = (y / 5 + scene.tick.div_euclid(6) + x / 9).rem_euclid(3) - 1;
+            let lane = x - drift;
+            let h = mix(lane, 74);
+            let falls = (y - scene.tick.div_euclid(2) + (h >> 8) as i64 % 40).rem_euclid(13);
+            h.is_multiple_of(7) && falls == 0 && ((h >> 16) % 1000) as f32 / 1000.0 < ramp
+        }
+        _ => false,
+    }
+}
+
+const GIANT: Plane = Plane { num: 1, den: 1, salt: 21 };
+const GIANT_UNIT: i64 = 4;
+
+fn giants(scene: &Scene, x: i64, y: i64) -> bool {
+    const WIDE: i64 = 64;
+    if y > FLOOR {
+        return false;
+    }
+    let world = (x + scene.offset(GIANT)).div_euclid(GIANT_UNIT);
+    let row = FLOOR - (FLOOR - y).div_euclid(GIANT_UNIT);
+    let chunk = world.div_euclid(WIDE);
+    let h = mix(chunk, GIANT.salt);
+    if (h >> 4).is_multiple_of(2) {
+        return false;
+    }
+    postmodern(h, world.rem_euclid(WIDE) - 10, row)
+}
+
+fn postmodern(h: u64, x: i64, y: i64) -> bool {
+    match (h >> 8) % 6 {
+        0 => {
+            let (left, right, top) = (0, 22, 2 + (h >> 16) as i64 % 3);
+            let middle = (left + right) / 2;
+            let shaft = top + 6;
+            if !(left..=right).contains(&x) {
+                return false;
+            }
+            if y < shaft {
+                let up = shaft - y;
+                let reach = (right - middle) - 2 * (up - 1);
+                let edge = (x - middle).abs() == reach || (x - middle).abs() == reach - 1 || y == shaft - 1;
+                let notch = (x - middle).pow(2) + (y - top - 1).pow(2) <= 8;
+                return y >= top && edge && !notch;
+            }
+            let side = x == left || x == right;
+            let mullion = (x - left) % 3 == 0 && y < FLOOR - 6;
+            let band = (y - shaft) % 5 == 0;
+            let (dx, dy) = (x - middle, y - (FLOOR - 2));
+            let arch = (16..=26).contains(&(dx * dx + dy * dy)) && dy <= 0 || (dx.abs() == 4 && dy > 0);
+            side || mullion || band || arch
+        }
+        1 => {
+            let (left, right, top) = (0, 26, FLOOR - 20);
+            if !(left..=right).contains(&x) || y < top {
+                return false;
+            }
+            let (dx, dy) = (x - 13, y - (top + 8));
+            let ring = (25..=40).contains(&(dx * dx + dy * dy));
+            let key = dy < -6 && dy > -9 && dx.abs() <= (-dy - 5);
+            let stripes = y > top + 15 && y % 2 == 0;
+            let edge = x == left || x == right || y == top;
+            ring || key || stripes || edge
+        }
+        2 => {
+            (0..3).any(|i| {
+                let (middle, half, top) = (22, 20 - i * 5, FLOOR - 18 + i * 5);
+                let dx = x - middle;
+                if dx.abs() > half || y < top - 2 {
+                    return false;
+                }
+                let curve = top + (dx * dx * 3) / (half * half).max(1);
+                let beam = y == curve - 2 || y == curve - 1;
+                let column = y > curve && dx.rem_euclid(4) == 0;
+                beam || column
+            })
+        }
+        3 => {
+            let steps = 5;
+            let step = (FLOOR - y).div_euclid(4);
+            let ziggurat = y <= FLOOR && step < steps && (x - 14).abs() <= 14 - step * 3;
+            let face = ziggurat && ((FLOOR - y) % 4 == 0 || (x - 14).abs() == 14 - step * 3 || (x - 14).rem_euclid(3) == 0);
+            let (dx, dy) = (x - 14, y - (FLOOR - 23));
+            let ball = (5..=10).contains(&(dx * dx + dy * dy));
+            let column = (36..=38).contains(&x) && y >= FLOOR - 18 && (x != 37 || y % 2 == 0);
+            let capital = (34..=40).contains(&x) && y == FLOOR - 19;
+            face || ball || column || capital
+        }
+        4 => {
+            let cube = (4..=18).contains(&x) && (FLOOR - 10..=FLOOR).contains(&y) && (x == 4 || x == 18 || y == FLOOR - 10 || (x - y) % 5 == 0);
+            let drum = (7..=15).contains(&x) && (FLOOR - 18..FLOOR - 10).contains(&y) && (x == 7 || x == 15 || y == FLOOR - 18 || y == FLOOR - 17);
+            let cone = (FLOOR - 25..FLOOR - 18).contains(&y) && (x - 11).abs() == (y - (FLOOR - 25)) / 2;
+            let arch = (22..=34).contains(&x) && {
+                let (dx, dy) = (x - 28, y - (FLOOR - 6));
+                (dy <= 0 && (30..=42).contains(&(dx * dx + dy * dy * 2))) || ((dx.abs() == 5 || dx.abs() == 6) && dy > 0)
+            };
+            cube || drum || cone || arch
+        }
+        _ => {
+            let (left, right, top) = (2, 30, FLOOR - 24);
+            let frame = (left..=right).contains(&x)
+                && (top..=FLOOR).contains(&y)
+                && (x <= left + 1 || x >= right - 1 || y <= top + 1);
+            let (dx, dy) = (x - 16, y - (top + 11));
+            let turned = (dx.abs() + dy.abs() == 7 || dx.abs() + dy.abs() == 8) && y < FLOOR - 3;
+            let stairs = y > FLOOR - 3 && (left - 3..=right + 3).contains(&x) && (FLOOR - y) <= ((x - 16).abs() - 12).clamp(0, 3);
+            frame || turned || stairs
+        }
     }
 }
 
@@ -1678,13 +2037,55 @@ fn saga(grid: &Grid, tick: i64, heard: &SagaHeard, entry: Option<Entry>) -> Vec<
         None => (middle_left, None),
     };
     let figure_top = 1;
-    let scene = Scene { tick, columns, heard, since };
+    let (turn, into, span) = turn_at(tick, since);
+    let scene = Scene { tick, columns, heard, since, turn, into, span };
+    let zoom = scene.zoom();
+    let centre = left as f32 + FIGURE_WIDE as f32 / 2.0;
+    let ahead = left + FIGURE_WIDE as i64 + 2;
+    let behind = |x: i64, y: i64| {
+        ground(&scene, x, y)
+            || creatures(&scene, x, y)
+            || middle(&scene, x, y)
+            || landmarks(&scene, x, y)
+            || birds(&scene, x, y)
+            || clouds(&scene, x, y)
+            || far(&scene, x, y)
+            || night(&scene, x, y)
+            || weather(&scene, x, y)
+    };
     grid.paint(|column, row| {
         let y = (row as i64 - top).div_euclid(k as i64);
         if !(0..SAGA_ROWS as i64).contains(&y) {
             return false;
         }
         let x = (column / k) as i64;
+        if zoom > 1.0 {
+            let span = |from: f32, to: f32| (from.floor() as i64, (to.ceil() as i64).max(from.floor() as i64 + 1));
+            let (x0, x1) = (centre + (x as f32 - centre) * zoom, centre + (x as f32 + 1.0 - centre) * zoom);
+            let floor_edge = FLOOR as f32 + 1.0;
+            let (y0, y1) = (floor_edge - (FLOOR - y + 1) as f32 * zoom, floor_edge - (FLOOR - y) as f32 * zoom);
+            let small = |x: i64, y: i64| {
+                let (x0, x1) = (centre + (x as f32 - centre) * zoom, centre + (x as f32 + 1.0 - centre) * zoom);
+                let (y0, y1) = (floor_edge - (FLOOR - y + 1) as f32 * zoom, floor_edge - (FLOOR - y) as f32 * zoom);
+                let ((sx0, sx1), (sy0, sy1)) = (span(x0, x1), span(y0, y1));
+                let inked = (sy0..sy1).flat_map(|sy| (sx0..sx1).map(move |sx| (sx, sy))).filter(|&(sx, sy)| figure.at(sx - left, sy - figure_top).0).count() as i64;
+                inked > 0 && inked * 4 >= (sx1 - sx0) * (sy1 - sy0)
+            };
+            if small(x, y) {
+                return true;
+            }
+            if (-1..=1).any(|dy| (-1..=1).any(|dx| small(x + dx, y + dy))) {
+                return false;
+            }
+            let (cx, cy) = (((x0 + x1) / 2.0).floor() as i64, ((y0 + y1) / 2.0).floor() as i64);
+            let between = (mix(cx * 131 + cy, 75) % 1000) as f32 / 1000.0 > (zoom - 1.0) / 1.5;
+            return giants(&scene, cx, cy)
+                || ground(&scene, cx, cy)
+                || creatures(&scene, cx, cy)
+                || birds(&scene, cx, cy)
+                || clouds(&scene, cx, cy)
+                || (between && behind(cx, cy));
+        }
         let (fx, fy) = (x - left, y - figure_top);
         if front(&scene, x, y) {
             return true;
@@ -1695,12 +2096,13 @@ fn saga(grid: &Grid, tick: i64, heard: &SagaHeard, entry: Option<Entry>) -> Vec<
         if figure.clears(fx, fy) {
             return false;
         }
-        ground(&scene, x, y)
-            || middle(&scene, x, y)
-            || landmarks(&scene, x, y)
-            || birds(&scene, x, y)
-            || clouds(&scene, x, y)
-            || far(&scene, x, y)
+        if companion(&scene, ahead, x, y) {
+            return true;
+        }
+        if (-1..=1).any(|dy| (-1..=1).any(|dx| companion(&scene, ahead, x + dx, y + dy))) {
+            return false;
+        }
+        behind(x, y)
     })
 }
 
@@ -1778,7 +2180,7 @@ mod tests {
             picture = next;
             seen += 1;
         }
-        assert_eq!(seen, 6);
+        assert_eq!(seen, 7);
         assert_eq!(FieldPicture::from_name("lochstreifen"), FieldPicture::Life);
         assert_eq!(FieldPicture::from_name(""), FieldPicture::Scope);
     }
@@ -1941,4 +2343,79 @@ mod tests {
         assert!(inked.first().is_some_and(|&y| y <= 1), "{inked:?}");
         assert!(inked.last().is_some_and(|&y| y >= 50), "{inked:?}");
     }
+
+    #[test]
+    fn the_turns_are_rare() {
+        let mut seen = std::collections::HashMap::new();
+        for era in 0..20_000 {
+            *seen.entry(turn_of(era)).or_insert(0u32) += 1;
+        }
+        let share = |turn| f64::from(seen.get(&turn).copied().unwrap_or(0)) / 20_000.0;
+        assert!(share(Turn::Plain) > 0.55, "{seen:?}");
+        for turn in [Turn::Wide, Turn::Companion, Turn::Night, Turn::Rain, Turn::Snow, Turn::Still] {
+            assert!((0.015..0.15).contains(&share(turn)), "{turn:?}: {seen:?}");
+        }
+    }
+
+    #[test]
+    fn a_still_stretch_is_long_and_nearly_empty() {
+        let era = (1..).find(|&e| drawn_turn(e) == Turn::Still && turn_of(e - 1) != Turn::Still).unwrap();
+        let (turn, into, span) = turn_at(era * ERA + ERA + 5, None);
+        assert_eq!(turn, Turn::Still);
+        assert!(span >= 3 * ERA, "{span}");
+        assert_eq!(into, ERA + 5);
+        let heard = SagaHeard::default();
+        let grid = Grid::whole(300, 28, SAGA_ROWS);
+        let middle = (300 - FIGURE_WIDE) / 2;
+        let inked = |tick: i64| {
+            let grey = saga(&grid, tick, &heard, None);
+            (0..28 * 300).filter(|&at| grey[at] == 255 && !(middle - 2..middle + FIGURE_WIDE + 2).contains(&(at % 300))).count()
+        };
+        let plain = (1..).find(|&e| turn_of(e) == Turn::Plain && turn_of(e - 1) == Turn::Plain).unwrap();
+        let busy = inked(plain * ERA + ERA / 2);
+        let still = inked(era * ERA + span * 2 / 3);
+        assert!(still * 5 < busy, "{still} inked in the still, {busy} in a plain part");
+    }
+
+    #[test]
+    fn the_view_draws_back_and_comes_close_again() {
+        let heard = SagaHeard::default();
+        let era = (1..).find(|&e| turn_of(e) == Turn::Wide).unwrap();
+        let scene = |into: i64| Scene { tick: era * ERA + into, columns: 300, heard: &heard, since: None, turn: Turn::Wide, into, span: ERA };
+        assert_eq!(scene(0).zoom(), 1.0);
+        assert_eq!(scene(ERA / 2).zoom(), FARTHEST);
+        assert_eq!(scene(ERA - 1).zoom(), 1.0);
+        let grid = Grid::whole(300, 28, SAGA_ROWS);
+        let middle = (300 - FIGURE_WIDE) / 2;
+        let tall = |grey: &[u8]| (0..28).filter(|&y| (middle..middle + FIGURE_WIDE).any(|x| grey[y * 300 + x] == 255)).count();
+        let close = tall(&saga(&grid, era * ERA, &heard, None));
+        let far = tall(&saga(&grid, era * ERA + ERA / 2, &heard, None));
+        assert!(close >= FIGURE_TALL, "{close}");
+        assert!((3..=10).contains(&far), "{far} rows tall, drawn back");
+    }
+
+    #[test]
+    fn the_companion_walks_beside_the_figure() {
+        let heard = SagaHeard::default();
+        let era = (1..).find(|&e| turn_of(e) == Turn::Companion).unwrap();
+        let scene = |into: i64| Scene { tick: era * ERA + into, columns: 300, heard: &heard, since: None, turn: Turn::Companion, into, span: ERA };
+        let ahead = 160;
+        let beside = |into: i64| (ahead - 4..ahead + 20).any(|x| (0..SAGA_ROWS as i64).any(|y| companion(&scene(into), ahead, x, y)));
+        assert!(!beside(0));
+        assert!(beside(ERA / 2));
+    }
+
+    #[test]
+    fn the_creatures_walk() {
+        for look in 0..64u64 {
+            let ink = |step: i64| -> Vec<bool> { (FLOOR - 9..=FLOOR).flat_map(|y| (-4..18).map(move |x| creature(look, step, x, y))).collect() };
+            let (one, two) = (ink(0), ink(1));
+            assert!(one.iter().filter(|&&lit| lit).count() > 12, "{look}");
+            assert!((-4..18).any(|x| creature(look, 0, x, FLOOR)), "{look} stands on the ground");
+            if (look >> 4) % 3 > 0 {
+                assert_ne!(one, two, "{look}");
+            }
+        }
+    }
+
 }

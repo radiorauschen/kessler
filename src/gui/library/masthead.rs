@@ -189,6 +189,7 @@ pub(super) fn search_field(
     );
     let showing = showing * in_front;
     spectrum_strip(app, ui, field, palette, showing);
+    super::picture::touch_bar_picture(app, ui);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }

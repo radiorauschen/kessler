@@ -180,6 +180,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
             crate::gui::covers::dress_for_headings(app, ui.ctx(), size);
         }
 
+            let stack = heads_stack(ui.ctx(), head_cover, width, m);
             below = scrolled(ui, "tracks", palette, |ui| {
             beside = ground_clicked(ui, "tracks");
             let mut next_group = 0;
@@ -238,7 +239,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             (vec![under], artist)
                         };
                         let lines = head_lines(artist.is_some(), two_lines);
-                        let height = album_head_height(head_cover, width, lines, under.len() - 1, m);
+                        let height = album_head_height(head_cover, width, lines, under.len() - 1, stack, m);
                         if off_screen(ui, height) {
                             ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
                         } else {
@@ -275,6 +276,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             plain,
                             heard,
                             marked,
+                            stack,
                             m,
                             palette,
                         );
@@ -567,7 +569,7 @@ pub(super) fn facts_line(facts: &[String], count: Option<usize>, bitrate: Option
 }
 
 pub(super) fn split_facts(ui: &Ui, said: &str, room: f32) -> Vec<String> {
-    let wide = |words: &str| text::full_line(ui, words, Role::Label, Color32::WHITE).size().x;
+    let wide = |words: &str| label_width(ui, words);
     if wide(said) <= room {
         return vec![said.to_string()];
     }
@@ -579,6 +581,29 @@ pub(super) fn split_facts(ui: &Ui, said: &str, room: f32) -> Vec<String> {
     }
 }
 
+fn label_width(ui: &Ui, words: &str) -> f32 {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    const KEPT_MOST: usize = 50_000;
+    thread_local! {
+        static WIDTHS: RefCell<(u64, HashMap<String, f32>)> = RefCell::new((0, HashMap::new()));
+    }
+    let probe = text::full_line(ui, "Xnmo Ab 0·9", Role::Label, Color32::WHITE).size().x;
+    let stamp = (u64::from(probe.to_bits()) << 32) | u64::from(ui.ctx().pixels_per_point().to_bits());
+    WIDTHS.with(|widths| {
+        let mut widths = widths.borrow_mut();
+        if widths.0 != stamp || widths.1.len() > KEPT_MOST {
+            *widths = (stamp, HashMap::new());
+        }
+        if let Some(&width) = widths.1.get(words) {
+            return width;
+        }
+        let width = text::full_line(ui, words, Role::Label, Color32::WHITE).size().x;
+        widths.1.insert(words.to_string(), width);
+        width
+    })
+}
+
 fn words_room(cover: Option<f32>, width: f32, m: Metrics) -> f32 {
     let room = (width - m.marker_pad_x * 2.0).max(1.0);
     match head_cover_layout(cover, width, 1, m) {
@@ -587,11 +612,19 @@ fn words_room(cover: Option<f32>, width: f32, m: Metrics) -> f32 {
     }
 }
 
-pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, more: usize, m: Metrics) -> f32 {
-    let (size, stacked) = head_cover_layout(cover, width, lines, m);
+pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, more: usize, stack: f32, m: Metrics) -> f32 {
+    let (size, _) = head_cover_layout(cover, width, lines, m);
     let block = words_block(lines, more, m);
-    let tall = if stacked { size + ALBUM_HEAD_UNDER + block } else { size.max(block) };
+    let beside = size.max(block);
+    let under = size + ALBUM_HEAD_UNDER + block;
+    let tall = if cover.is_some() { beside + (under - beside) * stack } else { beside };
     tall + m.marker_pad_x * 2.0 + m.marker_inset_y
+}
+
+pub(super) fn heads_stack(ctx: &egui::Context, cover: Option<f32>, width: f32, m: Metrics) -> f32 {
+    let Some(_) = cover else { return 0.0 };
+    let (_, stacked) = head_cover_layout(cover, width, 3, m);
+    super::slide(ctx, egui::Id::unique("heads-stacked"), stacked, false)
 }
 
 fn head_cover_layout(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -> (f32, bool) {
@@ -621,16 +654,19 @@ pub(super) fn album_head(
     plain: bool,
     heard: bool,
     marked: RowState,
+    stack: f32,
     m: Metrics,
     palette: &Palette,
 ) -> Response {
     let lines = head_lines(artist.is_some(), two_lines);
     let more = under.len().saturating_sub(1);
-    let (size, stacked) = head_cover_layout(cover, width, lines, m);
+    let (size, _) = head_cover_layout(cover, width, lines, m);
+    let stack = if cover.is_some() { stack } else { 0.0 };
     let block = words_block(lines, more, m);
-    let tall = if stacked { size } else { size.max(block) };
+    let beside_tall = size.max(block);
+    let tall = beside_tall * (1.0 - stack) + size * stack;
     let pad = m.marker_pad_x;
-    let height = album_head_height(cover, width, lines, more, m);
+    let height = album_head_height(cover, width, lines, more, stack, m);
     let plate_height = height - m.marker_inset_y;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let plate = Rect::from_min_size(rect.min, Vec2::new(rect.width(), plate_height));
@@ -648,19 +684,17 @@ pub(super) fn album_head(
     if cover.is_some() {
         crate::gui::covers::heading_cover(cache, ui, picture, track, heard, palette);
     }
-    let left = if cover.is_some() && !stacked { picture.right() + ALBUM_HEAD_GAP } else { content.left() };
-    let room = (content.right() - left).max(1.0);
+
     let name = if track.album.trim().is_empty() {
         tr!("ohne album")
     } else {
         track.album.as_str()
     };
-    let title_colour = if heard { palette.accent } else { palette.ink };
+    let title_ink = if heard { palette.accent } else { palette.ink };
 
     let first = under.first().map(String::as_str).unwrap_or("");
 
     let step = m.row * crate::gui::theme::head_line();
-    let top = if stacked { picture.bottom() + ALBUM_HEAD_UNDER } else { rect.top() + pad + (tall - block) / 2.0 };
     let active = response.hovered();
     let ground = if plated {
         marker_colour(palette)
@@ -669,38 +703,72 @@ pub(super) fn album_head(
     } else {
         palette.ground
     };
-    let flac = marked.secondary(palette);
-    let line = |at: usize| Rect::from_min_size(egui::pos2(left, top + step * at as f32), Vec2::new(room, m.row));
-    cell_text(ui, line(0), response.id.with(0), name, Role::ContentBold, title_colour, active, ground, m);
-    if two_lines {
-        let cell = line(1);
-        match artist {
-            Some(artist) if !first.is_empty() => {
-                let said = text::line_within(ui, first, Role::Label, flac, (room * 2.0 / 3.0 - MARK_GAP).max(1.0));
-                let artist_room = (room - said.size().x - MARK_GAP).max(1.0);
-                let artist_cell = Rect::from_min_size(cell.min, Vec2::new(artist_room, m.row));
-                cell_text(ui, artist_cell, response.id.with(1), artist, Role::Content, palette.mid, active, ground, m);
-                let ink = text::full_line(ui, artist, Role::Content, palette.mid).size().x;
-                let at = egui::pos2(
-                    left + ink.min(artist_room) + MARK_GAP,
-                    text::on_line(&said, cell.top(), text::row_line(ui, m.row, Role::Content)),
-                );
-                ui.painter().galley(at, said, flac);
+    let flac_ink = marked.secondary(palette);
+    let row_line = text::row_line(ui, m.row, Role::Content);
+    let x_top = row_line - text::x_rise(ui, Role::ContentBold);
+    let last_baseline = row_line
+        + if two_lines {
+            step
+        } else {
+            let rows = 1 + usize::from(artist.is_some());
+            match under.len() {
+                0 => step * (rows - 1) as f32,
+                n => step * rows as f32 + text::SMALL_LINE * (n - 1) as f32,
             }
-            Some(artist) => cell_text(ui, cell, response.id.with(1), artist, Role::Content, palette.mid, active, ground, m),
-            None if plain => cell_text(ui, cell, response.id.with(1), first, Role::Content, palette.mid, active, ground, m),
-            None => cell_text(ui, cell, response.id.with(1), first, Role::Label, flac, active, ground, m),
-        }
+        };
+    let beside_top = if cover.is_some() && block < size {
+        text::optically_beside(picture.top(), picture.bottom(), x_top, last_baseline)
     } else {
-        let mut at = 1;
-        if let Some(artist) = artist {
-            cell_text(ui, line(at), response.id.with(at), artist, Role::Content, palette.mid, active, ground, m);
-            at += 1;
+        rect.top() + pad + (beside_tall - block) / 2.0
+    };
+    let words = |ui: &mut Ui, under_cover: bool, alpha: f32, salt: u8| {
+        let left = if cover.is_some() && !under_cover { picture.right() + ALBUM_HEAD_GAP } else { content.left() };
+        let room = (content.right() - left).max(1.0);
+        let top = if under_cover { picture.bottom() + ALBUM_HEAD_UNDER } else { beside_top };
+        let title_colour = title_ink.gamma_multiply(alpha);
+        let flac = flac_ink.gamma_multiply(alpha);
+        let mid = palette.mid.gamma_multiply(alpha);
+        let id = response.id.with(salt);
+        let line = |at: usize| Rect::from_min_size(egui::pos2(left, top + step * at as f32), Vec2::new(room, m.row));
+        cell_text(ui, line(0), id.with(0), name, Role::ContentBold, title_colour, active, ground, m);
+        if two_lines {
+            let cell = line(1);
+            match artist {
+                Some(artist) if !first.is_empty() => {
+                    let said = text::line_within(ui, first, Role::Label, flac, (room * 2.0 / 3.0 - MARK_GAP).max(1.0));
+                    let artist_room = (room - said.size().x - MARK_GAP).max(1.0);
+                    let artist_cell = Rect::from_min_size(cell.min, Vec2::new(artist_room, m.row));
+                    cell_text(ui, artist_cell, id.with(1), artist, Role::Content, mid, active, ground, m);
+                    let ink = text::full_line(ui, artist, Role::Content, mid).size().x;
+                    let at = egui::pos2(
+                        left + ink.min(artist_room) + MARK_GAP,
+                        text::on_line(&said, cell.top(), text::row_line(ui, m.row, Role::Content)),
+                    );
+                    ui.painter().galley(at, said, flac);
+                }
+                Some(artist) => cell_text(ui, cell, id.with(1), artist, Role::Content, mid, active, ground, m),
+                None if plain => cell_text(ui, cell, id.with(1), first, Role::Content, mid, active, ground, m),
+                None => cell_text(ui, cell, id.with(1), first, Role::Label, flac, active, ground, m),
+            }
+        } else {
+            let mut at = 1;
+            if let Some(artist) = artist {
+                cell_text(ui, line(at), id.with(at), artist, Role::Content, mid, active, ground, m);
+                at += 1;
+            }
+            for (k, words) in under.iter().enumerate() {
+                let cell = line(at).translate(Vec2::new(0.0, text::SMALL_LINE * k as f32));
+                cell_text(ui, cell, id.with(at + k), words, Role::Label, flac, active, ground, m);
+            }
         }
-        for (k, words) in under.iter().enumerate() {
-            let cell = line(at).translate(Vec2::new(0.0, text::SMALL_LINE * k as f32));
-            cell_text(ui, cell, response.id.with(at + k), words, Role::Label, flac, active, ground, m);
-        }
+    };
+    if stack <= 0.0 {
+        words(ui, false, 1.0, 0);
+    } else if stack >= 1.0 {
+        words(ui, true, 1.0, 0);
+    } else {
+        words(ui, false, (1.0 - 2.0 * stack).clamp(0.0, 1.0), 0);
+        words(ui, true, (2.0 * stack - 1.0).clamp(0.0, 1.0), 1);
     }
     response
 }

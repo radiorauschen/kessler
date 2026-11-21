@@ -33,7 +33,7 @@ pub(super) fn tag_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pale
                     ..Default::default()
                 };
                 let (rect, response) = allocate_row(ui, width, m);
-                paint_marker(ui, rect, state, m, palette);
+                paint_marker(ui, rect, response.id, state, m, palette);
                 paint_hover(ui, rect, &response, state, m, palette);
                 if response.clicked() {
                     focus_on = Some(i);

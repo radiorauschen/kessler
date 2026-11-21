@@ -78,6 +78,7 @@ pub(super) fn views_offered(app: &GuiApp) -> Vec<Source> {
 
 const LONE_SECS: f64 = 2.5;
 const LONE_FADE_SECS: f64 = 0.6;
+const LONE_CLOSE_SECS: f64 = 0.4;
 
 pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, palette: &Palette) -> Switched {
     let offered = views_offered(app);
@@ -92,7 +93,8 @@ pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, pa
     };
     if offered.len() < 2 {
         if offered.first() == Some(&open_now) {
-            lone_word(ui, right, top, palette, open_now);
+            let gives_way = PlayingAt::of(&app.config.ui) == PlayingAt::SuperCompact;
+            lone_word(ui, right, top, palette, open_now, gives_way);
         } else {
             ui.ctx().data_mut(|d| d.remove::<(Source, f64)>(egui::Id::unique("switch-lone-since")));
         }
@@ -213,17 +215,13 @@ pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, pa
     switched
 }
 
-fn lone_word(ui: &Ui, right: &mut f32, top: f32, palette: &Palette, view: Source) {
+fn lone_word(ui: &Ui, right: &mut f32, top: f32, palette: &Palette, view: Source, gives_way: bool) {
     let word = match view {
         Source::Music => tr!("musik"),
         Source::Radio => tr!("radio"),
         Source::Podcasts => "podcasts",
         Source::Device => "ipod",
     };
-    let wide = text::line(ui, word, Role::Label, palette.mid).size().x;
-    *right -= wide;
-    let plate = control_plate(ui, egui::pos2(*right, top), wide);
-    *right -= CONTROL_GAP;
     let ctx = ui.ctx();
     let now = ui.input(|i| i.time);
     let since_id = egui::Id::unique("switch-lone-since");
@@ -236,9 +234,21 @@ fn lone_word(ui: &Ui, right: &mut f32, top: f32, palette: &Palette, view: Source
     };
     let left = now - since;
     let shown = if left < LONE_SECS { 1.0 } else { (1.0 - (left - LONE_SECS) / LONE_FADE_SECS).max(0.0) } as f32;
-    if shown > 0.0 {
+    let closing = left - LONE_SECS - LONE_FADE_SECS;
+    let room = if !gives_way || closing <= 0.0 {
+        1.0
+    } else {
+        1.0 - egui::emath::easing::cubic_in_out((closing / LONE_CLOSE_SECS).min(1.0) as f32)
+    };
+    if shown > 0.0 || (room > 0.0 && room < 1.0) {
         ctx.request_repaint();
     }
+    let wide = text::line(ui, word, Role::Label, palette.mid).size().x;
+    *right -= (wide + CONTROL_GAP) * room;
+    if room < 1.0 {
+        return;
+    }
+    let plate = control_plate(ui, egui::pos2(*right + CONTROL_GAP, top), wide);
     let over = ui.rect_contains_pointer(plate);
     let shown = shown.max(ctx.animate_bool_with_time(egui::Id::unique("switch-lone-over"), over, UNDERLINE_SECS));
     if shown <= 0.0 {

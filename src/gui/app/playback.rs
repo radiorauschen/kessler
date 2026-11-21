@@ -597,7 +597,9 @@ impl GuiApp {
     pub(in crate::gui) fn take_media_commands(&mut self, ctx: &egui::Context) {
         use crate::media::Command;
         use crate::player::PlaybackState;
-        while let Some(command) = crate::media::poll().or_else(crate::media::tray_poll) {
+        let unplugged = self.config.ui.pause_unplugged;
+        let route = move || crate::media::route_poll().filter(|_| unplugged);
+        while let Some(command) = crate::media::poll().or_else(crate::media::tray_poll).or_else(crate::media::touchbar_poll).or_else(route) {
             let outcome = match command {
                 Command::Play => {
                     match self.player.state() {

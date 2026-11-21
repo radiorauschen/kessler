@@ -8,7 +8,17 @@ pub const AHEAD: Duration = Duration::from_secs(3);
 
 pub const CUSHION: Duration = Duration::from_secs(2);
 
-const LIVE_ROOM: Duration = Duration::from_secs(8);
+pub const LIVE_ROOM: Duration = Duration::from_secs(8);
+
+static STATION_HELD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+static STATION_NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+static STATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn station_held() -> Duration {
+    Duration::from_millis(STATION_HELD.load(std::sync::atomic::Ordering::Relaxed))
+}
 
 const CHUNK: usize = 4096;
 
@@ -31,6 +41,8 @@ struct Shared<S> {
     room: usize,
     cushion: usize,
     live: bool,
+    chunk_ms: u64,
+    station: u64,
 }
 
 pub struct Ahead<S: Source + Send + 'static> {
@@ -76,6 +88,14 @@ impl<S: Source + Send + 'static> Ahead<S> {
             room,
             cushion: cushion_chunks,
             live,
+            chunk_ms: (CHUNK as u64 * 1000 / per_second.max(1) as u64).max(1),
+            station: if live {
+                let number = STATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                STATION_NOW.store(number, std::sync::atomic::Ordering::Relaxed);
+                number
+            } else {
+                0
+            },
         });
         let reading = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -122,6 +142,7 @@ fn read<S: Source>(shared: &Shared<S>) {
         if !chunk.is_empty() {
             store.chunks.push_back(chunk);
         }
+        note_held(shared, &store);
         store.done = ended;
         store.seeking = false;
         if store.starved.is_some() && (ended || store.chunks.len() >= shared.cushion) {
@@ -144,10 +165,21 @@ fn read<S: Source>(shared: &Shared<S>) {
     }
 }
 
+fn note_held<S>(shared: &Shared<S>, store: &Store) {
+    let current = STATION_NOW.load(std::sync::atomic::Ordering::Relaxed) == shared.station;
+    if shared.live && current && !store.stop {
+        let held = store.chunks.len() as u64 * shared.chunk_ms;
+        STATION_HELD.store(held, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl<S: Source + Send + 'static> Drop for Ahead<S> {
     fn drop(&mut self) {
         if let Ok(mut store) = self.shared.store.lock() {
             store.stop = true;
+            if self.shared.live && STATION_NOW.load(std::sync::atomic::Ordering::Relaxed) == self.shared.station {
+                STATION_HELD.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         self.shared.changed.notify_all();
     }
@@ -175,6 +207,7 @@ impl<S: Source + Send + 'static> Iterator for Ahead<S> {
                 return Some(0.0);
             }
             if let Some(chunk) = store.chunks.pop_front() {
+                note_held(&self.shared, &store);
                 drop(store);
                 self.shared.changed.notify_all();
                 self.current = chunk;

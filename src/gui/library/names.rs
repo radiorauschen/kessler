@@ -411,7 +411,7 @@ pub(super) fn typing_row(app: &GuiApp, ui: &mut Ui, width: f32, m: Metrics, pale
         focused: true,
         ..Default::default()
     };
-    paint_marker(ui, rect, state, m, palette);
+    paint_marker(ui, rect, response.id, state, m, palette);
     let Some(prompt) = app.prompt.as_ref() else {
         return rect;
     };

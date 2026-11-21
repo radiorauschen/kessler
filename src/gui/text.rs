@@ -50,6 +50,38 @@ pub fn full_line_weighted(ui: &egui::Ui, text: &str, bold: f32, color: Color32) 
     ui.ctx().fonts_mut(|f| f.layout_job(job))
 }
 
+pub fn prewarm(ctx: &egui::Context, capitals: bool) {
+    const SAMPLE: &str = "abcdefghijklmnopqrstuvwxyzäöüßéèêàáâçñøåæœ0123456789 .,:;!?'\"„“”‘’»«()[]{}/\\|-–—_·•…→←↑↓&+=%#@*~^°";
+    let roles = [
+        Role::Content,
+        Role::ContentBold,
+        Role::Figures,
+        Role::FiguresLabel,
+        Role::Label,
+        Role::Note,
+        Role::LabelBold,
+    ];
+    let mut samples = vec![lower(SAMPLE)];
+    if capitals {
+        samples.push(SAMPLE.to_uppercase());
+    }
+    ctx.fonts_mut(|fonts| {
+        for role in roles {
+            for sample in &samples {
+                let mut job = LayoutJob::default();
+                job.append(
+                    &styled(sample, role),
+                    0.0,
+                    TextFormat { font_id: role.font(), extra_letter_spacing: role.tracking(), ..Default::default() },
+                );
+                job.wrap.max_rows = 1;
+                job.wrap.max_width = f32::INFINITY;
+                let _ = fonts.layout_job(job);
+            }
+        }
+    });
+}
+
 pub fn full_line(ui: &egui::Ui, text: &str, role: Role, color: Color32) -> Arc<Galley> {
     let mut job = LayoutJob::default();
     job.append(
@@ -223,6 +255,34 @@ pub fn prose(ui: &egui::Ui, text: &str, role: Role, color: Color32, max_width: f
     wrapped(ui, text, role, color, max_width, Some(leading))
 }
 
+pub fn prose_parts(ui: &egui::Ui, parts: &[(&str, Color32)], role: Role, max_width: f32) -> (Arc<Galley>, Vec<std::ops::Range<usize>>) {
+    let font_id = role.font();
+    let leading = if font_id.size <= super::theme::SIZE_LABEL { SMALL_LEADING } else { PARAGRAPH_LEADING };
+    let mut job = LayoutJob::default();
+    let mut ranges = Vec::with_capacity(parts.len());
+    let mut at = 0;
+    for (text, color) in parts {
+        let small = lower(text);
+        let shown = styled(&small, role);
+        let count = shown.chars().count();
+        ranges.push(at..at + count);
+        at += count;
+        job.append(
+            &shown,
+            0.0,
+            TextFormat {
+                font_id: font_id.clone(),
+                color: *color,
+                extra_letter_spacing: role.tracking(),
+                line_height: Some(font_id.size * leading),
+                ..Default::default()
+            },
+        );
+    }
+    job.wrap.max_width = max_width.max(1.0);
+    (ui.ctx().fonts_mut(|f| f.layout_job(job)), ranges)
+}
+
 pub fn sized(ui: &egui::Ui, text: &str, role: Role, size: f32, color: Color32, max_width: f32) -> Arc<Galley> {
     sized_parts(ui, &[(text, color)], role, size, max_width)
 }
@@ -325,6 +385,19 @@ pub fn ink_size(galley: &Galley) -> egui::Vec2 {
         return galley.size();
     }
     ink.size()
+}
+
+pub fn x_rise(ui: &egui::Ui, role: Role) -> f32 {
+    let probe = line(ui, "x", role, Color32::WHITE);
+    let ink = probe.mesh_bounds;
+    if !ink.height().is_finite() || ink.height() <= 0.0 {
+        return probe.size().y / 2.0;
+    }
+    baseline(&probe) - ink.top()
+}
+
+pub fn optically_beside(top: f32, bottom: f32, x_top: f32, last_baseline: f32) -> f32 {
+    (top + bottom - x_top - last_baseline) / 2.0
 }
 
 pub fn ink_middle(ui: &egui::Ui, role: Role, top: f32) -> f32 {

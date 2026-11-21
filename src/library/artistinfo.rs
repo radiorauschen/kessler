@@ -12,6 +12,27 @@ pub struct Link {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Credit {
+    pub from: String,
+    pub page: String,
+    pub author: String,
+    pub license: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Pictures {
+    pub square: Option<Vec<u8>>,
+    pub full: Option<Vec<u8>>,
+}
+
+impl Pictures {
+    pub fn is_some(&self) -> bool {
+        self.square.is_some() || self.full.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Found {
@@ -20,6 +41,8 @@ pub struct Found {
     pub origin: String,
     pub active: String,
     pub disambiguation: String,
+    pub picture_credit: Credit,
+    pub full_credit: Credit,
     pub about: String,
     pub about_from: String,
     pub told: Vec<Told>,
@@ -173,6 +196,10 @@ pub fn picture_path(dir: &Path, key: u64) -> PathBuf {
     dir.join(format!("{key:016x}.jpg"))
 }
 
+pub fn full_picture_path(dir: &Path, key: u64) -> PathBuf {
+    dir.join(format!("{key:016x}-full.jpg"))
+}
+
 pub fn load(dir: &Path, key: u64) -> Option<ArtistInfo> {
     let text = std::fs::read_to_string(info_path(dir, key)).ok()?;
     toml::from_str(&text).ok()
@@ -212,8 +239,20 @@ pub fn store_picture(dir: &Path, key: u64, raw: &[u8]) -> Result<bool> {
     };
     std::fs::create_dir_all(dir)?;
     std::fs::write(picture_path(dir, key), jpeg)?;
+    store_full_picture(dir, key, raw)?;
     Ok(true)
 }
+
+pub fn store_full_picture(dir: &Path, key: u64, raw: &[u8]) -> Result<bool> {
+    let Some(jpeg) = super::artwork::shrink_to_jpeg(raw, FULL_PICTURE_LONGEST, 85) else {
+        return Ok(false);
+    };
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(full_picture_path(dir, key), jpeg)?;
+    Ok(true)
+}
+
+const FULL_PICTURE_LONGEST: u32 = 800;
 
 pub fn take_in(
     dir: &Path,
@@ -221,7 +260,7 @@ pub fn take_in(
     name: &str,
     found: Found,
     recognised: bool,
-    picture: Option<Vec<u8>>,
+    picture: Pictures,
 ) -> Result<(ArtistInfo, bool)> {
     let mut info = load(dir, key).unwrap_or_default();
     info.name = name.to_string();
@@ -229,8 +268,13 @@ pub fn take_in(
     info.recognised = recognised;
     info.looked_up = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut pictured = false;
-    if let Some(bytes) = picture.filter(|_| !info.own.picture) {
-        pictured = store_picture(dir, key, &bytes)?;
+    if !info.own.picture {
+        if let Some(bytes) = &picture.square {
+            pictured = store_picture(dir, key, bytes)?;
+        }
+        if let Some(bytes) = &picture.full {
+            pictured |= store_full_picture(dir, key, bytes)?;
+        }
     }
     save(dir, key, &info)?;
     Ok((info, pictured))
@@ -432,10 +476,11 @@ pub fn plain(name: &str) -> String {
     lower.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
-pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Found, bool, Option<Vec<u8>>)> {
+pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Found, bool, Pictures)> {
     let mut found = Found { asked: WIKIPEDIA_LANGS.iter().map(|l| l.to_string()).collect(), ..Found::default() };
     let mut recognised = false;
     let mut picture: Option<Vec<u8>> = None;
+    let mut full: Option<Vec<u8>> = None;
     let mut trouble: Option<String> = None;
     fn note(e: KesslerError, trouble: &mut Option<String>) {
         if trouble.is_none() {
@@ -526,6 +571,11 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
                             );
                             if let Some(url) = summary.picture {
                                 picture = fetch(&url).ok();
+                                if picture.is_some() {
+                                    found.picture_credit = wikimedia_credit(&url);
+                                    found.full_credit = found.picture_credit.clone();
+                                    full = picture.clone();
+                                }
                             }
                         }
                         Ok(None) => {}
@@ -538,9 +588,10 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
     }
 
     match deezer_picture(name) {
-        Ok(Some(url)) => {
+        Ok(Some((url, page))) => {
             if let Ok(bytes) = fetch(&url) {
                 picture = Some(bytes);
+                found.picture_credit = Credit { from: "deezer".into(), page, ..Credit::default() };
                 recognised = true;
             }
         }
@@ -600,7 +651,62 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
             return Err(KesslerError::Metadata(e));
         }
     }
-    Ok((found, recognised, picture))
+    if full.is_none() {
+        full = picture.clone();
+        found.full_credit = found.picture_credit.clone();
+    }
+    Ok((found, recognised, Pictures { square: picture, full }))
+}
+
+fn wikimedia_credit(url: &str) -> Credit {
+    let Some((project, file)) = wikimedia_file(url) else {
+        return Credit { from: "wikipedia".into(), ..Credit::default() };
+    };
+    let (host, from) = if project == "commons" {
+        ("commons.wikimedia.org".to_string(), "wikimedia commons")
+    } else {
+        (format!("{project}.wikipedia.org"), "wikipedia")
+    };
+    let mut credit = Credit { from: from.into(), page: format!("https://{host}/wiki/File:{file}"), ..Credit::default() };
+    let api = std::env::var("KESSLER_WIKIMEDIA_API").unwrap_or_else(|_| format!("https://{host}/w/api.php"));
+    let asked = format!("{api}?action=query&prop=imageinfo&iiprop=extmetadata&format=json&titles=File:{file}");
+    if let Some(doc) = fetch_text(&asked).ok().and_then(|text| Json::parse(&text)) {
+        read_wikimedia(&doc, &mut credit);
+    }
+    credit
+}
+
+fn wikimedia_file(url: &str) -> Option<(String, String)> {
+    let rest = url.split("upload.wikimedia.org/wikipedia/").nth(1)?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    let project = parts.first()?.to_string();
+    let file = if parts.get(1) == Some(&"thumb") { parts.get(4)? } else { parts.get(3)? };
+    (!file.is_empty()).then(|| (project, file.to_string()))
+}
+
+fn read_wikimedia(doc: &Json, credit: &mut Credit) {
+    let Some(Json::Object(pages)) = doc.get("query").and_then(|q| q.get("pages")) else { return };
+    let Some(meta) = pages.first().and_then(|(_, page)| page.list("imageinfo").first()).and_then(|info| info.get("extmetadata")) else {
+        return;
+    };
+    let value = |key: &str| meta.get(key).and_then(|m| m.text("value")).map(no_markup).unwrap_or_default();
+    credit.author = value("Artist");
+    credit.license = value("LicenseShortName");
+}
+
+fn no_markup(html: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for c in html.chars() {
+        match c {
+            '<' => inside = true,
+            '>' => inside = false,
+            c if !inside => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out.replace("&amp;", "&").replace("&quot;", "\"").replace("&#039;", "'").replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn musicbrainz_search(name: &str) -> Result<Option<String>> {
@@ -880,21 +986,21 @@ fn site_ways(site: &str) -> Vec<String> {
     ways
 }
 
-fn deezer_picture(name: &str) -> Result<Option<String>> {
+fn deezer_picture(name: &str) -> Result<Option<(String, String)>> {
     let url = format!("{}?q={}&limit=5", deezer_artist_endpoint(), encode(name));
     let doc = Json::parse(&fetch_text(&url)?)
         .ok_or_else(|| KesslerError::Metadata("deezer: unreadable".into()))?;
     Ok(read_deezer(&doc, name))
 }
 
-fn read_deezer(doc: &Json, name: &str) -> Option<String> {
+fn read_deezer(doc: &Json, name: &str) -> Option<(String, String)> {
     let wanted = plain(name);
     doc.list("data")
         .iter()
         .filter(|a| a.text("name").is_some_and(|n| plain(n) == wanted))
-        .filter_map(|a| a.text("picture_xl").or_else(|| a.text("picture_big")))
-        .find(|url| !url.contains("/artist//"))
-        .map(str::to_string)
+        .filter_map(|a| a.text("picture_xl").or_else(|| a.text("picture_big")).map(|url| (url, a.text("link").unwrap_or_default())))
+        .find(|(url, _)| !url.contains("/artist//"))
+        .map(|(url, page)| (url.to_string(), page.to_string()))
 }
 
 struct LastfmInfo {
@@ -1147,9 +1253,31 @@ mod tests {
                 {"name":"COIL","picture_xl":"https://e.test/images/artist/bb/1000x1000.jpg"}]}"#,
         );
         assert_eq!(
-            read_deezer(&doc, "Coil").as_deref(),
+            read_deezer(&doc, "Coil").map(|(url, _)| url).as_deref(),
             Some("https://e.test/images/artist/bb/1000x1000.jpg")
         );
+    }
+
+    #[test]
+    fn wikimedia_says_who_made_a_picture() {
+        assert_eq!(
+            wikimedia_file("https://upload.wikimedia.org/wikipedia/commons/thumb/7/7f/Boards_of_Canada.jpg/320px-Boards_of_Canada.jpg"),
+            Some(("commons".to_string(), "Boards_of_Canada.jpg".to_string()))
+        );
+        assert_eq!(
+            wikimedia_file("https://upload.wikimedia.org/wikipedia/en/a/ab/Coil_logo.png"),
+            Some(("en".to_string(), "Coil_logo.png".to_string()))
+        );
+        assert_eq!(wikimedia_file("https://e.test/a.jpg"), None);
+        let doc = json(
+            r#"{"query":{"pages":{"123":{"imageinfo":[{"extmetadata":{
+                "Artist":{"value":"<a href=\"//commons.wikimedia.org/wiki/User:X\">Jane &amp; Co</a>"},
+                "LicenseShortName":{"value":"CC BY-SA 4.0"}}}]}}}}"#,
+        );
+        let mut credit = Credit::default();
+        read_wikimedia(&doc, &mut credit);
+        assert_eq!(credit.author, "Jane & Co");
+        assert_eq!(credit.license, "CC BY-SA 4.0");
     }
 
     #[test]

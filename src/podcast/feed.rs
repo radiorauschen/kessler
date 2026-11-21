@@ -11,6 +11,7 @@ pub struct Episode {
     pub chapters: Vec<Chapter>,
     pub chapters_url: String,
     pub artwork: String,
+    pub wide_artwork: String,
     pub images: Vec<String>,
     pub links: Vec<(String, String)>,
     pub link: String,
@@ -226,6 +227,7 @@ pub struct Feed {
     pub artwork: String,
     pub link: String,
     pub people: Vec<String>,
+    pub owner: String,
     pub about_links: Vec<(String, String)>,
     pub episodes: Vec<Episode>,
     pub older: usize,
@@ -336,6 +338,57 @@ fn attributes(text: &str) -> Vec<(String, String)> {
     out
 }
 
+fn html_entity(name: &str) -> Option<char> {
+    Some(match name {
+        "nbsp" => '\u{a0}',
+        "ensp" | "emsp" | "thinsp" => ' ',
+        "shy" => '\u{ad}',
+        "zwnj" | "zwj" => '\u{200c}',
+        "ndash" => '–',
+        "mdash" => '—',
+        "hellip" => '…',
+        "lsquo" => '‘',
+        "rsquo" => '’',
+        "sbquo" => '‚',
+        "ldquo" => '“',
+        "rdquo" => '”',
+        "bdquo" => '„',
+        "laquo" => '«',
+        "raquo" => '»',
+        "lsaquo" => '‹',
+        "rsaquo" => '›',
+        "middot" => '·',
+        "bull" => '•',
+        "deg" => '°',
+        "euro" => '€',
+        "pound" => '£',
+        "copy" => '©',
+        "reg" => '®',
+        "trade" => '™',
+        "times" => '×',
+        "auml" => 'ä',
+        "ouml" => 'ö',
+        "uuml" => 'ü',
+        "Auml" => 'Ä',
+        "Ouml" => 'Ö',
+        "Uuml" => 'Ü',
+        "szlig" => 'ß',
+        "eacute" => 'é',
+        "egrave" => 'è',
+        "ecirc" => 'ê',
+        "aacute" => 'á',
+        "agrave" => 'à',
+        "acirc" => 'â',
+        "iacute" => 'í',
+        "oacute" => 'ó',
+        "uacute" => 'ú',
+        "ccedil" => 'ç',
+        "ntilde" => 'ñ',
+        "Eacute" => 'É',
+        _ => return None,
+    })
+}
+
 fn unescape(text: &str) -> String {
     if !text.contains('&') {
         return text.to_string();
@@ -357,6 +410,7 @@ fn unescape(text: &str) -> String {
             "gt" => Some('>'),
             "quot" => Some('"'),
             "apos" => Some('\''),
+            _ if html_entity(name).is_some() => html_entity(name),
             _ => name
                 .strip_prefix("#x")
                 .or_else(|| name.strip_prefix("#X"))
@@ -392,7 +446,7 @@ pub fn plain(html: &str) -> String {
         rest = &rest[end..];
     }
     out.push_str(rest);
-    let out = unescape(&out);
+    let out = unescape(&out).replace('\u{ad}', "");
     out.lines()
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
@@ -436,6 +490,7 @@ pub fn read(xml: &str) -> Option<Feed> {
     let mut open: Vec<String> = Vec::new();
     let mut episode: Option<Episode> = None;
     let mut guid = String::new();
+    let mut wide_sized = false;
     for piece in pieces(xml) {
         match piece {
             Piece::Open(name, attrs) => {
@@ -445,6 +500,7 @@ pub fn read(xml: &str) -> Option<Feed> {
                     "item" => {
                         episode = Some(Episode::default());
                         guid.clear();
+                        wide_sized = false;
                     }
                     "enclosure" => {
                         if let Some(e) = episode.as_mut() {
@@ -458,6 +514,20 @@ pub fn read(xml: &str) -> Option<Feed> {
                     "itunes:image" => {
                         if let Some(e) = episode.as_mut().filter(|e| e.artwork.is_empty()) {
                             e.artwork = attr("href").trim().to_string();
+                        }
+                    }
+                    "media:thumbnail" | "media:content" => {
+                        let image = name == "media:thumbnail" || attr("medium") == "image" || attr("type").starts_with("image/");
+                        let (wide, tall) = (attr("width").trim().parse::<u32>().unwrap_or(0), attr("height").trim().parse::<u32>().unwrap_or(0));
+                        let url = attr("url").trim().to_string();
+                        if let Some(e) = episode.as_mut().filter(|_| image && url.starts_with("http")) {
+                            let sized = wide > 0 && tall > 0;
+                            if sized && u64::from(wide) * 20 > u64::from(tall) * 21 && !wide_sized {
+                                e.wide_artwork = url;
+                                wide_sized = true;
+                            } else if !sized && e.wide_artwork.is_empty() {
+                                e.wide_artwork = url;
+                            }
                         }
                     }
                     "psc:chapter" => {
@@ -518,6 +588,7 @@ pub fn read(xml: &str) -> Option<Feed> {
                     None => match (parent, here) {
                         ("channel", "title") if feed.title.is_empty() => feed.title = text.trim().to_string(),
                         ("channel", "itunes:author") if feed.author.is_empty() => feed.author = text.trim().to_string(),
+                        ("itunes:owner", "itunes:name") if feed.owner.is_empty() => feed.owner = text.trim().to_string(),
                         ("channel", "description" | "itunes:summary") if feed.about.is_empty() => {
                             feed.about = plain(&text);
                             feed.about_links = links_in(&text);
@@ -544,6 +615,25 @@ pub fn read(xml: &str) -> Option<Feed> {
         }
     }
     seen_channel.then_some(feed)
+}
+
+impl Feed {
+    pub fn makers(&self) -> String {
+        if self.people.is_empty() { self.author.clone() } else { self.people.join(", ") }
+    }
+
+    pub fn publisher(&self) -> Option<String> {
+        let makers = self.makers().to_lowercase();
+        let title = self.title.to_lowercase();
+        [&self.author, &self.owner]
+            .into_iter()
+            .map(|who| who.trim())
+            .find(|who| {
+                let low = who.to_lowercase();
+                !who.is_empty() && low != makers && low != title && !makers.contains(&low)
+            })
+            .map(str::to_string)
+    }
 }
 
 pub fn rhythm(episodes: &[Episode], today: chrono::NaiveDate) -> Option<String> {
@@ -669,6 +759,7 @@ mod tests {
 <channel>
   <title>Kessler &amp; Freunde</title>
   <itunes:author>Radio Rauschen</itunes:author>
+  <itunes:owner><itunes:name>Rauschen Netzwerk</itunes:name><itunes:email>a@example.org</itunes:email></itunes:owner>
   <description><![CDATA[<p>Über <b>Musik</b>.</p><p>Jeden Monat.</p>]]></description>
   <itunes:image href="https://example.org/show.jpg"/>
   <item>
@@ -696,6 +787,9 @@ mod tests {
   <item>
     <title>Bild und Ton</title>
     <itunes:image href="https://example.org/4.jpg"/>
+    <media:content medium="image" url="https://example.org/4-unsized.jpg"/>
+    <media:thumbnail height="720" width="1280" url="https://example.org/4-wide.jpg"/>
+    <media:thumbnail height="300" width="300" url="https://example.org/4-square.jpg"/>
     <enclosure url="https://example.org/4.m4v"/>
     <enclosure url="https://example.org/4.m4a" type="audio/mp4"/>
   </item>
@@ -703,17 +797,41 @@ mod tests {
 </rss>"#;
 
     #[test]
+    fn the_publisher_is_someone_else() {
+        let mut feed = Feed { title: "The Ezra Klein Show".into(), author: "New York Times Opinion".into(), ..Feed::default() };
+        assert_eq!(feed.publisher(), None, "the author is the makers line already");
+        feed.people = vec!["Ezra Klein".into()];
+        assert_eq!(feed.publisher().as_deref(), Some("New York Times Opinion"));
+        let alone = Feed { title: "Team Human".into(), author: "Douglas Rushkoff".into(), owner: "Douglas Rushkoff".into(), ..Feed::default() };
+        assert_eq!(alone.publisher(), None);
+        let npr = Feed { title: "Machine Gods".into(), author: "Some Host".into(), owner: "NPR".into(), ..Feed::default() };
+        assert_eq!(npr.publisher().as_deref(), Some("NPR"));
+    }
+
+    #[test]
+    fn html_entities_are_read_in_notes() {
+        assert_eq!(plain("we love hearing from you, write to&nbsp;vergecast@theverge.com"), "we love hearing from you, write to vergecast@theverge.com");
+        assert_eq!(plain("&bdquo;so&ldquo; &ndash; gut&hellip; f&uuml;r&nbsp;&nbsp;alle"), "„so“ – gut… für alle");
+        assert_eq!(plain("Silben&shy;trennung"), "Silbentrennung");
+        assert_eq!(plain("&unbekannt; bleibt"), "&unbekannt; bleibt");
+    }
+
+    #[test]
     fn a_feed_is_read() {
         let feed = read(FEED).expect("a channel");
         assert_eq!(feed.title, "Kessler & Freunde");
         assert_eq!(feed.author, "Radio Rauschen");
+        assert_eq!(feed.owner, "Rauschen Netzwerk");
+        assert_eq!(feed.publisher().as_deref(), Some("Rauschen Netzwerk"));
         assert_eq!(feed.about, "Über Musik.\nJeden Monat.");
         assert_eq!(feed.artwork, "https://example.org/show.jpg");
         assert_eq!(feed.episodes.len(), 3, "the ones without sound are left out, the video's too");
         let both = &feed.episodes[2];
         assert_eq!(both.url, "https://example.org/4.m4a", "of video and sound, the sound");
         assert_eq!(both.artwork, "https://example.org/4.jpg", "with its own picture");
+        assert_eq!(both.wide_artwork, "https://example.org/4-wide.jpg", "and a wider one beside it, not the square, before one without a size");
         assert!(feed.episodes[0].artwork.is_empty());
+        assert!(feed.episodes[0].wide_artwork.is_empty());
         let two = &feed.episodes[0];
         assert_eq!(two.title, "Folge 2: Harmonia");
         assert_eq!(two.id, "ep-2");

@@ -778,7 +778,14 @@ fn station_page(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                 let left = content_rect(area, m).left();
                 let rect = Rect::from_min_size(egui::pos2(left, area.top()), Vec2::splat(side));
                 station_picture(app, ui, rect, palette, &station);
-                let at = egui::pos2(left + side + BRIEF_GAP, area.top() + ((side - block) / 2.0).max(0.0));
+                let x_top = text::baseline(&name) - text::x_rise(ui, Role::ContentBold);
+                let last = to_facts + text::last_baseline(&facts);
+                let words_top = if block < side {
+                    text::optically_beside(rect.top(), rect.bottom(), x_top, last).max(area.top())
+                } else {
+                    area.top()
+                };
+                let at = egui::pos2(left + side + BRIEF_GAP, words_top);
                 let below = at + Vec2::new(0.0, to_facts);
                 ui.painter().galley(at, name, palette.ink);
                 ui.painter().galley(below, facts, palette.faint);
@@ -857,10 +864,17 @@ fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
             if let Some(path) = picture {
                 ui.add_space(BLOCK_AIR);
                 let inner = (width - m.marker_pad_x * 2.0).max(40.0);
-                let side = picture_side(inner, app.config.ui.info_picture_wide);
-                let (area, _) = ui.allocate_exact_size(Vec2::new(width, side), Sense::hover());
-                let rect = Rect::from_min_size(egui::pos2(content_rect(area, m).left(), area.top()), Vec2::splat(side));
-                picture_at(app, ui, rect, palette, &path, &show);
+                if app.config.ui.info_picture_wide {
+                    ui.horizontal(|ui| {
+                        ui.add_space(m.marker_pad_x);
+                        wide_picture(app, ui, inner, inner * super::artist_col::INFO_PICTURE_MOST_TALL, palette, &path);
+                    });
+                } else {
+                    let side = picture_side(inner);
+                    let (area, _) = ui.allocate_exact_size(Vec2::new(width, side), Sense::hover());
+                    let rect = Rect::from_min_size(egui::pos2(content_rect(area, m).left(), area.top()), Vec2::splat(side));
+                    picture_at(app, ui, rect, palette, &path, &show);
+                }
             }
             if let Some(about) = about.as_deref().filter(|a| !a.is_empty()) {
                 ui.add_space(BLOCK_AIR);
@@ -1004,12 +1018,16 @@ pub(super) fn picture_at(app: &GuiApp, ui: &Ui, rect: Rect, palette: &Palette, p
     }
 }
 
-pub(super) fn wide_picture(app: &GuiApp, ui: &mut Ui, width: f32, palette: &Palette, path: &std::path::Path) {
+pub(super) fn wide_picture(app: &GuiApp, ui: &mut Ui, width: f32, most_tall: f32, palette: &Palette, path: &std::path::Path) {
     let Some(decoded) = decoded_picture(ui.ctx(), path) else { return };
     if decoded.width() < 32 || decoded.height() < 32 {
         return;
     }
-    let height = (width * decoded.height() as f32 / decoded.width() as f32).min(width * 1.5);
+    let tall_per_wide = decoded.height() as f32 / decoded.width() as f32;
+    let (width, height) = if width * tall_per_wide > most_tall { (most_tall / tall_per_wide, most_tall) } else { (width, width * tall_per_wide) };
+    if width < PICTURE_LEAST {
+        return;
+    }
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let dithered = app.config.ui.cover_dither;
     let grain = crate::gui::dither::grain_for(rect.width(), ui.ctx().pixels_per_point(), app.config.ui.picture_fineness());
@@ -1017,19 +1035,27 @@ pub(super) fn wide_picture(app: &GuiApp, ui: &mut Ui, width: f32, palette: &Pale
     let negative = palette.screens_negative();
     let generation = PICTURES_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
     let id = egui::Id::unique(("wide-picture", path, grain, dithered, format!("{method:?}"), negative, generation));
-    let held = held_texture(id);
-    let handle = held.unwrap_or_else(|| {
+    let fresh = held_texture(id).or_else(|| {
         let image = if dithered {
             let tall = (grain as f32 * height / width).round() as u32;
-            crate::gui::covers::screened_wide(&decoded, grain, tall, method, negative)
+            screened_later(ui.ctx(), id, move || crate::gui::covers::screened_wide(&decoded, grain, tall, method, negative))?
         } else {
             let rgba = decoded.to_rgba8();
             egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw())
         };
         let handle = ui.ctx().load_texture("wide-picture", image, egui::TextureOptions::NEAREST);
         keep_texture(id, handle.clone());
-        handle
+        Some(handle)
     });
+    if let Some(handle) = &fresh {
+        LAST_WIDE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(path.to_path_buf(), (handle.clone(), std::time::Instant::now()));
+    }
+    let Some(handle) = fresh.or_else(|| LAST_WIDE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|last| last.get(path)).map(|(h, _)| h.clone())) else {
+        if dithered {
+            crate::gui::covers::halftone_ground(ui, rect, palette);
+        }
+        return;
+    };
     let tint = if dithered { palette.ink } else { Color32::WHITE };
     if dithered {
         crate::gui::covers::halftone_ground(ui, rect, palette);
@@ -1037,6 +1063,74 @@ pub(super) fn wide_picture(app: &GuiApp, ui: &mut Ui, width: f32, palette: &Pale
     let under = if dithered { palette.tones_under(tint, method.tones) } else { Vec::new() };
     crate::gui::covers::paint_screened(ui, rect, MARKER_RADIUS, handle.id(), &under, tint);
 }
+
+static LAST_WIDE: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, (egui::TextureHandle, std::time::Instant)>>> = std::sync::Mutex::new(None);
+
+static SCREENED: std::sync::Mutex<Option<std::collections::HashMap<egui::Id, Option<egui::ColorImage>>>> = std::sync::Mutex::new(None);
+
+static WANTED: std::sync::Mutex<Option<std::collections::HashMap<egui::Id, std::time::Instant>>> = std::sync::Mutex::new(None);
+
+const STILL_WANTED: std::time::Duration = std::time::Duration::from_millis(250);
+
+type ScreenJob = Box<dyn FnOnce() + Send>;
+
+static SCREENER: std::sync::Mutex<Option<std::sync::mpsc::Sender<ScreenJob>>> = std::sync::Mutex::new(None);
+
+pub(super) fn screened_later(
+    ctx: &egui::Context,
+    id: egui::Id,
+    make: impl FnOnce() -> egui::ColorImage + Send + 'static,
+) -> Option<egui::ColorImage> {
+    let mut wanted = WANTED.lock().unwrap_or_else(|e| e.into_inner());
+    let asked = wanted.get_or_insert_with(Default::default);
+    asked.insert(id, std::time::Instant::now());
+    asked.retain(|_, at| at.elapsed() < STILL_WANTED * 40);
+    drop(wanted);
+    {
+        let mut screened = SCREENED.lock().unwrap_or_else(|e| e.into_inner());
+        let known = screened.get_or_insert_with(Default::default);
+        match known.get(&id) {
+            Some(Some(_)) => return known.remove(&id).flatten(),
+            Some(None) => return None,
+            None => {
+                known.insert(id, None);
+            }
+        }
+    }
+    let ctx = ctx.clone();
+    let job: ScreenJob = Box::new(move || {
+        let still_wanted = WANTED.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|w| w.get(&id)).is_some_and(|at| at.elapsed() < STILL_WANTED);
+        let mut screened = SCREENED.lock().unwrap_or_else(|e| e.into_inner());
+        if !still_wanted {
+            if let Some(known) = screened.as_mut() {
+                known.remove(&id);
+            }
+            ctx.request_repaint();
+            return;
+        }
+        drop(screened);
+        let image = make();
+        SCREENED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id, Some(image));
+        ctx.request_repaint();
+    });
+    let mut sender = SCREENER.lock().unwrap_or_else(|e| e.into_inner());
+    let send = sender.get_or_insert_with(|| {
+        let (send, take) = std::sync::mpsc::channel::<ScreenJob>();
+        std::thread::Builder::new()
+            .name("kessler-screen".into())
+            .spawn(move || {
+                for job in take {
+                    job();
+                }
+            })
+            .ok();
+        send
+    });
+    let _ = send.send(job);
+    None
+}
+
+const PICTURE_LEAST: f32 = 32.0;
 
 const PICTURE_KEPT: u32 = 512;
 
@@ -1076,6 +1170,9 @@ fn prune_pictures() {
     if let Some(decoded) = DECODED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         decoded.retain(|_, d| !matches!(d, Decoding::Done(_, used) if unused(*used)));
     }
+    if let Some(last) = LAST_WIDE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        last.retain(|_, (_, used)| !unused(*used));
+    }
 }
 
 enum Decoding {
@@ -1086,7 +1183,7 @@ enum Decoding {
 
 static DECODED: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Decoding>>> = std::sync::Mutex::new(None);
 
-fn decoded_picture(ctx: &egui::Context, path: &std::path::Path) -> Option<std::sync::Arc<image::DynamicImage>> {
+pub(super) fn decoded_picture(ctx: &egui::Context, path: &std::path::Path) -> Option<std::sync::Arc<image::DynamicImage>> {
     let mut decoded = DECODED.lock().unwrap_or_else(|e| e.into_inner());
     let known = decoded.get_or_insert_with(Default::default);
     match known.get_mut(path) {
@@ -1155,6 +1252,12 @@ fn decode_now(path: std::path::PathBuf, ctx: &egui::Context) {
     };
     DECODED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(path, said);
     ctx.request_repaint();
+}
+
+pub(super) fn forget_decoded(path: &std::path::Path) {
+    if let Some(decoded) = DECODED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        decoded.remove(path);
+    }
 }
 
 pub(in crate::gui) fn forget_decoded_pictures() {

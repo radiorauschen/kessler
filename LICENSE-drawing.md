@@ -25,6 +25,9 @@ whatever drawing is added later. at present:
 - `bundle/drawing-off-scan.webp` and `src/gui/drawing-off.png` — the drawing
   over „alles ist ausgeschaltet", its scan and its mask
 - `docs/screenshots/drawing-2.png` — the drawing at the foot of the readme
+- `bundle/version-1.5-scan.webp` and `docs/screenshots/version-1.5.png` —
+  the drawing for version 1.5, shown in its release notes: its scan and its
+  tinted copy
 - `bundle/dmg/seesaw-scan.webp`, `bundle/dmg/arrow-scan.webp`,
   `bundle/dmg/background.png` and `background@2x.png` — the disk image's
   picture, its scans and what is made from them
