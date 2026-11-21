@@ -36,6 +36,8 @@ pub struct CoverCache {
     reader: Option<std::sync::mpsc::Sender<Job>>,
     read: Option<std::sync::mpsc::Receiver<Read>>,
     waiting: usize,
+    arrived: VecDeque<Read>,
+    uploads: usize,
     dressing: u64,
     fit: u32,
 }
@@ -56,6 +58,8 @@ impl CoverCache {
             reader: None,
             read: None,
             waiting: 0,
+            arrived: VecDeque::new(),
+            uploads: UPLOADS_PER_FRAME,
             dressing: 0,
             fit: artwork::TILE,
         }
@@ -91,6 +95,7 @@ impl CoverCache {
 
     fn begin_frame(&mut self) {
         self.budget = LOADS_PER_FRAME;
+        self.uploads = UPLOADS_PER_FRAME;
         self.more_to_come = false;
         self.wanted.clear();
     }
@@ -175,8 +180,9 @@ impl CoverCache {
         let Some(read) = &self.read else {
             return;
         };
-        let arrived: Vec<Read> = read.try_iter().collect();
-        for cover in arrived {
+        self.arrived.extend(read.try_iter());
+        while self.uploads > 0 {
+            let Some(cover) = self.arrived.pop_front() else { break };
             if cover.dressing != self.dressing {
                 continue;
             }
@@ -191,14 +197,20 @@ impl CoverCache {
                     } else {
                         egui::TextureOptions::LINEAR
                     };
+                    self.uploads -= 1;
                     Slot::Ready(ctx.load_texture(format!("cover-{:016x}", cover.key), image, filter))
                 }
                 None => Slot::Missing,
             };
             self.slots.insert(cover.key, slot);
         }
+        if !self.arrived.is_empty() {
+            self.more_to_come = true;
+        }
     }
 }
+
+const UPLOADS_PER_FRAME: usize = 4;
 
 struct Job {
     key: u64,

@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
 
 pub mod feed;
+pub mod marks;
 pub mod query;
 
 pub use feed::{Chapter, Episode, Feed};
@@ -527,12 +528,28 @@ pub fn fetch_feed(url: &str) -> Result<Feed, String> {
 pub struct Validators {
     pub etag: String,
     pub modified: String,
+    pub digest: String,
 }
 
 impl Validators {
     fn any(&self) -> bool {
-        !self.etag.is_empty() || !self.modified.is_empty()
+        !self.etag.is_empty() || !self.modified.is_empty() || !self.digest.is_empty()
     }
+}
+
+fn feed_digest(text: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<lastBuildDate>") {
+        rest[..start].hash(&mut hasher);
+        rest = match rest[start..].find("</lastBuildDate>") {
+            Some(end) => &rest[start + end + "</lastBuildDate>".len()..],
+            None => "",
+        };
+    }
+    rest.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 #[derive(Debug)]
@@ -599,8 +616,12 @@ fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, St
     if answers.last().is_some_and(|(code, _)| *code == 304) {
         return Ok(Reading::Unchanged);
     }
-    let mut moved = moved_for_good(url, &answers);
     let text = String::from_utf8_lossy(&output.stdout);
+    let digest = feed_digest(&text);
+    let mut moved = moved_for_good(url, &answers);
+    if moved.is_none() && since.is_some_and(|since| !since.digest.is_empty() && since.digest == digest) {
+        return Ok(Reading::Unchanged);
+    }
     let parsing = std::time::Instant::now();
     let feed = feed::read(&text).ok_or_else(|| tr!("kein podcast-feed: {}", url))?;
     crate::player::watch::note(format!(
@@ -611,7 +632,7 @@ fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, St
     ));
     let last = answers.last().map(|(_, heads)| heads.clone()).unwrap_or_default();
     let head = |name: &str| last.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default();
-    let validators = Validators { etag: head("etag"), modified: head("last-modified") };
+    let validators = Validators { etag: head("etag"), modified: head("last-modified"), digest };
     let new_url = feed.new_url.trim();
     if moved.is_none() && new_url.starts_with("http") && new_url != url {
         moved = Some(new_url.to_string());
@@ -667,18 +688,22 @@ pub fn cached_feed_path(url: &str) -> PathBuf {
 struct KeptFeed {
     validators: Validators,
     feed: Feed,
+    read: u32,
 }
+
+const FEED_READ: u32 = 1;
 
 pub fn read_cached_feed(url: &str) -> Option<(Feed, Validators)> {
     let text = std::fs::read_to_string(cached_feed_path(url)).ok()?;
     let kept: KeptFeed = toml::from_str(&text).ok()?;
-    Some((kept.feed, kept.validators))
+    let validators = if kept.read >= FEED_READ { kept.validators } else { Validators::default() };
+    Some((kept.feed, validators))
 }
 
 pub fn write_cached_feed(url: &str, feed: Feed, validators: Validators) {
     let path = cached_feed_path(url);
     std::thread::spawn(move || {
-        let Ok(text) = toml::to_string(&KeptFeed { validators, feed }) else { return };
+        let Ok(text) = toml::to_string(&KeptFeed { validators, feed, read: FEED_READ }) else { return };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -826,15 +851,18 @@ pub fn fetch_episode(url: &str, bytes: u64) -> mpsc::Receiver<Fetching> {
             let _ = tx.send(Fetching::Failed(e.to_string()));
             return;
         }
-        let child = Command::new("curl")
-            .args(["--connect-timeout", "15", "--speed-limit", "1", "--speed-time", "60"])
-            .args(["--silent", "--show-error", "--fail", "--location", "--output"])
-            .arg(&part)
-            .arg(&url)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn();
-        let mut child = match child {
+        let start = |go_on: bool| {
+            let mut command = Command::new("curl");
+            command
+                .args(["--connect-timeout", "15", "--speed-limit", "1", "--speed-time", "60"])
+                .args(["--silent", "--show-error", "--fail", "--location"]);
+            if go_on {
+                command.args(["--continue-at", "-"]);
+            }
+            command.arg("--output").arg(&part).arg(&url).stdout(Stdio::null()).stderr(Stdio::piped()).spawn()
+        };
+        let mut going_on = part.is_file();
+        let mut child = match start(going_on) {
             Ok(child) => child,
             Err(e) => {
                 let _ = tx.send(Fetching::Failed(tr!("curl lässt sich nicht starten: {}", e)));
@@ -843,6 +871,18 @@ pub fn fetch_episode(url: &str, bytes: u64) -> mpsc::Receiver<Fetching> {
         };
         loop {
             match child.try_wait() {
+                Ok(Some(status)) if going_on && status.code() == Some(CURL_NO_RANGES) => {
+                    going_on = false;
+                    let _ = std::fs::remove_file(&part);
+                    match start(false) {
+                        Ok(again) => child = again,
+                        Err(e) => {
+                            let _ = tx.send(Fetching::Failed(tr!("curl lässt sich nicht starten: {}", e)));
+                            return;
+                        }
+                    }
+                    continue;
+                }
                 Ok(Some(status)) => {
                     let said = if status.success() {
                         match std::fs::rename(&part, &target) {
@@ -857,7 +897,6 @@ pub fn fetch_episode(url: &str, bytes: u64) -> mpsc::Receiver<Fetching> {
                         if let Some(mut err) = child.stderr.take() {
                             let _ = std::io::Read::read_to_string(&mut err, &mut why);
                         }
-                        let _ = std::fs::remove_file(&part);
                         Fetching::Failed(if why.trim().is_empty() { tr!("{} antwortet nicht", url) } else { why.trim().to_string() })
                     };
                     let _ = tx.send(said);
@@ -899,6 +938,31 @@ pub fn chapters_in_file(file: &Path) -> Vec<Chapter> {
     feed::chapters_in_id3(&tag)
 }
 
+const CURL_NO_RANGES: i32 = 33;
+
+const PART_KEPT_DAYS: u64 = 7;
+
+pub fn sweep_parts() {
+    let Ok(dir) = std::fs::read_dir(cache_dir()) else { return };
+    let limit = std::time::Duration::from_secs(PART_KEPT_DAYS * 86_400);
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age > limit);
+        if is_part(&path) && old {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+fn standing_still(entry: &std::fs::DirEntry) -> bool {
+    entry
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|at| at.elapsed().ok())
+        .is_some_and(|age| age > std::time::Duration::from_secs(120))
+}
+
 pub fn forget(file: &Path) {
     fetched_changed();
     if file.starts_with(cache_dir()) {
@@ -911,7 +975,7 @@ pub fn forget_all(but: Option<&Path>) {
     let Ok(dir) = std::fs::read_dir(cache_dir()) else { return };
     for entry in dir.flatten() {
         let path = entry.path();
-        if Some(path.as_path()) != but && !is_part(&path) {
+        if Some(path.as_path()) != but && (!is_part(&path) || standing_still(&entry)) {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -996,17 +1060,88 @@ pub fn fetch_artwork(show: &Show, artwork: &str) {
 pub const PICTURE_SIDE: u32 = 600;
 
 pub fn smaller_picture_url(url: &str) -> String {
-    let Some(slash) = url.rfind('/') else { return url.to_string() };
-    let (head, last) = url.split_at(slash + 1);
-    if !head.contains("mzstatic.com") {
-        return url.to_string();
+    let side = PICTURE_SIDE;
+    let (address, query) = match url.split_once('?') {
+        Some((a, q)) => (a, Some(q)),
+        None => (url, None),
+    };
+    let host = address.split("://").nth(1).and_then(|rest| rest.split('/').next()).unwrap_or_default();
+    let sized_part = |at: &str| -> Option<String> {
+        let mut parts: Vec<&str> = address.split('/').collect();
+        let n = parts.len();
+        let at_index = if at == "last" { n.checked_sub(1)? } else { n.checked_sub(3)? };
+        let part = parts[at_index];
+        let (size, rest) = match part.split_once("bb.") {
+            Some((size, rest)) if at == "last" => (size, format!("bb.{rest}")),
+            _ if at != "last" => (part, String::new()),
+            _ => return None,
+        };
+        let (w, h) = size.split_once('x')?;
+        if w.parse::<u32>().is_err() || h.parse::<u32>().is_err() {
+            return None;
+        }
+        let made = if at == "last" { format!("{side}x{side}bb.jpg") } else { format!("{side}x{side}{rest}") };
+        parts[at_index] = &made;
+        let mut out = parts.join("/");
+        if let Some(q) = query {
+            out.push('?');
+            out.push_str(q);
+        }
+        Some(out)
+    };
+    let with_params = |sets: &[(&str, String)]| -> String {
+        let mut pairs: Vec<(String, String)> = query
+            .unwrap_or_default()
+            .split('&')
+            .filter(|p| !p.is_empty())
+            .map(|p| match p.split_once('=') {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => (p.to_string(), String::new()),
+            })
+            .collect();
+        for (key, value) in sets {
+            match pairs.iter_mut().find(|(k, _)| k == key) {
+                Some(pair) => pair.1 = value.clone(),
+                None => pairs.push((key.to_string(), value.clone())),
+            }
+        }
+        let joined: Vec<String> = pairs.into_iter().map(|(k, v)| if v.is_empty() { k } else { format!("{k}={v}") }).collect();
+        format!("{address}?{}", joined.join("&"))
+    };
+    let signed = query.is_some_and(|q| q.split('&').any(|p| p.starts_with("s=")));
+    if host.ends_with("mzstatic.com") {
+        sized_part("last").map(|u| u.split('?').next().unwrap_or(&u).to_string()).unwrap_or_else(|| url.to_string())
+    } else if host == "image.simplecastcdn.com" {
+        sized_part("before").unwrap_or_else(|| url.to_string())
+    } else if host.ends_with(".imgix.net") && !signed {
+        with_params(&[("max-w", side.to_string()), ("max-h", side.to_string())])
+    } else if host == "open-images.acast.com" {
+        with_params(&[("height", side.to_string())])
+    } else if host == "media.npr.org" && query.is_some_and(|q| q.contains("s=")) {
+        with_params(&[("s", side.to_string())])
+    } else if host == "images.squarespace-cdn.com" {
+        with_params(&[("format", "750w".into())])
+    } else if host == "substackcdn.com" && address.contains("/image/fetch/") {
+        let mut out = String::new();
+        for (n, part) in address.split('/').enumerate() {
+            if n > 0 {
+                out.push('/');
+            }
+            if part.split(',').any(|p| p.starts_with("w_")) {
+                let changed: Vec<String> = part.split(',').filter(|p| !p.starts_with("h_")).map(|p| if p.starts_with("w_") { format!("w_{side}") } else { p.to_string() }).collect();
+                out.push_str(&changed.join(","));
+            } else {
+                out.push_str(part);
+            }
+        }
+        if let Some(q) = query {
+            out.push('?');
+            out.push_str(q);
+        }
+        out
+    } else {
+        url.to_string()
     }
-    let Some((size, _)) = last.split_once("bb.") else { return url.to_string() };
-    let Some((w, h)) = size.split_once('x') else { return url.to_string() };
-    if w.parse::<u32>().is_err() || h.parse::<u32>().is_err() {
-        return url.to_string();
-    }
-    format!("{head}{PICTURE_SIDE}x{PICTURE_SIDE}bb.jpg")
 }
 
 fn picture_worker(url: String, path: PathBuf) {
@@ -1045,7 +1180,9 @@ pub fn give_back_memory() {
 }
 
 fn save_picture(url: &str, path: &Path) {
-    let Ok(bytes) = crate::library::coverart::fetch(&smaller_picture_url(url)) else { return };
+    let smaller = smaller_picture_url(url);
+    let picture = |address: &str| crate::library::coverart::fetch(address).ok().filter(|b| image::guess_format(b).is_ok());
+    let Some(bytes) = picture(&smaller).or_else(|| (smaller != url).then(|| picture(url)).flatten()) else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -1129,6 +1266,16 @@ pub fn cache_size() -> u64 {
 mod tests {
 
     #[test]
+    fn a_feed_built_anew_but_the_same_is_the_same() {
+        let a = "<rss><channel><lastBuildDate>Mon, 01 Jan 2024</lastBuildDate><item>1</item></channel></rss>";
+        let b = "<rss><channel><lastBuildDate>Tue, 02 Jan 2024</lastBuildDate><item>1</item></channel></rss>";
+        let c = "<rss><channel><lastBuildDate>Tue, 02 Jan 2024</lastBuildDate><item>1</item><item>2</item></channel></rss>";
+        assert_eq!(feed_digest(a), feed_digest(b));
+        assert_ne!(feed_digest(b), feed_digest(c));
+        assert!(Validators { digest: feed_digest(a), ..Validators::default() }.any());
+    }
+
+    #[test]
     fn answers_and_moves_are_read() {
         let said = "HTTP/1.1 301 Moved Permanently\r\nLocation: /new/feed.xml\r\n\r\nHTTP/2 200\r\netag: \"abc\"\r\nlast-modified: Mon, 01 Jan 2024 10:00:00 GMT\r\n\r\n";
         let answers = answers_in(said);
@@ -1155,10 +1302,13 @@ mod tests {
             older: 7,
             ..Default::default()
         };
-        let kept = KeptFeed { validators: Validators { etag: "e".into(), modified: String::new() }, feed: feed.clone() };
+        let kept = KeptFeed { validators: Validators { etag: "e".into(), modified: String::new(), digest: String::new() }, feed: feed.clone(), read: FEED_READ };
         let back: KeptFeed = toml::from_str(&toml::to_string(&kept).expect("written")).expect("read");
         assert_eq!(back.feed, feed);
         assert_eq!(back.validators.etag, "e");
+        assert_eq!(back.read, FEED_READ);
+        let old: KeptFeed = toml::from_str("[validators]\netag = \"e\"\n").expect("read");
+        assert_eq!(old.read, 0);
     }
     use super::*;
 
@@ -1238,6 +1388,26 @@ mod tests {
         );
         assert_eq!(smaller_picture_url("https://example.org/cover/3000x3000bb.jpg"), "https://example.org/cover/3000x3000bb.jpg");
         assert_eq!(smaller_picture_url("https://is1-ssl.mzstatic.com/image/x/cover.png"), "https://is1-ssl.mzstatic.com/image/x/cover.png");
+        let side = PICTURE_SIDE;
+        assert_eq!(
+            smaller_picture_url("https://image.simplecastcdn.com/images/a1/b2/3000x3000/1/image.jpg?aid=rss_feed"),
+            format!("https://image.simplecastcdn.com/images/a1/b2/{side}x{side}/1/image.jpg?aid=rss_feed")
+        );
+        assert_eq!(
+            smaller_picture_url("https://megaphone.imgix.net/podcasts/x/image/cover.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress"),
+            format!("https://megaphone.imgix.net/podcasts/x/image/cover.jpg?ixlib=rails-4.3.1&max-w={side}&max-h={side}&fit=crop&auto=format,compress")
+        );
+        let signed = "https://x.imgix.net/a.jpg?w=3000&s=abc123";
+        assert_eq!(smaller_picture_url(signed), signed);
+        assert_eq!(smaller_picture_url("https://open-images.acast.com/shows/1/cover.jpg?height=1500"), format!("https://open-images.acast.com/shows/1/cover.jpg?height={side}"));
+        assert_eq!(smaller_picture_url("https://media.npr.org/assets/img/a.jpg?s=1400&c=66&f=jpg"), format!("https://media.npr.org/assets/img/a.jpg?s={side}&c=66&f=jpg"));
+        assert_eq!(smaller_picture_url("https://images.squarespace-cdn.com/content/a.jpg?format=1500w"), "https://images.squarespace-cdn.com/content/a.jpg?format=750w");
+        assert_eq!(
+            smaller_picture_url("https://substackcdn.com/image/fetch/w_1400,h_1400,c_fill,f_auto/https%3A%2F%2Fx.png"),
+            format!("https://substackcdn.com/image/fetch/w_{side},c_fill,f_auto/https%3A%2F%2Fx.png")
+        );
+        let transistor = "https://img.transistor.fm/abc/rs:fill:3000:3000:1/g:ce/aHR0.jpg";
+        assert_eq!(smaller_picture_url(transistor), transistor);
     }
 
     #[test]

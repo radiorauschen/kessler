@@ -389,7 +389,7 @@ pub fn sheet_inset_top(side: f32, titlebar: f32) -> f32 {
     side.max(titlebar + 6.0)
 }
 
-pub const FADE_HEIGHT: f32 = 28.0;
+pub const FADE_HEIGHT: f32 = 20.0;
 
 pub fn family_regular() -> FontFamily {
     FontFamily::Proportional
@@ -1075,6 +1075,26 @@ const fn rgb(hex: u32) -> Color32 {
 
 impl Palette {
     pub fn for_theme(theme: Theme) -> Self {
+        let drawn = Self::as_drawn(theme);
+        if matches!(theme, Theme::Rgb | Theme::RgbHell) {
+            return drawn;
+        }
+        drawn.plates_retuned()
+    }
+
+    fn plates_retuned(self) -> Self {
+        let mix = |a: Color32, b: Color32, t: f32| {
+            let (a, b) = (Lab::of(a), Lab::of(b));
+            Lab { l: a.l + (b.l - a.l) * t, a: a.a + (b.a - a.a) * t, b: a.b + (b.b - a.b) * t }.colour()
+        };
+        Palette {
+            marker: mix(self.marker, self.ground, MARKER_QUIETER),
+            hover: mix(self.ground, self.hover, HOVER_STRONGER),
+            ..self
+        }
+    }
+
+    fn as_drawn(theme: Theme) -> Self {
         match theme {
             Theme::Eigenes => custom().side(false).palette(),
             Theme::EigenesDunkel => custom().side(true).palette(),
@@ -1988,7 +2008,10 @@ impl Palette {
     }
 }
 
-pub const MARKED_LEAST: f32 = 1.4;
+pub const MARKED_LEAST: f32 = 1.3;
+
+const MARKER_QUIETER: f32 = 0.15;
+const HOVER_STRONGER: f32 = 1.4;
 pub const FAINT_LEAST: f32 = 2.2;
 pub const ON_PLATE_LEAST: f32 = 3.0;
 
@@ -2857,7 +2880,9 @@ fn label_sets_for(key: &str) -> Vec<String> {
 
 static LABEL_SETS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
-static LABEL_FORMS: std::sync::RwLock<Vec<(char, char)>> = std::sync::RwLock::new(Vec::new());
+static LABEL_FORMS: std::sync::RwLock<LabelForms> = std::sync::RwLock::new(Vec::new());
+
+type LabelForms = Vec<(char, char)>;
 
 const LABEL_FORMS_AT: u32 = 0xF700;
 
@@ -3016,7 +3041,7 @@ pub fn style_sets(data: &[u8]) -> Vec<StyleSet> {
     sets
 }
 
-fn with_alternates(data: &[u8], wanted: &Alternates) -> Option<Vec<u8>> {
+fn with_alternates(data: &[u8], wanted: &Alternates, label_sets: &[String]) -> Option<(Vec<u8>, LabelForms)> {
     use skrifa::MetadataProvider as _;
     let swap: std::collections::HashMap<u32, u32> = style_sets(data)
         .into_iter()
@@ -3027,7 +3052,6 @@ fn with_alternates(data: &[u8], wanted: &Alternates) -> Option<Vec<u8>> {
             swap
         });
     let font = skrifa::FontRef::new(data).ok()?;
-    let label_sets = LABEL_SETS.read().map(|held| held.clone()).unwrap_or_default();
     let mut forms: Vec<(char, char, u32)> = Vec::new();
     if !label_sets.is_empty() {
         let typed: Vec<(char, u32)> = font.charmap().mappings().filter_map(|(code, glyph)| Some((char::from_u32(code)?, glyph.to_u32()))).collect();
@@ -3044,9 +3068,6 @@ fn with_alternates(data: &[u8], wanted: &Alternates) -> Option<Vec<u8>> {
             .enumerate()
             .filter_map(|(i, (c, to))| Some((c, char::from_u32(LABEL_FORMS_AT + i as u32)?, to)))
             .collect();
-        if let Ok(mut held) = LABEL_FORMS.write() {
-            *held = forms.iter().map(|&(c, pua, _)| (c, pua)).collect();
-        }
     }
     if swap.is_empty() && forms.is_empty() {
         return None;
@@ -3067,7 +3088,7 @@ fn with_alternates(data: &[u8], wanted: &Alternates) -> Option<Vec<u8>> {
     let mut builder = write_fonts::FontBuilder::new();
     builder.add_table(&cmap).ok()?;
     builder.copy_missing_tables(font);
-    Some(builder.build())
+    Some((builder.build(), forms.iter().map(|&(c, pua, _)| (c, pua)).collect()))
 }
 
 fn axis_range(data: &[u8], tag: &[u8; 4]) -> Option<(f32, f32)> {
@@ -3125,7 +3146,16 @@ pub fn install_fonts(
     };
 
     let wanted = ALTERNATES.read().map_or_else(|_| Alternates::default(), |held| held.clone());
-    let altered = |data: Vec<u8>| with_alternates(&data, &wanted).unwrap_or(data);
+    let label_sets = LABEL_SETS.read().map(|held| held.clone()).unwrap_or_default();
+    let altered = |data: Vec<u8>| match with_alternates(&data, &wanted, &label_sets) {
+        Some((altered, forms)) => {
+            if let Ok(mut held) = LABEL_FORMS.write() {
+                *held = forms;
+            }
+            altered
+        }
+        None => data,
+    };
     let chosen: Option<LoadedPair> = regular
         .and_then(|r| std::fs::read(r).ok().map(|data| (r.to_string(), data)))
         .map(|(r_path, r_data)| {
@@ -4256,10 +4286,10 @@ mod tests {
         let ids: Vec<&str> = sets.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains(&"ss01:g") && ids.contains(&"zero:0"), "{ids:?}");
         assert!(sets.iter().find(|s| s.id == "ss01:g").unwrap().shows.contains(&'ğ'));
-        assert!(with_alternates(&asap, &Alternates::default()).is_none(), "nothing asked, nothing changed");
+        assert!(with_alternates(&asap, &Alternates::default(), &[]).is_none(), "nothing asked, nothing changed");
 
         let both = Alternates { sets: vec!["ss01:g".into(), "zero:0".into()] };
-        let altered = with_alternates(&asap, &both).expect("a face");
+        let (altered, _) = with_alternates(&asap, &both, &[]).expect("a face");
         let glyph = |data: &[u8], c: char| skrifa::FontRef::new(data).unwrap().charmap().map(c).unwrap();
         let names = |data: &[u8], c: char| {
             let font = skrifa::FontRef::new(data).unwrap();
@@ -4273,7 +4303,7 @@ mod tests {
         }
         assert!(axis_range(&altered, b"wght").is_some() && axis_range(&altered, b"wdth").is_some());
 
-        let only_g = with_alternates(&asap, &Alternates { sets: vec!["ss01:g".into()] }).unwrap();
+        let only_g = with_alternates(&asap, &Alternates { sets: vec!["ss01:g".into()] }, &[]).unwrap().0;
         assert_eq!(names(&only_g, '0'), "zero");
     }
 
@@ -4288,7 +4318,7 @@ mod tests {
         for id in ["ss01:a", "ss02:g", "ss03:t", "ss04:A", "ss04:w", "ss05:G", "ss06:J", "ss09:3", "ss13:"] {
             assert!(ids.contains(&id), "{id} in {ids:?}");
         }
-        let a_only = with_alternates(&muto, &Alternates { sets: vec!["ss01:a".into()] }).unwrap();
+        let a_only = with_alternates(&muto, &Alternates { sets: vec!["ss01:a".into()] }, &[]).unwrap().0;
         let glyph = |data: &[u8], c: char| skrifa::FontRef::new(data).unwrap().charmap().map(c).unwrap();
         assert_ne!(glyph(&a_only, 'a'), glyph(&muto, 'a'));
         assert_eq!(glyph(&a_only, 'g'), glyph(&muto, 'g'));
@@ -4310,16 +4340,12 @@ mod tests {
             let glyph = skrifa::FontRef::new(data).unwrap().charmap().map(c).unwrap();
             names.get(glyph).unwrap().as_str().to_string()
         };
-        let both = with_alternates(&muto, &Alternates { sets: vec!["zero:0".into(), "ss10:0".into()] }).unwrap();
+        let both = with_alternates(&muto, &Alternates { sets: vec!["zero:0".into(), "ss10:0".into()] }, &[]).unwrap().0;
         assert_eq!(named(&both, '0'), "zero.zero.ss10");
-        *LABEL_SETS.write().unwrap() = label_sets_for("muto");
-        let labelled = with_alternates(&muto, &Alternates::default()).unwrap();
-        let forms = LABEL_FORMS.read().unwrap().clone();
+        let (labelled, forms) = with_alternates(&muto, &Alternates::default(), &label_sets_for("muto")).unwrap();
         let open = forms.iter().find(|(c, _)| *c == 'a').expect("a label form for a").1;
         assert_eq!(named(&labelled, open), "a.ss01");
         assert_eq!(named(&labelled, 'a'), "a");
-        LABEL_SETS.write().unwrap().clear();
-        LABEL_FORMS.write().unwrap().clear();
     }
 
     #[test]

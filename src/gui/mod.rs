@@ -624,6 +624,8 @@ pub struct GuiApp {
     pub sets_open: bool,
     pub sets_offered: Option<(String, Vec<theme::StyleSet>)>,
     pub update: Option<update::Check>,
+    update_told: bool,
+    prewarmed: Option<(u32, String, bool)>,
     pub backup_said: Option<String>,
     pub naming_device: Option<tagedit::Entry>,
     pub forget_asked: Option<usize>,
@@ -659,6 +661,12 @@ pub struct GuiApp {
     reading: library::Reading,
     mark_art: library::FieldArt,
     pub(super) mark_picture: Option<egui::TextureHandle>,
+    pub(super) touch_scope: scope::Scope,
+    meter: library::Meter,
+    touch_art: library::FieldArt,
+    pub(super) touch_sent: Option<u64>,
+    pub(super) touch_mode: Option<(bool, bool, bool, bool)>,
+    touch_meter: library::MeterDots,
     pub(super) mark_paused: Option<(MarkKey, egui::TextureHandle)>,
     pub saver: saver::Saver,
     pub source: Source,
@@ -757,6 +765,7 @@ pub struct GuiApp {
     pub on_air: Option<crate::radio::Station>,
     pub station_import: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
     radio_typed_at: Option<std::time::Instant>,
+    music_focus: Option<Column>,
     sides_left: [Option<Sides>; 4],
     radio_heard: Option<Box<crate::radio::heard::Heard>>,
     pub aired: Vec<crate::radio::Aired>,
@@ -877,6 +886,10 @@ impl GuiApp {
         let artwork_dir = config.artwork_dir();
         let heard = player.heard();
 
+        let ask_at_start = config.ui.update_on_start;
+        if config.ui.podcasts {
+            std::thread::spawn(crate::podcast::sweep_parts);
+        }
         let mut app = Self {
             db,
             config,
@@ -899,7 +912,9 @@ impl GuiApp {
             licenses_open: false,
             sets_open: false,
             sets_offered: None,
-            update: None,
+            update: ask_at_start.then(update::Check::start),
+            update_told: false,
+            prewarmed: None,
             forget_asked: None,
             backup_said: None,
             naming_device: None,
@@ -933,12 +948,19 @@ impl GuiApp {
             reading: library::Reading::default(),
             mark_art: library::FieldArt::default(),
             mark_picture: None,
+            touch_scope: scope::Scope::default(),
+            meter: library::Meter::default(),
+            touch_art: library::FieldArt::default(),
+            touch_sent: None,
+            touch_mode: None,
+            touch_meter: library::MeterDots::new(),
             mark_paused: None,
             saver: saver::Saver::default(),
             radio: None,
             on_air: None,
             station_import: None,
             radio_typed_at: None,
+            music_focus: None,
             sides_left: [None; 4],
             radio_heard: None,
             aired: Vec::new(),
@@ -1472,9 +1494,59 @@ impl GuiApp {
         self.frame_started = Some(std::time::Instant::now());
     }
 
+    fn say_a_newer_version(&mut self, ctx: &egui::Context) {
+        if self.update_told || !self.config.ui.update_on_start {
+            return;
+        }
+        let Some(check) = self.update.as_mut() else { return };
+        if check.tend() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            return;
+        }
+        self.update_told = true;
+        if let Some(update::Answer::Newer { version, .. }) = check.answer.clone() {
+            self.set_notice(tr!("kessler {} ist da — menü → allgemein → neue version", version));
+        }
+    }
+
     fn lap(&mut self, what: &'static str) {
         if let Some(measure) = self.measure.as_mut() {
             measure.lap(what);
+        }
+    }
+
+    fn drawn_part(&mut self, what: &'static str) {
+        if let Some(measure) = self.measure.as_mut() {
+            measure.drawn(what);
+        }
+    }
+
+    fn note_pressed(&mut self, ctx: &egui::Context) {
+        let Some(measure) = self.measure.as_mut() else { return };
+        let said: Vec<String> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                        let held = [
+                            (modifiers.command, "cmd+"),
+                            (modifiers.ctrl && !modifiers.command, "ctrl+"),
+                            (modifiers.alt, "alt+"),
+                            (modifiers.shift, "shift+"),
+                        ];
+                        let held: String = held.iter().filter(|(on, _)| *on).map(|(_, w)| *w).collect();
+                        Some(format!("{held}{}", key.name()))
+                    }
+                    egui::Event::PointerButton { pressed: true, button, .. } => Some(format!("{button:?}").to_lowercase()),
+                    egui::Event::MouseWheel { .. } => Some("rad".to_string()),
+                    _ => None,
+                })
+                .collect()
+        });
+        if !said.is_empty() {
+            let mut said = said;
+            said.dedup();
+            measure.pressed(said.join(" "));
         }
     }
 }
@@ -1531,6 +1603,7 @@ impl eframe::App for GuiApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.hold_the_frame_rate();
         keep_the_wheel_where_it_turned(ctx);
+        self.say_a_newer_version(ctx);
         crate::media::set_notify(self.config.ui.notify, ctx.input(|i| i.viewport().focused.unwrap_or(true)));
         #[cfg(target_os = "linux")]
         crate::ipod::udisks::AUTO.store(self.config.ipod_mount, std::sync::atomic::Ordering::Relaxed);
@@ -1561,6 +1634,7 @@ impl eframe::App for GuiApp {
         if !self.media_started {
             self.media_started = true;
             crate::media::start();
+            crate::media::route_start();
         }
         self.lap("medien-start");
         let seen = ctx.input(|i| {
@@ -1668,6 +1742,7 @@ impl eframe::App for GuiApp {
         {
             self.untouched = false;
         }
+        self.note_pressed(ctx);
         if let Err(e) = self.handle_keys(ctx) {
             self.set_status(format!("{e}"));
         }
@@ -1751,12 +1826,18 @@ impl eframe::App for GuiApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let warm_for = (ui.ctx().pixels_per_point().to_bits(), self.config.ui.typeface.clone(), self.config.ui.capitals);
+        if self.prewarmed.as_ref() != Some(&warm_for) {
+            text::prewarm(ui.ctx(), self.config.ui.capitals);
+            self.prewarmed = Some(warm_for);
+        }
         if self.drawn_with.is_empty() {
             self.drawn_with = drawn_with(frame);
         }
         let full = ui.available_rect_before_wrap();
         ui.painter().rect_filled(full, 0.0, self.palette.ground);
         library::render(self, ui);
+        self.drawn_part("schoner und überblendung");
         if self.measure.is_some() {
             let doing = self.doing(ui.ctx());
             let asked = ui.ctx().repaint_causes();
@@ -1868,6 +1949,7 @@ pub fn run(config: Config) -> Result<()> {
     let options = eframe::NativeOptions {
         viewport,
         renderer: renderer_wanted(),
+        wgpu_options: wgpu_wanted(),
         ..Default::default()
     };
 
@@ -1897,6 +1979,14 @@ fn renderer_wanted() -> eframe::Renderer {
             _ => eframe::Renderer::Glow,
         }
     }
+}
+
+fn wgpu_wanted() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut wanted = eframe::egui_wgpu::WgpuConfiguration::default();
+    if cfg!(target_os = "macos") {
+        wanted.surface = eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY;
+    }
+    wanted
 }
 
 fn drawn_with(frame: &eframe::Frame) -> String {

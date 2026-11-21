@@ -25,6 +25,7 @@ mod switch;
 mod picture;
 mod field_art;
 mod rowmenu;
+mod meter;
 mod podcast_col;
 
 use rows::*;
@@ -46,6 +47,8 @@ use picture::*;
 use rowmenu::*;
 use podcast_col::*;
 pub use podcast_col::step_podcast_strip;
+pub(in crate::gui) use meter::{meter_rate, Meter, METER_RATES};
+pub(in crate::gui) use meter::MeterDots;
 
 pub(super) use rows::{DeviceMark, DEVICE_MARKS};
 pub(in crate::gui) use rows::cursor_row;
@@ -71,12 +74,38 @@ fn capped(height: f32) -> u8 {
     (height / 2.0).round().clamp(0.0, 255.0) as u8
 }
 
+const RULE_CORNER_CUT: f32 = 0.5;
+
+fn paint_rule(ui: &Ui, rect: Rect, colour: Color32) {
+    if !super::theme::square_ends() {
+        ui.painter().rect_filled(rect, capped(rect.height()), colour);
+        return;
+    }
+    let cut = RULE_CORNER_CUT.min(rect.height() / 4.0).min(rect.width() / 4.0);
+    if cut <= 0.0 {
+        ui.painter().rect_filled(rect, 0, colour);
+        return;
+    }
+    let (l, r, t, b) = (rect.left(), rect.right(), rect.top(), rect.bottom());
+    let points = vec![
+        egui::pos2(l + cut, t),
+        egui::pos2(r - cut, t),
+        egui::pos2(r, t + cut),
+        egui::pos2(r, b - cut),
+        egui::pos2(r - cut, b),
+        egui::pos2(l + cut, b),
+        egui::pos2(l, b - cut),
+        egui::pos2(l, t + cut),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(points, colour, egui::Stroke::NONE));
+}
+
 fn knob_at(ui: &Ui, at: egui::Pos2, radius: f32, line: f32, colour: Color32) {
     if super::theme::square_ends() {
         let rest = line / 2.0;
         let t = ((radius - rest) / (KNOB - rest).max(0.01)).clamp(0.0, 1.0);
         let tall = line + (BAR_TALL - line) * t;
-        ui.painter().rect_filled(Rect::from_center_size(at, Vec2::new(BAR_WIDE, tall)), 0.0, colour);
+        paint_rule(ui, Rect::from_center_size(at, Vec2::new(BAR_WIDE, tall)), colour);
     } else {
         ui.painter().circle_filled(at, radius, colour);
     }
@@ -296,12 +325,41 @@ fn content_rect(rect: Rect, m: Metrics) -> Rect {
     )
 }
 
-fn paint_marker(ui: &Ui, rect: Rect, state: RowState, m: Metrics, palette: &Palette) {
-    if !state.plated() {
+fn paint_marker(ui: &Ui, rect: Rect, id: egui::Id, state: RowState, m: Metrics, palette: &Palette) {
+    let shown = ui.ctx().animate_bool_with_time(id.with("plate"), state.plated(), HOVER_FADE);
+    if shown <= 0.0 {
         return;
     }
     ui.painter()
-        .rect_filled(marker_rect(rect, m), MARKER_RADIUS, marker_colour(palette));
+        .rect_filled(marker_rect(rect, m), MARKER_RADIUS, marker_colour(palette).gamma_multiply(shown));
+}
+
+fn eased_colour(ui: &Ui, id: egui::Id, to: Color32) -> Color32 {
+    #[derive(Clone, Copy)]
+    struct Fade {
+        from: Color32,
+        to: Color32,
+        since: f64,
+    }
+    let key = id.with("ink");
+    let now = ui.input(|i| i.time);
+    let secs = f64::from(HOVER_FADE);
+    let at = |f: Fade| {
+        let t = ((now - f.since) / secs).clamp(0.0, 1.0) as f32;
+        (f.from.lerp_to_gamma(f.to, t), t)
+    };
+    let fade = ui.data(|d| d.get_temp::<Fade>(key));
+    let fade = match fade {
+        Some(f) if f.to == to => f,
+        Some(f) => Fade { from: at(f).0, to, since: now },
+        None => Fade { from: to, to, since: now - secs },
+    };
+    ui.data_mut(|d| d.insert_temp(key, fade));
+    let (shown, t) = at(fade);
+    if t < 1.0 {
+        ui.ctx().request_repaint();
+    }
+    shown
 }
 
 fn paint_hover(
@@ -417,6 +475,7 @@ fn slide_to(ctx: &egui::Context, id: egui::Id, to: f32, snap: bool, secs: f32, e
 }
 
 pub fn render(app: &mut GuiApp, ui: &mut Ui) {
+    app.drawn_part("vor dem zeichnen");
     let palette = app.palette;
     let window = ui.available_rect_before_wrap();
     if ui.interact(window, egui::Id::unique("window-floor"), Sense::click()).clicked() {
@@ -585,6 +644,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         } else {
             masthead_compact(app, ui, &palette, m, full_width, in_the_band, !menu_in_the_band)
         };
+        app.drawn_part("kopf");
         if narrow && !all_off {
             ui.add_space(32.0);
             narrow_playing(app, ui, &palette, m, full_width);
@@ -652,15 +712,18 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
                 ui.horizontal_top(|ui| {
                     let h = reach(ui, 0, m.artists_width);
                     taken.push(ui.allocate_ui(Vec2::new(m.artists_width, h), |ui| first_column(app, ui, m, &palette)).inner);
+                    app.drawn_part("erste spalte");
                     if !app.merged() {
                         ui.add_space(m.column_gap);
                         let h = reach(ui, 1, m.albums_width);
                         taken.push(ui.allocate_ui(Vec2::new(m.albums_width, h), |ui| albums_column(app, ui, m, &palette)).inner);
+                        app.drawn_part("alben");
                     }
                     ui.add_space(m.column_gap);
                     let room = ui.available_width() - queue_width - queue_gap - side_part;
                     let h = reach(ui, 2, room);
                     taken.push(ui.allocate_ui(Vec2::new(room, h), |ui| tracks_column(app, ui, m, &palette)).inner);
+                    app.drawn_part("titel");
                     if queue_width > 0.5 {
                         ui.add_space(queue_gap);
                         let h = reach(ui, 3, queue_width);
@@ -682,6 +745,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
                             taken.push(slot);
                         }
                     }
+                    app.drawn_part("vierte spalte");
                     if many && side_total > 0.5 {
                         ui.add_space(side_gap);
                         for (at, (side, t)) in sides.iter().enumerate() {
@@ -723,6 +787,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
                             taken.push(slot);
                         }
                     }
+                    app.drawn_part("seite");
                 });
             });
         }
@@ -876,11 +941,14 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         }
     });
 
+    app.drawn_part("fuss");
     carried(app, ui);
     dropping(app, ui, window);
     row_menu(app, ui, window);
+    app.drawn_part("ziehen und kontextmenü");
     menu::render(app, ui, window, m);
     menu::keys_sheet(app, ui, window, m);
+    app.drawn_part("menü");
     super::saver::draw(app, ui.ctx(), &palette);
     let dip = app.zoom_dip(ui.ctx());
     if dip > 0.0 {

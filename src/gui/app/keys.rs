@@ -594,6 +594,8 @@ impl GuiApp {
         let cleared = pressed(Modifiers::COMMAND, Key::Backspace);
         let mark = pressed(Modifiers::COMMAND, Key::A) || pressed(Modifiers::CTRL, Key::A);
         let (copy, cut) = copy_or_cut(ctx);
+        let word_backs = taken(Modifiers::ALT, Key::Backspace);
+        let word_aheads = taken(Modifiers::ALT, Key::Delete);
         let backspaces = taken(NONE, Key::Backspace);
         let deletes = taken(NONE, Key::Delete);
         let lefts = taken(NONE, Key::ArrowLeft);
@@ -620,6 +622,12 @@ impl GuiApp {
             if cut {
                 prompt.entry.clear();
             }
+        }
+        for _ in 0..word_backs {
+            prompt.entry.backspace_word();
+        }
+        for _ in 0..word_aheads {
+            prompt.entry.delete_word();
         }
         for _ in 0..backspaces {
             prompt.entry.backspace();
@@ -705,6 +713,12 @@ impl GuiApp {
         if pressed(NONE, Key::End) {
             editor.end();
         }
+        for _ in 0..taken(Modifiers::ALT, Key::Backspace) {
+            editor.backspace_word();
+        }
+        for _ in 0..taken(Modifiers::ALT, Key::Delete) {
+            editor.delete_word();
+        }
         for _ in 0..taken(NONE, Key::Backspace) {
             editor.backspace();
         }
@@ -775,6 +789,12 @@ impl GuiApp {
         }
         if pressed(NONE, Key::End) {
             form.entry().end();
+        }
+        for _ in 0..taken(Modifiers::ALT, Key::Backspace) {
+            form.entry().backspace_word();
+        }
+        for _ in 0..taken(Modifiers::ALT, Key::Delete) {
+            form.entry().delete_word();
         }
         for _ in 0..taken(NONE, Key::Backspace) {
             form.entry().backspace();
@@ -887,15 +907,45 @@ impl GuiApp {
 
         let marked = self.filter_marked;
         let typed: String = typed(ctx, false);
+        let words_out = taken(Modifiers::ALT, Key::Backspace);
+        let words_ahead = taken(Modifiers::ALT, Key::Delete);
+        let to_start = pressed(Modifiers::COMMAND, Key::Backspace);
         let rubbed_out = taken(NONE, Key::Backspace);
         let rubbed_ahead = taken(NONE, Key::Delete);
         let mut chars: Vec<char> = query.chars().collect();
         let mut caret = self.filter_caret.unwrap_or(chars.len()).min(chars.len());
-        if marked && (rubbed_out > 0 || rubbed_ahead > 0 || !typed.is_empty()) {
+        let rubbing = rubbed_out + rubbed_ahead + words_out + words_ahead > 0 || to_start;
+        if marked && (rubbing || !typed.is_empty()) {
             chars.clear();
             caret = 0;
             self.filter_marked = false;
         } else {
+            let before = |chars: &[char], at: usize| {
+                let text: String = chars.iter().collect();
+                let byte = text.char_indices().nth(at).map_or(text.len(), |(b, _)| b);
+                text[..crate::gui::tagedit::word_before(&text, byte)].chars().count()
+            };
+            let after = |chars: &[char], at: usize| {
+                let text: String = chars.iter().collect();
+                let byte = text.char_indices().nth(at).map_or(text.len(), |(b, _)| b);
+                text[..crate::gui::tagedit::word_after(&text, byte)].chars().count()
+            };
+            if to_start && caret > 0 {
+                chars.drain(..caret);
+                caret = 0;
+            }
+            for _ in 0..words_out {
+                if caret == 0 && chars.is_empty() {
+                    close = true;
+                }
+                let from = before(&chars, caret);
+                chars.drain(from..caret);
+                caret = from;
+            }
+            for _ in 0..words_ahead {
+                let to = after(&chars, caret);
+                chars.drain(caret..to);
+            }
             for _ in 0..rubbed_out {
                 if caret == 0 {
                     if chars.is_empty() {

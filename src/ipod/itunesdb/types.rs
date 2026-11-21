@@ -178,6 +178,8 @@ pub struct IpodPlaylist {
 pub struct ItunesDb {
     pub version: u32,
     pub db_id: u64,
+    pub language: [u8; 2],
+    pub library_id: u64,
     pub tracks: Vec<IpodTrack>,
     pub playlists: Vec<IpodPlaylist>,
 }

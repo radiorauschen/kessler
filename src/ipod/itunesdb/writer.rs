@@ -295,10 +295,34 @@ pub fn write(db: &ItunesDb) -> Vec<u8> {
     root.u32(20, 2);
     root.u64(24, db.db_id);
     root.u16(32, 1);
+    let language = if db.language == [0, 0] { language_code() } else { db.language };
+    root.u8_at(0x46, language[0]);
+    root.u8_at(0x47, language[1]);
+    root.u64(0x48, if db.library_id == 0 { new_library_id(db.db_id) } else { db.library_id });
 
     root.append(&dataset_tracks.finish());
     root.append(&dataset_playlists.finish());
     root.finish()
+}
+
+fn language_code() -> [u8; 2] {
+    match crate::lang::current() {
+        crate::lang::Lang::De => *b"de",
+        crate::lang::Lang::En => *b"en",
+        crate::lang::Lang::Ja => *b"ja",
+    }
+}
+
+fn new_library_id(db_id: u64) -> u64 {
+    let seed = if db_id != 0 {
+        db_id
+    } else {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
+    };
+    let mut x = seed ^ 0x9E37_79B9_7F4A_7C15;
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (x ^ (x >> 31)).max(1)
 }
 
 fn numbered(mut db: ItunesDb) -> ItunesDb {
@@ -362,6 +386,19 @@ pub fn now_unix() -> i64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_header_keeps_its_language_and_its_library() {
+        let parse = crate::ipod::itunesdb::parse;
+        let kept = ItunesDb { version: 0x13, db_id: 9, language: *b"fr", library_id: 0x1122_3344_5566_7788, tracks: Vec::new(), playlists: Vec::new() };
+        let back = parse(&write(&kept)).unwrap();
+        assert_eq!((back.language, back.library_id), (*b"fr", 0x1122_3344_5566_7788));
+        let bare = ItunesDb { version: 0x13, db_id: 9, language: [0, 0], library_id: 0, tracks: Vec::new(), playlists: Vec::new() };
+        let first = parse(&write(&bare)).unwrap();
+        assert!(first.language != [0, 0] && first.library_id != 0, "filled in");
+        let second = parse(&write(&first)).unwrap();
+        assert_eq!((second.language, second.library_id), (first.language, first.library_id), "and kept");
+    }
 
     #[test]
     fn the_artist_index_is_sorted_as_itunes_sorts_it() {
@@ -480,6 +517,8 @@ mod tests {
         let mut db = ItunesDb {
             version: 0x13,
             db_id: 0x0123_4567_89AB_CDEF,
+            language: [0, 0],
+            library_id: 0,
             tracks,
             playlists: Vec::new(),
         };
@@ -637,6 +676,8 @@ mod tests {
         let db = ItunesDb {
             version: 0x13,
             db_id: 7,
+            language: [0, 0],
+            library_id: 0,
             tracks: Vec::new(),
             playlists: vec![IpodPlaylist {
                 id: 1,
@@ -655,6 +696,8 @@ mod tests {
         let db = ItunesDb {
             version: 0x13,
             db_id: 1,
+            language: [0, 0],
+            library_id: 0,
             tracks: vec![IpodTrack {
                 id: 1,
                 title: "Only a title".into(),
@@ -675,6 +718,8 @@ mod tests {
         let db = ItunesDb {
             version: 0x13,
             db_id: 1,
+            language: [0, 0],
+            library_id: 0,
             tracks: vec![IpodTrack {
                 id: 1,
                 path: Some("iPod_Control/Music/F12/ZZZZ.mp3".into()),
@@ -749,6 +794,8 @@ mod fake_device {
         let db = ItunesDb {
             version: 0x75,
             db_id: 0x1234_5678,
+            language: [0, 0],
+            library_id: 0,
             tracks,
             playlists: vec![
                 IpodPlaylist {

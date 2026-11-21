@@ -49,15 +49,23 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
             };
             let (show_picture, show_facts, show_wikipedia, show_library, show_ties, show_similar) = shows;
             scrolled(ui, "artist", palette, |ui| {
+                let full = artist_full_picture(app);
                 if show_picture {
                     let inner = (width - m.marker_pad_x * 2.0).max(40.0);
-                    let side = picture_side(inner, app.config.ui.info_picture_wide);
-                    let (area, _) = ui.allocate_exact_size(Vec2::new(width, side), Sense::hover());
-                    let rect = Rect::from_min_size(
-                        egui::pos2(content_rect(area, m).left(), area.top()),
-                        Vec2::splat(side),
-                    );
-                    artist_picture(app, ui, rect, palette, &name);
+                    if let Some(path) = &full {
+                        ui.horizontal(|ui| {
+                            ui.add_space(m.marker_pad_x);
+                            super::radio_col::wide_picture(app, ui, inner, inner * INFO_PICTURE_MOST_TALL, palette, path);
+                        });
+                    } else {
+                        let side = picture_side(inner);
+                        let (area, _) = ui.allocate_exact_size(Vec2::new(width, side), Sense::hover());
+                        let rect = Rect::from_min_size(
+                            egui::pos2(content_rect(area, m).left(), area.top()),
+                            Vec2::splat(side),
+                        );
+                        artist_picture(app, ui, rect, palette, &name);
+                    }
                     ui.add_space(BLOCK_AIR * 2.0);
                 }
 
@@ -296,6 +304,19 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         m,
                     );
                 }
+
+                let sources = sources(&info, show_picture, full.is_some(), show_wikipedia, show_facts);
+                if !sources.is_empty() {
+                    ui.add_space(BLOCK_AIR * 2.0);
+                    say(ui, width, tr!("quellen"), Role::Label, palette.heading(), m);
+                    for (said, url) in sources {
+                        if url.is_empty() {
+                            say(ui, width, &said, Role::Label, palette.faint, m);
+                        } else if link_action(ui, width, &said, m, palette) {
+                            open_url = Some(url);
+                        }
+                    }
+                }
             });
         });
     });
@@ -343,12 +364,50 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
 
 pub(super) const ARTIST_PICTURE: f32 = 176.0;
 
-pub(super) fn picture_side(inner: f32, wide: bool) -> f32 {
-    if wide {
-        inner
-    } else {
-        inner.min(ARTIST_PICTURE)
+pub(super) fn picture_side(inner: f32) -> f32 {
+    inner.min(ARTIST_PICTURE)
+}
+
+pub(super) const INFO_PICTURE_MOST_TALL: f32 = 0.8;
+
+fn artist_full_picture(app: &GuiApp) -> Option<std::path::PathBuf> {
+    static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+    if !app.config.ui.info_picture_wide {
+        return None;
     }
+    let stamp = app.artist.stamp;
+    if SEEN.swap(stamp, std::sync::atomic::Ordering::Relaxed) != stamp {
+        super::forget_decoded_pictures();
+    }
+    let path = crate::library::artistinfo::full_picture_path(&app.config.artists_dir(), app.artist.key);
+    path.is_file().then_some(path)
+}
+
+fn sources(info: &crate::library::artistinfo::ArtistInfo, picture: bool, full: bool, text: bool, facts: bool) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if picture {
+        let credit = if full { &info.found.full_credit } else { &info.found.picture_credit };
+        if info.own.picture {
+            out.push((tr!("bild: eigenes").to_string(), String::new()));
+        } else if !credit.from.is_empty() {
+            let mut said = format!("{}: {}", tr!("bild"), credit.from);
+            for part in [&credit.author, &credit.license] {
+                if !part.is_empty() {
+                    said.push_str(" · ");
+                    said.push_str(part);
+                }
+            }
+            out.push((said, credit.page.clone()));
+        }
+    }
+    if text && !info.found.about_from.is_empty() {
+        let page = info.found.links.iter().find(|l| l.label == info.found.about_from).map(|l| l.url.clone()).unwrap_or_default();
+        out.push((format!("{}: {}", tr!("text|quelle"), info.found.about_from), page));
+    }
+    if facts && !info.found.mbid.is_empty() {
+        out.push((format!("{}: musicbrainz", tr!("steckbrief")), format!("https://musicbrainz.org/artist/{}", info.found.mbid)));
+    }
+    out
 }
 
 pub(super) const ARTIST_SIMILAR: usize = 8;
@@ -373,22 +432,34 @@ pub(super) fn artist_picture(app: &mut GuiApp, ui: &Ui, rect: Rect, palette: &Pa
         Some((k, g, s, _)) if *k == key && *g == grain && *s == stamp
     );
     if fresh {
-        app.artist.picture = None;
+        if app.artist.picture.as_ref().is_some_and(|(k, ..)| *k != key) {
+            app.artist.picture = None;
+        }
         let path = artistinfo::picture_path(&app.config.artists_dir(), key);
-        if let Ok(decoded) = image::open(&path) {
+        static FORGOTTEN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        if app.artist.picture.as_ref().is_some_and(|(_, _, held, _)| held.0 != stamp.0) {
+            let this = format!("{key:?}{:?}", stamp.0);
+            let mut forgotten = FORGOTTEN.lock().unwrap_or_else(|e| e.into_inner());
+            if *forgotten != this {
+                *forgotten = this;
+                super::radio_col::forget_decoded(&path);
+            }
+        }
+        if let Some(decoded) = super::radio_col::decoded_picture(ui.ctx(), &path) {
             let image = if dithered {
-                crate::gui::covers::screened(&decoded, grain, method, negative)
+                let id = egui::Id::unique(("artist-picture", key, grain, format!("{stamp:?}")));
+                super::radio_col::screened_later(ui.ctx(), id, move || crate::gui::covers::screened(&decoded, grain, method, negative))
             } else {
                 let rgba = decoded.to_rgba8();
-                egui::ColorImage::from_rgba_unmultiplied(
+                Some(egui::ColorImage::from_rgba_unmultiplied(
                     [rgba.width() as usize, rgba.height() as usize],
                     rgba.as_raw(),
-                )
+                ))
             };
-            let handle = ui
-                .ctx()
-                .load_texture("artist-picture", image, egui::TextureOptions::NEAREST);
-            app.artist.picture = Some((key, grain, stamp, handle));
+            if let Some(image) = image {
+                let handle = ui.ctx().load_texture("artist-picture", image, egui::TextureOptions::NEAREST);
+                app.artist.picture = Some((key, grain, stamp, handle));
+            }
         }
     }
     match &app.artist.picture {
@@ -449,7 +520,7 @@ pub(super) fn artist_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
                 Vec2::new(width, m.row * rows as f32),
                 Sense::click(),
             );
-            paint_marker(ui, rect, state, m, palette);
+            paint_marker(ui, rect, response.id, state, m, palette);
             paint_hover(ui, rect, &response, state, m, palette);
             if response.clicked() {
                 focus_on = Some(i);

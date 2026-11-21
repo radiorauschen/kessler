@@ -50,6 +50,8 @@ pub struct Measure {
     logic_took: Option<f32>,
     lapped: Option<Instant>,
     slowest: (f32, &'static str),
+    steps: Vec<(&'static str, f32)>,
+    pressed: String,
     asked: std::collections::HashMap<String, usize>,
     soon: Vec<Duration>,
     frames: Vec<f32>,
@@ -89,6 +91,8 @@ const SOON_MOST: usize = 4096;
 
 const QUICK: Duration = Duration::from_millis(50);
 
+const SLOW_FRAME: f32 = 40.0;
+
 pub fn watch_repaints(ctx: &eframe::egui::Context) {
     static WATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if WATCHING.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -120,6 +124,8 @@ impl Measure {
             logic_took: None,
             lapped: None,
             slowest: (0.0, ""),
+            steps: Vec::new(),
+            pressed: String::new(),
             asked: std::collections::HashMap::new(),
             soon: Vec::new(),
             frames: Vec::new(),
@@ -161,15 +167,25 @@ impl Measure {
         let now = Instant::now();
         self.frame_began = Some(now);
         self.lapped = Some(now);
+        self.steps.clear();
+        self.pressed.clear();
     }
 
     pub fn lap(&mut self, what: &'static str) {
         let now = Instant::now();
         if let Some(then) = self.lapped.replace(now) {
             let took = (now - then).as_secs_f32() * 1000.0;
+            self.steps.push((what, took));
             if took > self.slowest.0 {
                 self.slowest = (took, what);
             }
+        }
+    }
+
+    pub fn drawn(&mut self, what: &'static str) {
+        let now = Instant::now();
+        if let Some(then) = self.lapped.replace(now) {
+            self.steps.push((what, (now - then).as_secs_f32() * 1000.0));
         }
     }
 
@@ -191,13 +207,34 @@ impl Measure {
             }
         }
         if let Some(began) = self.frame_began.take() {
-            self.frames.push(began.elapsed().as_secs_f32() * 1000.0);
+            let took = began.elapsed().as_secs_f32() * 1000.0;
+            if took > SLOW_FRAME {
+                self.say_slow(took);
+            }
+            self.frames.push(took);
             self.logic.push(self.logic_took.take().unwrap_or(0.0));
             self.doing.push(doing);
         }
         if self.began.elapsed() >= SPAN {
             self.write();
         }
+    }
+
+    pub fn pressed(&mut self, said: String) {
+        self.pressed = said;
+    }
+
+    fn say_slow(&mut self, took: f32) {
+        let mut steps = self.steps.clone();
+        steps.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let named: f32 = steps.iter().take(3).map(|(_, ms)| ms).sum();
+        let mut said: Vec<String> = steps.iter().take(3).map(|(what, ms)| format!("{what} {ms:.0}")).collect();
+        let rest = took - named;
+        if rest >= 1.0 {
+            said.push(format!("rest {rest:.0}"));
+        }
+        let pressed = if self.pressed.is_empty() { String::new() } else { format!(" · gedrückt: {}", self.pressed) };
+        self.note(&format!("langsames bild: {took:.0} ms — {}{pressed}", said.join(", ")));
     }
 
     fn write(&mut self) {

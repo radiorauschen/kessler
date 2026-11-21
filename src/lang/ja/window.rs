@@ -1,4 +1,5 @@
 pub const PART: &[(&str, &str)] = &[
+    ("kessler {} ist da — menü → allgemein → neue version", "kessler {} が出ています — メニュー → 一般 → 新しいバージョン"),
     ("equalizer: tiefen, mitten und höhen einstellen", "イコライザー：低音・中音・高音を調整"),
     (" und {} weitere", " ほか {} 件"),
     ("{} dateien übergangen: {}{}", "{} 個のファイルをスキップ: {}{}"),

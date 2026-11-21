@@ -157,9 +157,17 @@ pub fn parse(data: &[u8]) -> Result<ItunesDb> {
         0
     };
 
+    let (language, library_id) = if mhbd.header_len >= 0x50 && data.len() >= 0x50 {
+        ([data[0x46], data[0x47]], cur.u64_at(0x48)?)
+    } else {
+        ([0, 0], 0)
+    };
+
     let mut db = ItunesDb {
         version,
         db_id,
+        language,
+        library_id,
         ..Default::default()
     };
 

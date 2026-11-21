@@ -9,7 +9,7 @@ use crate::library::artistinfo::{self, ArtistInfo, Found, Own};
 
 use super::tagedit::Entry;
 
-pub type Answer = Result<(Found, bool, Option<Vec<u8>>)>;
+pub type Answer = Result<(Found, bool, crate::library::artistinfo::Pictures)>;
 
 #[derive(Default)]
 pub struct GapsPanel {

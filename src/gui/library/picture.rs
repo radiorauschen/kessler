@@ -99,6 +99,10 @@ pub(super) fn spectrum_strip(app: &mut GuiApp, ui: &Ui, field: Rect, palette: &P
     }
 
     let chosen = super::FieldPicture::from_name(&app.config.ui.field_picture);
+    if chosen == super::FieldPicture::Meter {
+        super::meter::draw(app, ui, field, palette, showing);
+        return;
+    }
     let whole = chosen != super::FieldPicture::Scope;
     let inset = MARKER_RADIUS as f32;
     let room = if whole {
@@ -235,6 +239,107 @@ pub(in crate::gui) fn live_mark(app: &mut GuiApp, ui: &Ui, room: Rect, palette: 
         ui.ctx().request_repaint_after(to_tick(ui.ctx(), super::field_art::field_tick(app)));
     }
     true
+}
+
+const TOUCH_PICTURE: (usize, usize) = (400, 60);
+const TOUCH_WHOLE: (usize, usize) = (1200, 60);
+const TOUCH_LEAST: usize = 240;
+const TOUCH_MOST: usize = 2000;
+
+const TOUCH_INK: u8 = 200;
+
+pub(in crate::gui) fn touch_bar_picture(app: &mut GuiApp, ui: &Ui) {
+    if !crate::media::touchbar_available() {
+        return;
+    }
+    let chosen = touch_bar_view(app);
+    let on = app.config.ui.touchbar;
+    let sounding = !app.spectrum.silent() && ui.input(|i| i.focused);
+    let whole = app.config.ui.touchbar_whole && chosen.is_some() && sounding;
+    let station = app.player.current_track().is_none() && app.on_air.is_some();
+    let mode = (on, !app.config.ui.capitals, whole, station);
+    if app.touch_mode != Some(mode) {
+        crate::media::touchbar_show(on, !app.config.ui.capitals, whole, station);
+        if app.touch_mode.is_none_or(|was| was.2 != whole) {
+            app.touch_sent = None;
+        }
+        app.touch_mode = Some(mode);
+    }
+    let wanted = on && sounding;
+    let Some(chosen) = chosen.filter(|_| wanted) else {
+        if app.touch_sent.take().is_some() {
+            crate::media::touchbar_picture(None);
+        }
+        return;
+    };
+    let (width, height) = if whole { TOUCH_WHOLE } else { TOUCH_PICTURE };
+    let width = crate::media::touchbar_picture_wide().map_or(width, |points| (points * 2 / 4 * 4).clamp(TOUCH_LEAST, TOUCH_MOST));
+    let now = ui.input(|i| i.time);
+    let dots = if chosen == super::FieldPicture::Meter {
+        let station = app.player.current_track().is_none() && app.on_air.is_some();
+        let small = app.touch_meter.paint(&app.heard.recent_pairs(), station, width / 2, height / 2);
+        (0..width * height).map(|at| small[(at / width / 2) * (width / 2) + (at % width) / 2]).collect()
+    } else {
+        let grey = if chosen == super::FieldPicture::Scope {
+            let exposed = is_exposed(app.config.ui.scope_rate);
+            look_in(&mut app.touch_scope, &app.heard, (width, height, SCOPE_FIGURES), now, exposed);
+            app.touch_scope.grey()
+        } else {
+            let rows = app.field_art.cell().map_or(super::field_art::GRID_ROWS, |cell| (height / cell).max(4));
+            if app.touch_art.rows() != rows {
+                app.touch_art = super::FieldArt::with_rows(rows);
+            }
+            std::mem::swap(&mut app.field_art, &mut app.touch_art);
+            std::mem::swap(&mut app.scope, &mut app.touch_scope);
+            let grey = super::field_art::grey_for(app, ui, chosen, (width, height), false);
+            std::mem::swap(&mut app.field_art, &mut app.touch_art);
+            std::mem::swap(&mut app.scope, &mut app.touch_scope);
+            match grey {
+                Some(grey) => grey,
+                None => {
+                    if app.touch_sent.take().is_some() {
+                        crate::media::touchbar_picture(None);
+                    }
+                    return;
+                }
+            }
+        };
+        let method = crate::gui::dither::Screen::from_name(&app.config.ui.dither_method);
+        crate::gui::dither::screen(&grey, width as u32, height as u32, method)
+    };
+    let print = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        dots.hash(&mut hasher);
+        hasher.finish()
+    };
+    if app.touch_sent != Some(print) {
+        app.touch_sent = Some(print);
+        let rgba: Vec<u8> = dots
+            .iter()
+            .flat_map(|&lit| if lit { [TOUCH_INK, TOUCH_INK, TOUCH_INK, 255] } else { [0; 4] })
+            .collect();
+        crate::media::touchbar_picture(Some((&rgba, width, height)));
+    }
+    match chosen {
+        super::FieldPicture::Scope => ui.ctx().request_repaint_after(picture_step(ui.ctx(), app.config.ui.scope_rate)),
+        super::FieldPicture::Meter => {
+            let period = 1.0 / f64::from(super::meter_rate(app.config.ui.meter_rate));
+            ui.ctx().request_repaint_after(to_tick(ui.ctx(), period));
+        }
+        _ if super::field_art::asks_for_frames(app) => {
+            ui.ctx().request_repaint_after(to_tick(ui.ctx(), super::field_art::field_tick(app)));
+        }
+        _ => {}
+    }
+}
+
+fn touch_bar_view(app: &GuiApp) -> Option<super::FieldPicture> {
+    match app.config.ui.touchbar_view.as_str() {
+        "aus" => None,
+        "suchfeld" | "" => app.config.ui.field_spectrum.then(|| super::FieldPicture::from_name(&app.config.ui.field_picture)),
+        name => Some(super::FieldPicture::from_name(name)),
+    }
 }
 
 pub(super) const SCOPE_FIGURES: usize = 1;

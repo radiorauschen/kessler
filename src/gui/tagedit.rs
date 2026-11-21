@@ -2,6 +2,19 @@ use crate::db::models::Track;
 use crate::library::metadata::Extras;
 use crate::library::tags::{Edit, Field};
 
+pub fn word_before(text: &str, at: usize) -> usize {
+    let head = &text[..at];
+    let trimmed = head.trim_end();
+    trimmed.rfind(char::is_whitespace).map_or(0, |i| i + trimmed[i..].chars().next().map_or(1, char::len_utf8))
+}
+
+pub fn word_after(text: &str, at: usize) -> usize {
+    let tail = &text[at..];
+    let skipped = tail.len() - tail.trim_start().len();
+    let rest = &tail[skipped..];
+    at + skipped + rest.find(char::is_whitespace).unwrap_or(rest.len())
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Entry {
     text: String,
@@ -84,6 +97,27 @@ impl Entry {
             let to = self.caret + c.len_utf8();
             self.text.replace_range(self.caret..to, "");
         }
+    }
+
+    pub fn backspace_word(&mut self) -> bool {
+        if self.take_marked() {
+            return true;
+        }
+        let from = word_before(&self.text, self.caret);
+        if from == self.caret {
+            return false;
+        }
+        self.text.replace_range(from..self.caret, "");
+        self.caret = from;
+        true
+    }
+
+    pub fn delete_word(&mut self) {
+        if self.take_marked() {
+            return;
+        }
+        let to = word_after(&self.text, self.caret);
+        self.text.replace_range(self.caret..to, "");
     }
 
     pub fn left(&mut self) {
@@ -227,6 +261,23 @@ impl Editor {
         row.mixed = false;
     }
 
+    pub fn backspace_word(&mut self) {
+        let row = self.row_mut();
+        if row.entry.backspace_word() || row.mixed {
+            row.touched = true;
+            row.mixed = false;
+        }
+    }
+
+    pub fn delete_word(&mut self) {
+        let row = self.row_mut();
+        if !row.entry.is_empty() {
+            row.entry.delete_word();
+            row.touched = true;
+        }
+        row.mixed = false;
+    }
+
     pub fn mark_all(&mut self) {
         self.row_mut().entry.mark_all();
     }
@@ -319,6 +370,27 @@ mod marking {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_word_goes_at_once() {
+        let mut entry = Entry::new("another green  world");
+        assert!(entry.backspace_word());
+        assert_eq!(entry.text(), "another green  ");
+        assert!(entry.backspace_word());
+        assert_eq!(entry.text(), "another ");
+        entry.home();
+        entry.delete_word();
+        assert_eq!(entry.text(), " ");
+        let mut entry = Entry::new("björk début");
+        entry.left();
+        entry.left();
+        assert!(entry.backspace_word());
+        assert_eq!(entry.text(), "björk ut");
+        assert_eq!(word_after("a  bc d", 1), 5);
+        assert_eq!(word_before("a  bc d", 5), 3);
+        let mut empty = Entry::new("");
+        assert!(!empty.backspace_word());
+    }
 
     fn track(id: i64, title: &str, artist: &str, album: &str, year: Option<i32>) -> Track {
         Track {

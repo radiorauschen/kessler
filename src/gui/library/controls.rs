@@ -86,21 +86,57 @@ pub(super) fn volume_rule(app: &mut GuiApp, ui: &Ui, right: &mut f32, top: f32, 
         }
     }
 
+    let mut turned = false;
+    if response.hovered() {
+        let amount: f32 = ui.input(|i| {
+            i.raw
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::MouseWheel { unit, delta, .. } => Some(
+                        (delta.y + delta.x)
+                            * match unit {
+                                egui::MouseWheelUnit::Point => 1.0,
+                                egui::MouseWheelUnit::Line => VOLUME_SCROLL_LINE,
+                                egui::MouseWheelUnit::Page => VOLUME_SCROLL_POINTS * 10.0,
+                            },
+                    ),
+                    _ => None,
+                })
+                .sum()
+        });
+        if amount != 0.0 {
+            let carry_id = egui::Id::unique("volume-scroll-carry");
+            let carry: f32 = ui.data(|d| d.get_temp(carry_id)).unwrap_or(0.0) + amount / VOLUME_SCROLL_POINTS;
+            let steps = carry.trunc();
+            ui.data_mut(|d| d.insert_temp(carry_id, carry - steps));
+            if steps != 0.0 {
+                let was = i32::from(app.player.volume());
+                app.player.set_volume((was + steps as i32).clamp(0, 100) as u8);
+                let now = ui.input(|i| i.time);
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique("volume-scrolled-at"), now));
+            }
+        }
+        if let Some(at) = ui.data(|d| d.get_temp::<f64>(egui::Id::unique("volume-scrolled-at"))) {
+            let left = VOLUME_SCROLL_SHOWN - (ui.input(|i| i.time) - at);
+            if left > 0.0 {
+                turned = true;
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(left));
+            }
+        }
+    }
+
     let hot = response.hovered() || response.dragged();
     let (height, knob) = rule_swell(swell(ui, "volume", hot));
     let rule = Rect::from_min_size(
         egui::pos2(strip.left(), strip.center().y - height / 2.0),
         Vec2::new(WIDTH, height),
     );
-    ui.painter().rect_filled(rule, capped(height), palette.rule);
+    paint_rule(ui, rule, palette.rule);
 
     let filled = WIDTH * app.player.volume() as f32 / 100.0;
     if filled > 0.0 {
-        ui.painter().rect_filled(
-            Rect::from_min_size(rule.min, Vec2::new(filled, height)),
-            capped(height),
-            palette.ink,
-        );
+        paint_rule(ui, Rect::from_min_size(rule.min, Vec2::new(filled, height)), palette.ink);
     }
 
     if knob > height / 2.0 {
@@ -118,10 +154,24 @@ pub(super) fn volume_rule(app: &mut GuiApp, ui: &Ui, right: &mut f32, top: f32, 
             }
         }
     }
+    if turned && !(response.dragged() || response.clicked()) {
+        let said = app.player.volume().to_string();
+        if badge_fits_above(ui, rule.center().y, &said) {
+            badge(ui, egui::pos2(rule.left() + filled, rule.center().y), &said, true, palette);
+        } else {
+            in_the_word = Some(app.player.volume());
+        }
+    }
 
     *right -= VOLUME_GAP;
     in_the_word
 }
+
+const VOLUME_SCROLL_POINTS: f32 = 8.0;
+
+const VOLUME_SCROLL_LINE: f32 = 2.0 * VOLUME_SCROLL_POINTS;
+
+const VOLUME_SCROLL_SHOWN: f64 = 0.8;
 
 pub(super) const KEY_AIR: f32 = 5.0;
 
@@ -275,7 +325,7 @@ pub(super) fn progress_rule(
         egui::pos2(strip.left(), top),
         Vec2::new(strip.width(), height),
     );
-    ui.painter().rect_filled(rule, capped(height), palette.rule);
+    paint_rule(ui, rule, palette.rule);
 
     let progress = held
         .map(|f| f as f32)
@@ -287,7 +337,7 @@ pub(super) fn progress_rule(
     };
     if fraction > 0.0 {
         let filled = Rect::from_min_size(rule.min, Vec2::new(rule.width() * fraction, height));
-        ui.painter().rect_filled(filled, capped(height), colour);
+        paint_rule(ui, filled, colour);
     }
     if has_track {
         let starts = app.playing_chapter_starts();
