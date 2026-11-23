@@ -581,6 +581,7 @@ pub enum Stage {
         doing: String,
         failed: usize,
         steps: mpsc::Receiver<Moved>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     },
     Done(std::result::Result<String, String>),
 }
@@ -628,6 +629,7 @@ pub struct GuiApp {
     prewarmed: Option<(u32, String, bool)>,
     pub backup_said: Option<String>,
     pub naming_device: Option<tagedit::Entry>,
+    pub choosing_model: bool,
     pub forget_asked: Option<usize>,
     pub picture_screen_list_open: bool,
     pub saver_screen_list_open: bool,
@@ -666,6 +668,7 @@ pub struct GuiApp {
     touch_art: library::FieldArt,
     pub(super) touch_sent: Option<u64>,
     pub(super) touch_mode: Option<(bool, bool, bool, bool)>,
+    pub(super) touch_said: (String, f64, u32),
     touch_meter: library::MeterDots,
     pub(super) mark_paused: Option<(MarkKey, egui::TextureHandle)>,
     pub saver: saver::Saver,
@@ -890,6 +893,7 @@ impl GuiApp {
         if config.ui.podcasts {
             std::thread::spawn(crate::podcast::sweep_parts);
         }
+        std::thread::spawn(crate::ipod::sync::sweep_scratch);
         let mut app = Self {
             db,
             config,
@@ -918,6 +922,7 @@ impl GuiApp {
             forget_asked: None,
             backup_said: None,
             naming_device: None,
+            choosing_model: false,
             picture_screen_list_open: false,
             saver_screen_list_open: false,
             menu_heights: [0.0; menu::SECTION_COUNT],
@@ -953,6 +958,7 @@ impl GuiApp {
             touch_art: library::FieldArt::default(),
             touch_sent: None,
             touch_mode: None,
+            touch_said: (String::new(), 0.0, 0),
             touch_meter: library::MeterDots::new(),
             mark_paused: None,
             saver: saver::Saver::default(),

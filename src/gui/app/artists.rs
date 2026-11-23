@@ -166,7 +166,11 @@ impl GuiApp {
                             }
                         }
                         Err(e) => {
-                            self.artist.trouble = Some((key, e.to_string()));
+                            let said = match e {
+                                crate::error::KesslerError::Metadata(said) => said,
+                                other => other.to_string(),
+                            };
+                            self.artist.trouble = Some((key, said));
                         }
                     }
                 }

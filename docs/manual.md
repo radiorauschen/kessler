@@ -343,12 +343,20 @@ fail later.
 its metadata, rating, play count and file path, plus all playlists in their
 stored order.
 
-**writing** depends on the model. from the ipod classic (2007) and nano 3g
-onward the firmware expects the database to carry an hmac-sha1 signature keyed
-to the device's firewire guid. kessler cannot compute that yet, and a database
-without it makes those models show an *empty library* even though every file is
-still on the disk — so `kessler ipod sync` identifies the hardware first and
-refuses rather than breaking it. `kessler ipod info` prints the verdict.
+**writing** depends on the model. the ipod classic (2007 to 2009) and the
+nano 3g and 4g expect the database to carry a signature (hash58, an
+hmac-sha1 keyed to the device's firewire guid); without it they show an
+*empty library* even though every file is still on the disk. kessler signs
+for them — in beta: tried on few devices yet, and the model in the device
+column says `(beta)`. the guid comes from `SysInfoExtended`, else from the
+`FirewireGuid` line of `SysInfo`, else from the usb serial number, which on
+these ipods is the same sixteen digits; where none of the three has it,
+nothing is written. the database for them gets the longer header itunes 7.4
+wrote and a version no older than that one's. every other ipod gets its
+database exactly as before, unsigned. later schemes (the nano 5g and after)
+are not written. `kessler ipod sync` identifies the hardware first and
+refuses rather than breaking it; `kessler ipod info` prints the verdict, and
+the ipod report says where the guid came from.
 
 the master playlist carries the library's indices as itunes
 writes them (`mhod` 52 for title, artist, album, genre and composer, without
@@ -403,7 +411,7 @@ backlight, clicker, equaliser, language) are never touched.
 | --- | --- |
 | ipod 1g–4g, photo, 5g/5.5g video, mini, nano 1–2 | works |
 | ipod shuffle 1g–4g | works, with its `iTunesSD`, no voiceover |
-| ipod classic (6g/7g), nano 3g–4g | refused — needs a signed database |
+| ipod classic (6g/7g), nano 3g–4g | works, signed — beta |
 | nano 5g+, touch, iphone | refused — different format entirely |
 | unrecognised model | refused, on purpose |
 
@@ -423,6 +431,40 @@ shuffle has: one beginning `bdhs` is taken for a fourth, one of a short head
 and 558 bytes a track for a second (each pair writes the same list, so
 only the picture can be wrong). a device kessler does not recognise says
 „modell … unbekannt" in its column.
+
+**how a model is known**, as libgpod knows it: the model number in
+`iPod_Control/Device/SysInfo`; where that is missing, the last three
+characters of the serial number (from `SysInfo` or `SysInfoExtended`), which
+name the model as surely; for a shuffle, its `iTunesSD`; and, where none of
+that says it — `SysInfo` missing, or written by another program without a
+model number in it — the number the ipod gives on usb (apple's `05ac` and
+one product number a generation, `1201` the third, as the public list of usb
+numbers names them — on linux from `/sys`, on a mac from `diskutil` and
+`ioreg`, behind any number of hubs; nothing over firewire): known so, the
+model number is written into `SysInfo` (its other lines kept), as itunes
+would, and the ipod is known from then on — unless a model number kessler
+does not know stands there already, which stays. the ipod report (⌥ → `bericht speichern`) lists the files in
+`iPod_Control/Device` and how the usb number was looked for, step by step. a restore or a fresh
+format — an ipod given a memory card instead of its disk, say — takes
+`SysInfo` away, and where the usb number does not say it either, nothing is
+known: the column offers **`modell
+wählen…`**, the list of models, and the one chosen is written back to
+`SysInfo` (one model number of that generation, as gtkpod does), so the ipod
+is known from then on, to other programs too.
+
+**what makes kessler sign**, whatever model it is taken for: an ipod that
+says itself, in `SysInfoExtended`'s `DBVersion` (3), that it wants a signed
+database, and one whose database on it already carries a signature (the
+hash58 in its header) — then a model chosen wrongly by hand cannot make
+kessler write an unsigned one, which such an ipod shows as an empty library.
+a `DBVersion` past 3, or a later hashing scheme named in the database, keeps
+kessler from writing at all. the reason stands under `schreiben: nein` in the
+menu.
+
+the third generation turns in the device column as itself too: narrower
+than the player, its screen at the top, under it the row of four round touch
+buttons, and the touch wheel below — after its own measurements, with
+finer rings round its buttons and wheel than the other players have.
 
 a shuffle is treated plainly. in the device column it turns as itself
 rather than as the player with a screen — the white stick of the first,
@@ -539,14 +581,33 @@ can actually decode and sets the rest aside:
 
 **on a mac nothing has to be installed to convert.** macos brings its own
 converter, `afconvert` (core audio): it reads flac, wav, aiff, aiff-c and apple
-lossless and writes aac, which every ipod from the third generation on
-plays. kessler converts to **aac at 256 kbit/s, 44.1 khz** with it and then
-writes the library's tags into the new file. only what core audio cannot
-read — ogg vorbis — and devices older than the third generation, which have
-no aac, need **ffmpeg** (`brew install ffmpeg`, found on `PATH` or where
-homebrew and macports put it); it converts to 320 kbit/s mp3. on linux and
-windows ffmpeg does all of it. originals are never touched — the conversion
-happens in a temporary directory that is cleaned up afterwards.
+lossless and writes aac and apple lossless. what it becomes is **menu → ipod
+→ `umwandeln in`** (`ipod_format`): `aac 256` (the default), `aac 320`, `aac
+192` — at 44.1 khz, in the encoder's best quality — `alac, verlustfrei`
+(apple lossless, 16 bit, 44.1 khz, about three times the size; only for an
+ipod that plays it — the others get aac 256) or `mp3 320`. kessler then
+writes the library's tags into the new file. what core audio cannot read —
+ogg vorbis — mp3, and devices older than the third generation, which have no
+aac (they get mp3 whatever is chosen), need **ffmpeg** (`brew install ffmpeg`,
+found on `PATH` or where homebrew and macports put it); on linux and windows
+ffmpeg does all of it, aac and apple lossless too. originals are never
+touched — each conversion is made in a folder `kessler-transcode-…` in the
+system's temporary folder, deleted as soon as it is on the ipod, the folder
+when the sync ends; one left behind by a sync that never ended (the program
+quit in the middle) is cleared at the next start.
+
+what is already on the ipod stays as it was converted: a sync knows a track
+by its library id or by its artist, album, title and length, never by its
+format, so nothing goes over twice. to bring the copies into the form now
+chosen, the device's column offers **`neu umwandeln`** — with how many
+tracks, there only while some are in another form (aac at another rate, aac
+where apple lossless is chosen, and so on): it converts them again, puts the
+new copies on, and takes the old ones off once the new database is written.
+the plan to say yes to comes first, as for a sync.
+
+while a sync runs, `abbrechen` under it stops it after the track being
+copied, and the database is written for what is across: nothing copied lies
+on the device unlisted, and the rest goes over with the next sync.
 
 in the window it is **menu → ipod → `flac umwandeln`** (`ipod_convert`, on
 by default): with it on, `überspielen` converts on the way and the plan says
@@ -781,7 +842,9 @@ seventh of the push gets through, so a list gives a little and springs back,
 eased, as the system's own lists do.
 
 a title too long for its column scrolls sideways while it is selected or under
-the pointer, waits a moment first so that sweeping down a list does not set
+the pointer — one at a time in a column: the one under the pointer, else the
+topmost selected one, so picking a whole album does not set every title
+moving — waits a moment first so that sweeping down a list does not set
 every row in motion, and slides back when you leave. either way it fades into
 the row's own background rather than ending on a cut-off letter. so do a
 record's lines beside its cover in the combined view,
@@ -849,7 +912,7 @@ and beside it title · artist on one line (a station's name and what it says
 it plays, an episode and its podcast), cut short at the end where it is long
 (at most 180 points), small as the window writes them unless
 `grossbuchstaben` is on; `kessler` while nothing is loaded. a little way on,
-30 points tall and as wide as the bar leaves it up to the keys, a picture in light grey dots on the bar's black, as `bild`
+200 points wide and 30 tall, a picture in light grey dots on the bar's black, as `bild`
 (`[ui] touchbar_view`) says: `wie im suchfeld` (the default: whichever
 kopfzeile → `im suchfeld` shows, nothing while it shows nothing), any of the
 field's pictures by name — `vektorskop` … `kessler saga`, `zeiger` — whatever
@@ -859,8 +922,8 @@ point. it goes while nothing sounds. on the right ←, play or pause (whichever
 a press does) and →, which do what the keys in the header do; a station has
 no ←. where the bar is too full the picture goes first, then the title, never
 the cover or the keys. `ganze leiste` (`[ui] touchbar_whole`, off; only while
-there is a picture) lets the picture fill the bar beside the cover instead,
-as wide as the bar is, with no title and no keys: a touch on it plays or pauses.
+there is a picture) puts the picture beside the cover instead, 600 points
+wide, with no title and no keys: a touch on it plays or pauses.
 the system's own controls (escape, the control strip) stay where they are; an
 app cannot hide them, but system settings → keyboard → touch bar settings can
 (the control strip off), which leaves kessler nearly the whole bar.
@@ -1322,7 +1385,15 @@ when the first track starts, and closed again twenty seconds after the music
 stops, or five minutes into a pause; pressing play after that opens it again
 and carries on where it was. a side effect worth having: it opens on
 whatever the system's output is *then*, so headphones plugged in while
-nothing played are the ones it plays through.
+nothing played are the ones it plays through. and while it plays, it looks
+every three seconds whether the system's output is still the one it opened:
+another chosen in the settings — bluetooth headphones made the default — and
+it opens that one and goes on there from where it was.
+
+on linux the sound goes through pulseaudio — or pipewire, which speaks it —
+wherever such a server runs, to the output chosen in the system's settings,
+bluetooth headphones too; kessler shows up there under its own name. with
+no server, through alsa's default as before.
 
 the ipod watcher looks at what is mounted every two seconds, and only at the
 names: looking inside a volume for an ipod wakes a sleeping external disk, so
@@ -2314,6 +2385,12 @@ minutes instead, and `zählt nicht` stays for one without an artist. paused,
 the line goes, and the time paused is not counted as heard.
 `entfernen` takes a station or a kept song out.
 
+every `entfernen` at a row's end — a station, a kept song, a podcast
+followed, an episode in the podcast queue or among the played — asks first:
+the first click turns it into `wirklich?`, and only a second click within four
+seconds takes it out; off the row, or after the four seconds, it is
+`entfernen` again. keeping, following, `merken` do not ask.
+
 an artist's column says when and on which station they
 were last heard on the radio (`im radio`: „heute · nts 1"), under the
 library's figures, or under `zuletzt gehört` for somebody the library does
@@ -2545,15 +2622,31 @@ compilation shows who sings — else of what is playing. it follows as you move.
 the head says `informationen` (under the pointer `schliessen`), and the name
 stands under it, wrapped where it is long.
 
+a row of the queue says its title and, at its end, always its artist — as
+wide as the name, up to four tenths of the row; a long title fades out
+before it rather than the name going.
+
 a right click on a name, a track, a record, a row of the queue or of an open
 list → **`über künstler:in`** opens it on that artist, whoever the cursor is
 on. it stays there until you pick a name, move the cursor or the music moves
 on, and then follows again.
 
-what it shows: a picture, screened like the covers; the kind (person,
-group), where they are from and when they were active; their style; a
-paragraph about them; your own note; who they are like — the ones in your
-library a click away; and links to read further (wikipedia, discogs,
+what it shows: a picture, screened like the covers; under it, as an
+episode's page says its podcast and date, a sentence in the larger type and
+the ink of the paragraph about them — where they are from and their years, as one would say
+them (`geboren 1962 in jacksonville.`, `geboren 1946 in memphis, gestorben
+1994.`, `gruppe aus manchester, 1976–1993.`, `seit 1986` for one still
+going; a person's years are their life, a group's its time, as musicbrainz
+counts them; a person is not called one, a group, an orchestra or a choir
+is), and musicbrainz's short note that tells two of one name apart as a
+sentence after it (`us soul singer.`) — only where no paragraph is shown:
+it is english, and says mostly what the paragraph says — and under it, small in the facts'
+colour, their style: musicbrainz's genres, or where it has none the first
+tags that name a kind of music (not `seen live`, `american`, `female
+vocalists` and the like); a paragraph about them; the members or the groups; then
+what of them is in your library and your own note; who they are like — the
+ones in your library a click away; and links to read further — their own
+website first, where there is one — (wikipedia, discogs,
 bandcamp, their site, last.fm, musicbrainz, and your own). the prose in the
 information columns — the paragraph about an artist, your note, what
 wikipedia or the station says about a station, a show's description — stands
@@ -2570,15 +2663,19 @@ theirs, and **last.fm**, when a key is set up, for tags, similar artists and
 a biography where wikipedia has none. what they said is kept in
 `artists/<key>.toml`, `.jpg` (the square picture) and `-full.jpg` (wikipedia's
 uncut, else the same) beside the library database, and read from there from
-then on — the column works without a network. `neu suchen` asks again,
-replacing what was found and nothing else; an artist looked up before there
+then on — the column works without a network. `aktualisieren` asks again,
+replacing what was found and nothing else — after it, small as `flac` after
+a title and in brackets, when it last did (`(aktualisiert vor 3 tagen)`); an artist looked up before there
 was an uncut picture shows the square until then.
 
 at the foot of the column, under `quellen`, as a book lists its sources at
 its end: where the picture shown is from — `wikimedia commons` or
 `wikipedia` with who made it and under which licence, as wikimedia says, or
 `deezer`; `bild: eigenes` for one chosen by hand — where the text is from,
-and `steckbrief: musicbrainz`, each a link to the page it is from.
+and `steckbrief: musicbrainz`, each a link to the page it is from — a
+picture with no page of its own to the wikipedia page it was taken from. all
+are set alike, `›` and the words; one with nowhere to go (`bild: eigenes`)
+too, without a plate or a click.
 while they are being asked, the column says so under the picture —
 `lade informationen`, its dots counting up from one to three and round
 again.
@@ -2593,8 +2690,13 @@ language it has no paragraph in (`artists/<key>.toml` remembers the languages
 asked as `asked`). while it is asked, the paragraph in the other language
 stays away and only `lade informationen…` stands there; when none is found, it
 comes back. the source stands over its paragraph, the way every other heading
-in the column does — `aus wikipedia` over the text, `aus musicbrainz` over
-musicbrainz's own short note.
+in the column does — `aus wikipedia` over the text.
+
+a source that says it is busy — musicbrainz does when it is asked too quickly
+or has too much to do — is asked again after two seconds and after five more;
+only then does the column say so, in words: `musicbrainz.org ist gerade
+überlastet — später noch einmal`, or that a source does not answer, or that
+there is no network. the same for covers, years and genres.
 
 every search says in the **log** what it brought — `boards of canada: text
 (de, en) · bild · 2 mitglieder · 8 ähnliche` — or that nothing was found.
@@ -2623,10 +2725,12 @@ over what was found wherever both exist, and a new search never touches it.
 tab moves between fields, enter saves, shift-enter makes a new line in the
 note, escape leaves.
 
-under the paragraph, **in deiner bibliothek**: the library's own figures for
+after what there is to know about them — under the paragraph and the
+members — **in deiner bibliothek**: the library's own figures for
 them — records, tracks and how long they play, how often they were played,
-since when they are here and when last heard. then, as on discogs, **who
-is in it** for a group — the members, current first, with their years and
+since when they are here and when last heard. before it, as on discogs, **who
+is in it** for a group — the members, current first, with their years
+(`2005–heute` for one still in it) and
 the other groups each of them is also in — and **which groups** a person
 plays in. musicbrainz says so; the first six members are asked about one by
 one, at its pace, so a group takes some seconds longer the first time.
@@ -3116,6 +3220,11 @@ of its own at once, `langsames bild: 92 ms — titel 80, kopf 6, tasten 2, rest
 4 · gedrückt: cmd+1`: its three longest steps, logic and drawing (`kopf`,
 `erste spalte`, `alben`, `titel`, `vierte spalte`, `seite`, `fuss`, `menü`
 and so on), the rest together, and what was pressed in that frame.
+on a mac with a touch bar the measurement also says what the bar shows,
+whenever that changes — `touch bar: kessler saga · 1712×60 px · ganze leiste
+· die leiste gibt 856 pt`, or why it shows nothing — and while it shows a
+picture, every five seconds how many were sent and how many of the last
+one's dots were lit.
 
 the podcasts say what they do too, each in a line of its own with the time
 and the memory held at that moment (`· 330 mb` at its end, as every line
@@ -3245,6 +3354,12 @@ the database is backed up first, as for a sync. the volume keeps its own
 label: that one you rename in the finder or the file manager. a device whose
 master playlist has no name is shown by its volume's.
 
+**tidying up.** `aufräumen` — there only while ⌥ (alt) is held — takes off
+the files in the ipod's music folders that its database does not list: what a
+sync broken off before its database was written left there, taking room and
+showing nowhere (`12 unbekannte dateien entfernt (340 mb)`). never while a
+sync runs, and nothing on an ipod without a database.
+
 **a report.** `bericht speichern` — there only while ⌥ (alt) is held — writes `kessler-ipod-bericht-<date>.txt` to the desktop (the home
 folder where there is none) and shows it in the file manager. it says what the
 device will make of its database: whether the master playlist carries the five
@@ -3288,7 +3403,10 @@ spelling as an artist of its own, her records split between them. so every
 artist, album artist, album and genre goes onto the device spelled the
 way the library shows it (the most frequent spelling, ties alphabetically),
 also when only a selection is sent; tracks already there in another spelling
-are retagged by the next sync. the files keep their own spellings. the same
+are retagged by the next sync. the files keep their own spellings. every
+name goes on composed — `ü` one character, not `u` and its dots, as a mac
+often takes them apart in file names — which an older ipod draws properly,
+and either form on the device counts as the same name. the same
 goes for tracks only the device has: their artist, album
 artist, album and genre are spelled as the library spells the name, or tidied
 where the library does not have it, and nothing else of theirs changes (the
@@ -3888,8 +4006,6 @@ the device will not mount at all over usb alone.
 
 ## not done yet
 
-- the hash58 signature, which is what stands between kessler and the ipod
-  classic / nano 3g–4g
 - album artwork on the ipod (ithmb conversion)
 - lists as `.m3u` files beside the music, and on the ipod
 - the ipod's own playlists in the window — they are read and counted, not shown

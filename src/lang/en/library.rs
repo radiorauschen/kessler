@@ -85,6 +85,8 @@ pub const PART: &[(&str, &str)] = &[
     ("{} gehörte folgen kommen weg", "{} heard episodes are removed"),
     ("die musik darin bleibt auf dem ipod", "the music in them stays on the ipod"),
     ("flac umwandeln", "convert flac"),
+    ("umwandeln in", "convert to"),
+    ("alac, verlustfrei", "alac, lossless"),
     ("nicht gefunden", "not found"),
     ("danach frei", "free after"),
     ("nichts zu überspielen", "nothing to transfer"),

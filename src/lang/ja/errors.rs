@@ -2,6 +2,8 @@ pub const PART: &[(&str, &str)] = &[
     ("die datei ist nicht mehr da", "ファイルがありません"),
     ("curl lässt sich nicht starten: {}", "curl を起動できません: {}"),
     ("{} antwortet nicht", "{} が応答しません"),
+    ("{} ist gerade überlastet — später noch einmal", "{} は混み合っています — 後でもう一度"),
+    ("kein netz — {} ist nicht zu erreichen", "ネットワークがありません — {} に接続できません"),
     ("musicbrainz antwortet unverständlich", "musicbrainz の応答を読めません"),
     ("deezer antwortet unverständlich", "deezer の応答を読めません"),
     ("itunes antwortet unverständlich", "itunes の応答を読めません"),

@@ -1,8 +1,9 @@
 # the drawings
 
 all drawings in this repository are by felix (radiorauschen), drawn by hand
-for kessler — those kessler shows in its window, those in the readme and the
-one on the disk image for the mac. they are not under kessler's licence
+for kessler — those kessler shows in its window, those in the readme, the
+one on the disk image for the mac and those at the head of the release
+notes. they are not under kessler's licence
 (gpl-3.0-or-later) but under their own:
 
 **creative commons attribution-noncommercial-noderivatives 4.0
@@ -28,6 +29,9 @@ whatever drawing is added later. at present:
 - `bundle/version-1.5-scan.webp` and `docs/screenshots/version-1.5.png` —
   the drawing for version 1.5, shown in its release notes: its scan and its
   tinted copy
+- `bundle/release-1.5.354-scan.webp` and
+  `docs/screenshots/release-1.5.354.png` — the drawing at the head of the
+  release notes of 1.5.354: its scan and its tinted copy
 - `bundle/dmg/seesaw-scan.webp`, `bundle/dmg/arrow-scan.webp`,
   `bundle/dmg/background.png` and `background@2x.png` — the disk image's
   picture, its scans and what is made from them

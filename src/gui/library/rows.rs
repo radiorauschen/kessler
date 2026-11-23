@@ -73,9 +73,9 @@ pub(super) fn edge_band(painter: &egui::Painter, rect: Rect, ground: Color32, so
     painter.add(egui::Shape::mesh(mesh));
 }
 
-#[allow(clippy::too_many_arguments)]
 const WEIGHT_SECS: f32 = 0.12;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn cell_text(
     ui: &Ui,
     cell: Rect,
@@ -84,6 +84,56 @@ pub(super) fn cell_text(
     role: Role,
     colour: Color32,
     active: bool,
+    ground: Color32,
+    m: Metrics,
+) {
+    chosen_cell_text(ui, cell, id, label, role, colour, active, false, ground, m);
+}
+
+#[derive(Clone, Copy, Default)]
+struct MarqueeTurn {
+    frame: u64,
+    taken: Option<egui::Id>,
+    pointed_before: bool,
+    pointed_now: bool,
+}
+
+fn may_run(ui: &Ui, id: egui::Id, pointed: bool) -> bool {
+    let clip = ui.clip_rect();
+    let key = egui::Id::unique(("marquee-turn", clip.left().to_bits(), clip.right().to_bits()));
+    let frame = ui.ctx().cumulative_frame_nr();
+    let mut turn: MarqueeTurn = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    if turn.frame != frame {
+        turn = MarqueeTurn { frame, taken: None, pointed_before: turn.pointed_now, pointed_now: false };
+    }
+    let runs = if pointed {
+        turn.pointed_now = true;
+        true
+    } else if turn.pointed_before || turn.pointed_now {
+        false
+    } else {
+        match turn.taken {
+            None => {
+                turn.taken = Some(id);
+                true
+            }
+            Some(taken) => taken == id,
+        }
+    };
+    ui.data_mut(|d| d.insert_temp(key, turn));
+    runs
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn chosen_cell_text(
+    ui: &Ui,
+    cell: Rect,
+    id: egui::Id,
+    label: &str,
+    role: Role,
+    colour: Color32,
+    pointed: bool,
+    chosen: bool,
     ground: Color32,
     m: Metrics,
 ) {
@@ -104,6 +154,7 @@ pub(super) fn cell_text(
         return;
     }
 
+    let active = (pointed || chosen) && may_run(ui, id, pointed);
     let offset = marquee(ui, id, overflow, active);
     let inset_left = if offset > 0.5 { 1.0 } else { 0.0 };
     let words = Rect::from_min_max(
@@ -500,7 +551,6 @@ pub(super) fn queue_row(
     palette: &Palette,
 ) -> Response {
     const GAP: f32 = 12.0;
-    const ARTIST_LEAST: f32 = 46.0;
     const ARTIST_SHARE: f32 = 0.4;
 
     let (rect, response) = allocate_row(ui, width, m);
@@ -519,20 +569,11 @@ pub(super) fn queue_row(
     let title_colour = eased_colour(ui, response.id, if to_come { palette.mid } else { state.primary(palette) });
     let beside_colour = if to_come { palette.mid } else { state.secondary(palette) };
 
-    let wanted = text::full_line(ui, title, state.role(), title_colour)
-        .size()
-        .x;
-    let spare = content.width() - wanted - GAP;
     let artist_width = if beside.is_empty() {
         0.0
-    } else if state.gone {
-        text::full_line(ui, beside, Role::Content, beside_colour)
-            .size()
-            .x
-    } else if spare < ARTIST_LEAST {
-        0.0
     } else {
-        spare.min(content.width() * ARTIST_SHARE)
+        let whole = text::full_line(ui, beside, Role::Content, beside_colour).size().x;
+        if state.gone { whole } else { whole.min(content.width() * ARTIST_SHARE) }
     };
 
     if artist_width > 0.0 {
@@ -555,14 +596,15 @@ pub(super) fn queue_row(
     let line = text::row_line(ui, m.row, Role::Content);
     let cell = Rect::from_min_max(content.left_top(), egui::pos2(title_right, content.bottom()));
     let lead = lead_arrow(ui, arrow, cell, line, state.playing, title_colour);
-    cell_text(
+    chosen_cell_text(
         ui,
         Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max),
         id,
         title,
         state.role(),
         title_colour,
-        state.selected || hovered,
+        hovered,
+        state.selected,
         ground,
         m,
     );
@@ -617,7 +659,7 @@ pub(super) fn name_row(
     paint_marker(ui, rect, response.id, state, m, palette);
     paint_hover(ui, rect, &response, state, m, palette);
 
-    let hovered = response.hovered() || state.pointed;
+    let hovered = (response.hovered() && !state.still) || state.pointed;
     let ground = behind(ui, state, hovered, palette);
     let content = content_rect(rect, m);
 
@@ -631,10 +673,12 @@ pub(super) fn name_row(
             content.width() * FIGURE_SHARE,
         );
         let width = galley.size().x;
-        let at = egui::pos2(
-            content.right() - width,
-            text::beside_content(ui, &galley, figure_role, rect.top(), m.row),
-        );
+        let top = if state.offering {
+            text::on_x_middle(ui, &galley, figure_role, marker_rect(rect, m).center().y)
+        } else {
+            text::beside_content(ui, &galley, figure_role, rect.top(), m.row)
+        };
+        let at = egui::pos2(content.right() - width, top);
         ui.painter().galley(at, galley, palette.ink);
         name_right = content.right() - width - 12.0;
     }
@@ -643,14 +687,15 @@ pub(super) fn name_row(
     let cell = Rect::from_min_max(content.left_top(), egui::pos2(name_right, content.bottom()));
     let ink = eased_colour(ui, response.id, state.primary(palette));
     let lead = lead_arrow(ui, id, cell, line, state.playing || state.arrow, ink);
-    cell_text(
+    chosen_cell_text(
         ui,
         Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max),
         id,
         name,
         state.role(),
         ink,
-        state.selected || hovered,
+        hovered,
+        state.selected,
         ground,
         m,
     );
@@ -705,14 +750,15 @@ pub(super) fn columned_row(
     let cell = Rect::from_min_max(content.left_top(), egui::pos2(right, content.bottom()));
     let ink = eased_colour(ui, response.id, state.primary(palette));
     let lead = lead_arrow(ui, id, cell, line, state.playing, ink);
-    cell_text(
+    chosen_cell_text(
         ui,
         Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max),
         id,
         name,
         if bold && !state.plated() { Role::ContentBold } else { state.role() },
         ink,
-        state.selected || hovered,
+        hovered,
+        state.selected,
         ground,
         m,
     );
@@ -1009,14 +1055,15 @@ pub(super) fn track_row(
         state.playing && !state.gone,
         ink,
     );
-    cell_text(
+    chosen_cell_text(
         ui,
         Rect::from_min_max(egui::pos2(title_cell.left() + lead, title_cell.top()), title_cell.max),
         egui::Id::unique(("track-title", track.id)),
         track.display_title(),
         state.role(),
         ink,
-        state.selected || hovered,
+        hovered,
+        state.selected,
         ground,
         m,
     );

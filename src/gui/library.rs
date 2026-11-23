@@ -173,6 +173,7 @@ struct RowState {
     offering: bool,
     arrow: bool,
     pointed: bool,
+    still: bool,
 }
 
 impl RowState {
@@ -331,7 +332,7 @@ fn paint_marker(ui: &Ui, rect: Rect, id: egui::Id, state: RowState, m: Metrics, 
         return;
     }
     ui.painter()
-        .rect_filled(marker_rect(rect, m), MARKER_RADIUS, marker_colour(palette).gamma_multiply(shown));
+        .rect_filled(marker_rect(rect, m), theme::ROW_RADIUS, marker_colour(palette).gamma_multiply(shown));
 }
 
 fn eased_colour(ui: &Ui, id: egui::Id, to: Color32) -> Color32 {
@@ -370,9 +371,9 @@ fn paint_hover(
     m: Metrics,
     palette: &Palette,
 ) {
-    if (response.hovered() || state.pointed) && !state.plated() {
+    if ((response.hovered() && !state.still) || state.pointed) && !state.plated() {
         ui.painter()
-            .rect_filled(marker_rect(rect, m), MARKER_RADIUS, hover_colour(ui, palette));
+            .rect_filled(marker_rect(rect, m), theme::ROW_RADIUS, hover_colour(ui, palette));
     }
 }
 

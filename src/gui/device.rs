@@ -6,6 +6,7 @@ use crate::db::models::Track;
 pub enum Body {
     #[default]
     Player,
+    Third,
     Shuffle1,
     Shuffle2,
     Shuffle3,
@@ -16,6 +17,7 @@ impl Body {
     pub fn of(generation: crate::ipod::device_info::Generation) -> Self {
         use crate::ipod::device_info::Generation;
         match generation {
+            Generation::Third => Self::Third,
             Generation::Shuffle1 => Self::Shuffle1,
             Generation::Shuffle2 => Self::Shuffle2,
             Generation::Shuffle3 => Self::Shuffle3,
@@ -30,40 +32,60 @@ impl Body {
                 half: HALF,
                 corner: CORNER,
                 edge: EDGE,
-                screen: true,
+                screen: Some((SCREEN, SCREEN_Y)),
                 control: Some((WHEEL_Y, WHEEL_R, BUTTON_R)),
+                line: 0.012,
+                keys: None,
+                light: None,
+            },
+            Self::Third => Shape {
+                half: [0.297, 0.5, 0.075],
+                corner: 0.075,
+                edge: 0.045,
+                screen: Some(([0.2, 0.15], 0.245)),
+                control: Some((-0.24, 0.183, 0.075)),
+                line: 0.007,
+                keys: Some((0.02, 0.038, 0.125)),
                 light: None,
             },
             Self::Shuffle1 => Shape {
                 half: [0.15, 0.5, 0.05],
                 corner: 0.1,
                 edge: 0.035,
-                screen: false,
+                screen: None,
+                keys: None,
                 control: Some((0.2, 0.135, 0.05)),
+                line: 0.012,
                 light: None,
             },
             Self::Shuffle2 => Shape {
                 half: [0.33, 0.5, 0.07],
                 corner: 0.09,
                 edge: 0.045,
-                screen: false,
+                screen: None,
+                keys: None,
                 control: Some((0.0, 0.27, 0.1)),
+                line: 0.012,
                 light: None,
             },
             Self::Shuffle3 => Shape {
                 half: [0.195, 0.5, 0.075],
                 corner: 0.08,
                 edge: 0.05,
-                screen: false,
+                screen: None,
+                keys: None,
                 control: None,
+                line: 0.012,
                 light: Some((0.38, 0.03)),
             },
             Self::Shuffle4 => Shape {
                 half: [0.46, 0.5, 0.085],
                 corner: 0.1,
                 edge: 0.05,
-                screen: false,
+                screen: None,
+                keys: None,
                 control: Some((0.0, 0.33, 0.12)),
+                line: 0.012,
                 light: None,
             },
         }
@@ -75,8 +97,10 @@ struct Shape {
     half: [f32; 3],
     corner: f32,
     edge: f32,
-    screen: bool,
+    screen: Option<([f32; 2], f32)>,
+    keys: Option<(f32, f32, f32)>,
     control: Option<(f32, f32, f32)>,
+    line: f32,
     light: Option<(f32, f32)>,
 }
 
@@ -285,14 +309,14 @@ fn brightness(
     let front = n[2] > 0.85 && p[2] > 0.0;
     if front {
         let (x, y) = (p[0], p[1]);
-        if !shape.screen {
+        let Some((screen, screen_y)) = shape.screen else {
             return face(x, y, lambert, shape);
-        }
-        if x.abs() < SCREEN[0] && (y - SCREEN_Y).abs() < SCREEN[1] {
-            let sheen = ((y - SCREEN_Y) / SCREEN[1] * 0.5 + 0.5).clamp(0.0, 1.0);
+        };
+        if x.abs() < screen[0] && (y - screen_y).abs() < screen[1] {
+            let sheen = ((y - screen_y) / screen[1] * 0.5 + 0.5).clamp(0.0, 1.0);
             let facing = dot(n, view);
             let mirrored = [2.0 * facing * n[0] - view[0], 2.0 * facing * n[1] - view[1]];
-            let across = (x / SCREEN[0] + (y - SCREEN_Y) / SCREEN[1]) * 0.5;
+            let across = (x / screen[0] + (y - screen_y) / screen[1]) * 0.5;
             let at = across + (mirrored[0] + mirrored[1]) * REFLECTION_TRAVEL;
             let band = (-((at - REFLECTION_AT) / REFLECTION_WIDTH).powi(2)).exp();
             return 0.03 + 0.1 * sheen * lambert + REFLECTION * band;
@@ -309,14 +333,25 @@ fn brightness(
 fn face(x: f32, y: f32, lambert: f32, shape: &Shape) -> f32 {
     if let Some((middle, ring, button)) = shape.control {
         let from_wheel = (x * x + (y - middle).powi(2)).sqrt();
-        if from_wheel < button - 0.01 {
+        if from_wheel < button - shape.line {
             return 0.35 + 0.6 * lambert;
         }
-        if from_wheel < button + 0.012 || (from_wheel - ring).abs() < 0.012 {
+        if (from_wheel - button).abs() < shape.line || (from_wheel - ring).abs() < shape.line {
             return 0.02;
         }
         if from_wheel < ring {
             return 0.12 + 0.33 * lambert;
+        }
+    }
+    if let Some((height, radius, apart)) = shape.keys {
+        for k in [-1.5f32, -0.5, 0.5, 1.5] {
+            let from = ((x - k * apart).powi(2) + (y - height).powi(2)).sqrt();
+            if (from - radius).abs() < shape.line {
+                return 0.02;
+            }
+            if from < radius {
+                return 0.16 + 0.36 * lambert;
+            }
         }
     }
     if let Some((height, size)) = shape.light {
@@ -404,6 +439,7 @@ pub struct Summary {
     pub respell: usize,
     pub reorder: bool,
     pub old_lists: usize,
+    pub reconvert: usize,
 }
 
 fn fingerprint(track: &Track) -> String {
@@ -488,6 +524,7 @@ impl Summary {
             unplayable_formats,
             newest_current: true,
             retag: 0,
+            reconvert: 0,
             sound_only: 0,
             respell: 0,
             reorder: false,

@@ -387,6 +387,10 @@ impl GuiApp {
             summary.reorder = plan.reorder;
             let keep: Vec<_> = newest.into_iter().collect();
             summary.old_lists = crate::ipod::sync::foreign_lists(&device_db, &keep).len();
+            if self.converts_for_ipod() {
+                let target = crate::ipod::sync::Target::from_name(&self.config.ipod_format);
+                summary.reconvert = crate::ipod::sync::stale_conversions(&library, &device_db, generation, target).len();
+            }
             if !generation.has_playlists() {
                 summary.newest_current = true;
                 summary.old_lists = 0;
@@ -563,6 +567,32 @@ impl GuiApp {
         Ok(())
     }
 
+    pub fn reconvert_on_device(&mut self) -> Result<()> {
+        let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return Ok(()) };
+        let library = self.db.get_tracks(None, None, SortField::Artist, SortOrder::Ascending, None)?;
+        let device = crate::ipod::IpodDevice::at(&mount)?;
+        let info = crate::ipod::device_info::DeviceInfo::read(&mount);
+        let db = device.read_database()?;
+        let target = crate::ipod::sync::Target::from_name(&self.config.ipod_format);
+        let stale = crate::ipod::sync::stale_conversions(&library, &db, info.generation, target);
+        if stale.is_empty() {
+            self.set_status(tr!("nichts neu umzuwandeln"));
+            return Ok(());
+        }
+        let tracks: Vec<Track> = stale.iter().map(|(_, t)| t.clone()).collect();
+        self.menu_open = false;
+        let lists = self.newest_list().into_iter().collect();
+        self.plan_transfer(tracks.clone(), tr!("neu umwandeln").to_string(), lists)?;
+        if let Some(transfer) = self.transfer.as_mut() {
+            transfer.plan.to_copy.clear();
+            transfer.plan.bytes_to_copy = 0;
+            transfer.plan.incompatible = tracks;
+            transfer.plan.drop_tracks.extend(stale.iter().map(|(id, _)| *id));
+            transfer.can_convert = true;
+        }
+        Ok(())
+    }
+
     pub fn backup_device(&mut self) {
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else {
             self.set_status(tr!("kein ipod angesteckt"));
@@ -643,6 +673,39 @@ impl GuiApp {
                 self.note(log::Kind::Ipod, said.clone());
                 self.set_notice(said);
                 let _ = crate::gui::reveal::show(&path);
+            }
+            Err(e) => self.set_status(format!("{e}")),
+        }
+    }
+
+    pub fn tidy_device(&mut self) {
+        if self.copying() {
+            self.set_status(tr!("auf den ipod wird gerade kopiert"));
+            return;
+        }
+        let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return };
+        let done = crate::ipod::IpodDevice::at(&mount).and_then(|device| crate::ipod::sync::remove_unlisted(&device));
+        match done {
+            Ok((0, _)) => self.set_status(tr!("nichts aufzuräumen")),
+            Ok((count, bytes)) => {
+                let said = tr!("{} unbekannte dateien entfernt ({})", text::count(count as u64), crate::ipod::format_bytes(bytes));
+                self.note(log::Kind::Ipod, said.clone());
+                self.set_status(said);
+            }
+            Err(e) => self.set_status(format!("{e}")),
+        }
+    }
+
+    pub fn choose_device_model(&mut self, generation: crate::ipod::device_info::Generation) {
+        self.choosing_model = false;
+        let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return };
+        match crate::ipod::device_info::write_model(&mount, generation) {
+            Ok(()) => {
+                let said = tr!("modell gesetzt: {}", generation.label());
+                self.note(log::Kind::Ipod, said.clone());
+                self.set_status(said);
+                self.device_summary = None;
+                self.reread_device();
             }
             Err(e) => self.set_status(format!("{e}")),
         }
@@ -777,12 +840,15 @@ impl GuiApp {
 
         let (tx, steps) = mpsc::channel();
         let said = tx.clone();
+        let target = crate::ipod::sync::Target::from_name(&self.config.ipod_format);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopping = std::sync::Arc::clone(&stop);
         std::thread::spawn(move || {
             let outcome = (|| -> std::result::Result<(), String> {
                 let device =
                     crate::ipod::IpodDevice::at(&mount).map_err(|e| e.to_string())?;
                 let info = crate::ipod::device_info::DeviceInfo::read(&mount);
-                crate::ipod::sync::apply(&device, &info, plan, convert, |step| {
+                crate::ipod::sync::apply(&device, &info, plan, convert, target, &stopping, |step| {
                     let _ = said.send(Moved::Along(step));
                 })
                 .map_err(|e| e.to_string())
@@ -796,7 +862,15 @@ impl GuiApp {
             doing: String::new(),
             failed: 0,
             steps,
+            stop,
         };
+    }
+
+    pub fn stop_transfer(&mut self) {
+        if let Some(Stage::Going { stop, doing, .. }) = self.transfer.as_mut().map(|t| &mut t.stage) {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            *doing = tr!("hält nach diesem titel an…").to_string();
+        }
     }
 
     pub fn close_transfer(&mut self) {
@@ -870,6 +944,7 @@ impl GuiApp {
             doing,
             failed,
             steps,
+            ..
         } = &mut transfer.stage
         else {
             return;
@@ -894,6 +969,7 @@ impl GuiApp {
                     lists,
                     retagged,
                     dropped,
+                    stopped,
                 }) => {
                     let mut parts: Vec<String> = Vec::new();
                     match copied {
@@ -918,6 +994,7 @@ impl GuiApp {
                     } else {
                         parts.join(", ")
                     };
+                    let said = if stopped { tr!("abgebrochen — {}", said) } else { said };
                     ended = Some(Ok(said));
                 }
                 Moved::Along(SyncProgress::BackedUp(_)) => {}

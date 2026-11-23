@@ -85,6 +85,8 @@ pub const PART: &[(&str, &str)] = &[
     ("{} gehörte folgen kommen weg", "聴いたエピソード {} 件を削除"),
     ("die musik darin bleibt auf dem ipod", "中の曲は ipod に残ります"),
     ("flac umwandeln", "flac を変換"),
+    ("umwandeln in", "変換先"),
+    ("alac, verlustfrei", "alac（ロスレス）"),
     ("nicht gefunden", "見つかりません"),
     ("danach frei", "転送後の空き"),
     ("nichts zu überspielen", "転送するものはありません"),

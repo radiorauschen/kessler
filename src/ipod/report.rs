@@ -34,8 +34,22 @@ pub fn write(device: &IpodDevice, info: &DeviceInfo, db: &ItunesDb, plan: Option
             Err(why) => format!("nein — {why}"),
         }
     );
+    if info.checksum() == super::device_info::Checksum::Hash58 {
+        let _ = writeln!(
+            out,
+            "signatur: hash58 (beta) — firewire-guid {}",
+            match info.guid {
+                Some((guid, from)) => format!("{} aus {from}", guid.iter().map(|b| format!("{b:02X}")).collect::<String>()),
+                None => "nicht gefunden".into(),
+            }
+        );
+    }
     if let Some((total, free)) = device.capacity() {
         let _ = writeln!(out, "platz: {} von {} frei", super::format_bytes(free), super::format_bytes(total));
+    }
+    let _ = writeln!(out, "iPod_Control/Device: {}", super::device_info::device_files(&device.mount_point));
+    for step in super::device_info::usb_trace(&device.mount_point) {
+        let _ = writeln!(out, "  {step}");
     }
     out.push('\n');
 
@@ -339,7 +353,7 @@ mod tests {
         });
         std::fs::write(itunes.join("iTunesDB"), writer::write(&db)).unwrap();
         let device = IpodDevice::at(&root).unwrap();
-        let info = DeviceInfo { generation: super::super::device_info::Generation::Third, model_number: None, serial: None, firewire_id: None };
+        let info = DeviceInfo { generation: super::super::device_info::Generation::Third, model_number: None, serial: None, guid: None, db_version: None, signed_database: false, later_signature: false };
         let read = device.read_database().unwrap();
         let said = write(&device, &info, &read, None);
         assert!(said.contains("Qluster (2×)"), "{said}");

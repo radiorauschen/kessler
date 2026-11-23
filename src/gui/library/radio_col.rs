@@ -381,8 +381,9 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
     for (at, station) in shown.iter().enumerate() {
         let ahead = row_ahead(ui, width, m);
         let over = super::pointer_rests_on(ui, ahead) && carried.is_none();
+        let id = egui::Id::unique(("radio-station", &station.url));
         let word = match (over, kept[at]) {
-            (true, true) => tr!("entfernen"),
+            (true, true) => removal_word(ui, id, true),
             (true, false) => tr!("merken"),
             (false, true) if searching => tr!("gemerkt"),
             _ => "",
@@ -395,7 +396,9 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
             spent: searching && station.silent,
             ..RowState::default()
         };
-        let id = egui::Id::unique(("radio-station", &station.url));
+        if kept[at] && !over {
+            removal_word(ui, id, false);
+        }
         let facts = station.found_facts();
         let silent = tr!("stumm");
         let genre = if station.silent { silent } else { facts.genre };
@@ -437,7 +440,9 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
         }
         if response.clicked() {
             if on_the_word(ui, &response, word, m, palette) {
-                keep = Some(at);
+                if !kept[at] || really(ui, id) {
+                    keep = Some(at);
+                }
             } else {
                 play = Some(at);
             }
@@ -527,14 +532,14 @@ fn heard_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
             loading(ui);
         }
         for show in past {
-            let state = RowState { spent: true, ..RowState::default() };
+            let state = RowState { spent: true, still: true, ..RowState::default() };
             let id = egui::Id::unique(("radio-show", show.start.timestamp(), &show.title));
             name_row(ui, id, width, &show.title, &at(show.start), Role::FiguresLabel, state, m, palette);
         }
         for (i, show) in coming.iter().take(PROGRAMME_AHEAD).enumerate() {
             let on = i == 0 && show.start <= now;
             let (end, role) = if on { (left_of(show), Role::Label) } else { (at(show.start), Role::FiguresLabel) };
-            let state = RowState { playing: on, ..RowState::default() };
+            let state = RowState { playing: on, still: true, ..RowState::default() };
             let id = egui::Id::unique(("radio-show", show.start.timestamp(), &show.title));
             name_row(ui, id, width, &show.title, &end, role, state, m, palette);
         }
@@ -575,8 +580,8 @@ fn heard_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
                 format!("{} — {}", song.artist, song.title)
             };
             let ahead = row_ahead(ui, width, m);
-            let end = if super::pointer_rests_on(ui, ahead) { tr!("entfernen") } else { "" };
             let id = egui::Id::unique(("radio-song", at, &song.title));
+            let end = removal_word(ui, id, super::pointer_rests_on(ui, ahead));
             let here = keys_at == Some(aired.len() + at);
             let state = RowState { offering: !end.is_empty(), selected: here, focused: here, ..RowState::default() };
             let response = name_row(ui, id, width, &words, end, Role::Label, state, m, palette);
@@ -586,7 +591,9 @@ fn heard_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
             point_at_word(ui, &response, end, !end.is_empty(), m, palette);
             if response.clicked() {
                 if on_the_word(ui, &response, end, m, palette) {
-                    forget_song = Some(at);
+                    if really(ui, id) {
+                        forget_song = Some(at);
+                    }
                 } else if !song.artist.is_empty() {
                     asked = Some(Heard::About(song.artist.clone()));
                 }
@@ -626,14 +633,17 @@ fn aired_row(
     let ahead = row_ahead(ui, width, m);
     let over = super::pointer_rests_on(ui, ahead);
     let when = clock_words(line.at.naive_local(), twelve, false, crate::lang::current());
+    let id = egui::Id::unique(("radio-aired", at, &line.said));
+    if kept && !over {
+        removal_word(ui, id, false);
+    }
     let (end, role) = match (over, kept) {
-        (true, true) => (tr!("entfernen").to_string(), Role::Label),
+        (true, true) => (removal_word(ui, id, true).to_string(), Role::Label),
         (true, false) => (tr!("merken").to_string(), Role::Label),
         (false, true) => (tr!("gemerkt").to_string(), Role::Label),
         (false, false) => (when, Role::FiguresLabel),
     };
     let state = RowState { playing: at == 0, spent: at > 0, offering: over, selected: keyed, focused: keyed, ..RowState::default() };
-    let id = egui::Id::unique(("radio-aired", at, &line.said));
     let response = name_row(ui, id, width, &words, &end, role, state, m, palette);
     if keyed && follow {
         response.scroll_to_me(None);
@@ -642,7 +652,9 @@ fn aired_row(
     let mut heard = None;
     if response.clicked() {
         if over && on_the_word(ui, &response, &end, m, palette) {
-            heard = Some(Heard::Keep(at));
+            if !kept || really(ui, id) {
+                heard = Some(Heard::Keep(at));
+            }
         } else if let Some(artist) = &line.artist {
             heard = Some(Heard::About(artist.clone()));
         }
@@ -1280,6 +1292,38 @@ pub(super) fn point_at_word(ui: &Ui, response: &Response, word: &str, offered: b
     if response.hover_pos().is_some_and(|at| at.x >= content_rect(response.rect, m).right() - word_width - 6.0) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+}
+
+const REALLY_SECS: f64 = 4.0;
+
+fn really_id() -> egui::Id {
+    egui::Id::unique("remove-really")
+}
+
+pub(super) fn removal_word(ui: &Ui, key: egui::Id, over: bool) -> &'static str {
+    let asked = ui.data(|d| d.get_temp::<(egui::Id, f64)>(really_id()));
+    let now = ui.input(|i| i.time);
+    match asked {
+        Some((asked, at)) if asked == key && over && now - at < REALLY_SECS => tr!("wirklich?"),
+        Some((asked, _)) if asked == key => {
+            ui.data_mut(|d| d.remove::<(egui::Id, f64)>(really_id()));
+            if over { tr!("entfernen") } else { "" }
+        }
+        _ if over => tr!("entfernen"),
+        _ => "",
+    }
+}
+
+pub(super) fn really(ui: &Ui, key: egui::Id) -> bool {
+    let now = ui.input(|i| i.time);
+    let asked = ui.data(|d| d.get_temp::<(egui::Id, f64)>(really_id()));
+    if asked.is_some_and(|(asked, at)| asked == key && now - at < REALLY_SECS) {
+        ui.data_mut(|d| d.remove::<(egui::Id, f64)>(really_id()));
+        return true;
+    }
+    ui.data_mut(|d| d.insert_temp(really_id(), (key, now)));
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(REALLY_SECS));
+    false
 }
 
 pub(super) fn on_the_word(ui: &Ui, response: &Response, word: &str, m: Metrics, palette: &Palette) -> bool {

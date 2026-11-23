@@ -292,7 +292,7 @@ fn key_line(ui: &mut Ui, written: &str, what: &str, palette: &Palette, whole: bo
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     if lit {
         let plate = rect.expand2(Vec2::new(HOVER_BLEED, 0.0));
-        ui.painter().rect_filled(plate, super::theme::MARKER_RADIUS, palette.hover);
+        ui.painter().rect_filled(plate, super::theme::ROW_RADIUS, palette.hover);
     }
     let rect = Rect::from_min_size(rect.min, Vec2::new(width, row_height()));
     let middle = rect.center().y;
@@ -487,7 +487,7 @@ fn heard_row(ui: &mut Ui, value: &str, tail: Option<std::sync::Arc<egui::Galley>
         response.flags.set(egui::response::Flags::FAKE_PRIMARY_CLICKED, true);
     }
     if on {
-        ui.painter().rect_filled(plate(rect), super::theme::MARKER_RADIUS, palette.marked());
+        ui.painter().rect_filled(plate(rect), super::theme::ROW_RADIUS, palette.marked());
     }
     let written_on = text::row_line(ui, row_height(), Role::Content);
     let label_g = text::line(ui, tr!("gehört"), Role::Content, palette.mid);
@@ -585,7 +585,7 @@ fn line(
     if keyboard || (actionable && response.hovered()) {
         ui.painter().rect_filled(
             plate(rect),
-            super::theme::MARKER_RADIUS,
+            super::theme::ROW_RADIUS,
             if keyboard { palette.marked() } else { palette.hover },
         );
     }
@@ -641,7 +641,7 @@ fn line(
         if response.hovered() {
             let at = egui::pos2(
                 rect.right() - galley.size().x - pad,
-                text::on_line(&galley, rect.top(), written_on),
+                text::on_x_middle(ui, &galley, Role::Label, plate(rect).center().y),
             );
             ui.painter().galley(at, galley, palette.ink);
         }
@@ -666,11 +666,11 @@ fn slider(
     let (keyboard, press) = keyed(ui, rect, response.clicked() || response.drag_started());
     if keyboard {
         with_menu_keys(ui.ctx(), |keys| keys.slider_seen = true);
-        ui.painter().rect_filled(plate(rect), super::theme::MARKER_RADIUS, palette.marked());
+        ui.painter().rect_filled(plate(rect), super::theme::ROW_RADIUS, palette.marked());
     }
     if response.hovered() {
         if !keyboard {
-            ui.painter().rect_filled(plate(rect), super::theme::MARKER_RADIUS, palette.hover);
+            ui.painter().rect_filled(plate(rect), super::theme::ROW_RADIUS, palette.hover);
         }
         ui.ctx()
             .set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -1452,9 +1452,9 @@ fn tab(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, t: usize, width: Option
     let role = if on && down_the_side { Role::ContentBold } else { Role::Content };
     let g = text::line(ui, crate::lang::t(TABS[t].0), role, colour);
     if keyboard {
-        ui.painter().rect_filled(plate(rect), super::theme::MARKER_RADIUS, palette.marked());
+        ui.painter().rect_filled(plate(rect), super::theme::ROW_RADIUS, palette.marked());
     } else if hovered {
-        ui.painter().rect_filled(plate(rect), super::theme::MARKER_RADIUS, palette.hover);
+        ui.painter().rect_filled(plate(rect), super::theme::ROW_RADIUS, palette.hover);
     }
     let line = text::row_line(ui, row_height(), Role::Content);
     let lead = super::library::lead_arrow(ui, response.id, rect, line, on && down_the_side, colour);
@@ -2410,7 +2410,8 @@ fn ipod_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
 
         match refusal {
             Some(why) => {
-                row(ui, tr!("schreiben"), &why, false, palette);
+                row(ui, tr!("schreiben"), tr!("nein"), false, palette);
+                explanation(ui, &why, palette);
             }
             None => {
                 if row(ui, tr!("überspielen"), tr!("ganze bibliothek…"), true, palette).clicked() {
@@ -2482,6 +2483,21 @@ fn convert_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
             app.config.ipod_convert = !on;
             app.save_config();
             app.device_summary = None;
+        }
+        if on {
+            set_in(ui, |ui| {
+                let names = crate::ipod::sync::Target::NAMES;
+                let now = names.iter().position(|n| *n == app.config.ipod_format.trim()).unwrap_or(0);
+                let said = match names[now] {
+                    "alac" => tr!("alac, verlustfrei"),
+                    name => name,
+                };
+                if row(ui, tr!("umwandeln in"), said, true, palette).clicked() {
+                    app.config.ipod_format = names[(now + 1) % names.len()].to_string();
+                    app.save_config();
+                    app.device_summary = None;
+                }
+            });
         }
     } else {
         row(ui, tr!("flac umwandeln"), tr!("bräuchte ffmpeg"), false, palette);

@@ -393,7 +393,7 @@ pub(super) fn list_rows(app: &GuiApp, ui: &mut Ui, width: f32, m: Metrics, palet
 pub(super) fn drop_light(ui: &Ui, rect: Rect, name: &str, m: Metrics, palette: &Palette) {
     ui.painter().rect_filled(
         rect.shrink2(Vec2::new(0.0, m.marker_inset_y)),
-        MARKER_RADIUS,
+        crate::gui::theme::ROW_RADIUS,
         palette.marked(),
     );
     let g = text::line(ui, name, Role::Content, palette.ink);

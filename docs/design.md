@@ -79,6 +79,11 @@ scheme is on:
 
 - height `m.row`, its text on the row's line (`text::row_line`), air
   `ROW_AIR` 4.
+- **two corners**: every row's plate — hover, keyboard, menu, right-click
+  menu, a record's head, an episode's row — rounds by `ROW_RADIUS` (4), a
+  little more than what can sit inside it: a picture, a field, a word's own
+  plate round by `MARKER_RADIUS` (2). The same corner outside as in looks
+  pinched.
 - **hover**: the light plate (`hover_colour`), fading in over `HOVER_FADE`
   0.08 s. pointed at from elsewhere (`pointed`) wears it too.
 - **chosen / active**: the darker plate (`marker_colour`) where the column
@@ -116,10 +121,20 @@ scheme is on:
   alone: the accent is for what plays.
 - a long name scrolls under the pointer rather than ending in „…"
   (`cell_text`), fading at its ends (`EDGE_FADE` 22).
+- a queue row: the title, and the artist at its end — always, as wide as the
+  name up to 0.4 of the row, cut only where the name itself is longer; the
+  title takes the rest and fades out (`queue_row`).
 - numbers before titles in the number column (`TrackColumn::Number`, 26 wide,
   `number_gap`) — tracks of a record, chapters of an episode.
 - the word at a row's end (`row_ahead`, `point_at_word`, `on_the_word`):
   the figure at rest, the action word under the pointer, a hand over it.
+  taking something out asks in the word itself: `entfernen` becomes
+  `wirklich?` on the first click, and the second does it (`removal_word`,
+  `really`) — no dialog.
+  the action word stands in the middle of the row's plate by its small
+  letters (`text::on_x_middle`): the middle of its x-height on the middle of
+  the plate — at a row's end, „kopieren" beside a name, the menu's
+  „entfernen".
 
 ## columns
 

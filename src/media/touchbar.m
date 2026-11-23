@@ -69,8 +69,8 @@ static NSTouchBarItemIdentifier const KesslerTBNext = @"de.windparksoft.kessler.
 
 static const CGFloat KesslerTBTitleWidest = 180.0;
 
-static const CGFloat KesslerTBPictureLeast = 120.0;
-static const CGFloat KesslerTBPictureMost = 1000.0;
+static const CGFloat KesslerTBPictureWide = 200.0;
+static const CGFloat KesslerTBWholeWide = 600.0;
 static const CGFloat KesslerTBPictureTall = 30.0;
 
 static BOOL kessler_tb_whole = NO;
@@ -108,12 +108,12 @@ API_AVAILABLE(macos(10.12.2))
     } else if (kessler_tb_station) {
         self.bar.defaultItemIdentifiers = @[
             KesslerTBCover, KesslerTBTitle, NSTouchBarItemIdentifierFixedSpaceSmall, KesslerTBPicture,
-            NSTouchBarItemIdentifierFixedSpaceSmall, KesslerTBToggle, KesslerTBNext,
+            NSTouchBarItemIdentifierFlexibleSpace, KesslerTBToggle, KesslerTBNext,
         ];
     } else {
         self.bar.defaultItemIdentifiers = @[
             KesslerTBCover, KesslerTBTitle, NSTouchBarItemIdentifierFixedSpaceSmall, KesslerTBPicture,
-            NSTouchBarItemIdentifierFixedSpaceSmall, KesslerTBPrevious, KesslerTBToggle, KesslerTBNext,
+            NSTouchBarItemIdentifierFlexibleSpace, KesslerTBPrevious, KesslerTBToggle, KesslerTBNext,
         ];
     }
 }
@@ -179,17 +179,10 @@ API_AVAILABLE(macos(10.12.2))
     }
     if ([identifier isEqualToString:KesslerTBPicture]) {
         NSCustomTouchBarItem *item = [[NSCustomTouchBarItem alloc] initWithIdentifier:identifier];
-        NSImageView *view = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, KesslerTBPictureLeast, KesslerTBPictureTall)];
+        CGFloat wide = kessler_tb_whole ? KesslerTBWholeWide : KesslerTBPictureWide;
+        NSImageView *view = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, wide, KesslerTBPictureTall)];
         view.imageScaling = NSImageScaleNone;
-        [view.widthAnchor constraintGreaterThanOrEqualToConstant:KesslerTBPictureLeast].active = YES;
-        [view.widthAnchor constraintLessThanOrEqualToConstant:KesslerTBPictureMost].active = YES;
-        NSLayoutConstraint *wide = [view.widthAnchor constraintEqualToConstant:KesslerTBPictureMost];
-        wide.priority = NSLayoutPriorityDefaultLow - 1;
-        wide.active = YES;
-        [view setContentHuggingPriority:NSLayoutPriorityDefaultLow - 2
-                         forOrientation:NSLayoutConstraintOrientationHorizontal];
-        [view setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow - 2
-                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [view.widthAnchor constraintEqualToConstant:wide].active = YES;
         [view.heightAnchor constraintEqualToConstant:KesslerTBPictureTall].active = YES;
         if (kessler_tb_whole) {
             NSClickGestureRecognizer *touch = [[NSClickGestureRecognizer alloc] initWithTarget:self

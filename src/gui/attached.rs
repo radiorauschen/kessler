@@ -34,6 +34,7 @@ impl Attached {
             Some(number) => format!("{generation} · {number}"),
             None => generation,
         };
+        let model = if info.signing().is_some() { format!("{model} {}", tr!("(beta)")) } else { model };
         let name = db
             .master_playlist()
             .map(|p| p.name.trim())
@@ -51,8 +52,9 @@ impl Attached {
             refusal: info.writable().err().map(|_| {
                 match info.checksum() {
                     crate::ipod::device_info::Checksum::Hash58 => {
-                        tr!("signatur (hash58) — kessler schreibt dieses modell nicht").to_string()
+                        tr!("signatur (hash58) ohne firewire-guid — kessler schreibt nicht darauf").to_string()
                     }
+                    _ if info.later_signature => tr!("neuere signatur — kessler schreibt dieses modell nicht").to_string(),
                     _ => match &info.model_number {
                         Some(number) => tr!("modell {} unbekannt — kessler schreibt nicht darauf", number),
                         None => tr!("modell unbekannt — kessler schreibt nicht darauf").to_string(),

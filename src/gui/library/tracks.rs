@@ -263,6 +263,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                             offering: false,
                             arrow: false,
                             pointed: false,
+                            still: false,
                         };
                         let response = album_head(
                             ui,
@@ -310,6 +311,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     offering: false,
                     arrow: false,
                     pointed: false,
+                    still: false,
                 };
                 let on_device = device_mark.filter(|_| on_device.contains(&track.id));
                 let by = app.compiled.contains(&track.id).then(|| track.shown_artist());
@@ -671,10 +673,11 @@ pub(super) fn album_head(
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
     let plate = Rect::from_min_size(rect.min, Vec2::new(rect.width(), plate_height));
     let plated = marked.plated();
+    let corner = crate::gui::theme::ROW_RADIUS;
     if plated {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, marker_colour(palette));
+        ui.painter().rect_filled(plate, corner, marker_colour(palette));
     } else if response.hovered() {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, hover_colour(ui, palette));
+        ui.painter().rect_filled(plate, corner, hover_colour(ui, palette));
     }
     let content = content_rect(rect, m);
     let picture = Rect::from_min_size(

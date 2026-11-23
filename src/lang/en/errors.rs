@@ -2,6 +2,8 @@ pub const PART: &[(&str, &str)] = &[
     ("die datei ist nicht mehr da", "the file is gone"),
     ("curl lässt sich nicht starten: {}", "cannot start curl: {}"),
     ("{} antwortet nicht", "{} does not answer"),
+    ("{} ist gerade überlastet — später noch einmal", "{} is busy just now — try again later"),
+    ("kein netz — {} ist nicht zu erreichen", "no network — {} cannot be reached"),
     ("musicbrainz antwortet unverständlich", "unreadable answer from musicbrainz"),
     ("deezer antwortet unverständlich", "unreadable answer from deezer"),
     ("itunes antwortet unverständlich", "unreadable answer from itunes"),

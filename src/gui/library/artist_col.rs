@@ -66,7 +66,9 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         );
                         artist_picture(app, ui, rect, palette, &name);
                     }
-                    ui.add_space(BLOCK_AIR * 2.0);
+                    let (facts, style) = facts_lines(&info, false);
+                    let has_facts = show_facts && !(facts.is_empty() && style.is_empty());
+                    ui.add_space(if has_facts { BLOCK_AIR } else { BLOCK_AIR * 2.0 });
                 }
 
                 let fact = |ui: &mut Ui, label: &str, value: &str| {
@@ -75,15 +77,14 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     }
                 };
                 if show_facts {
-                    fact(ui, tr!("art"), crate::lang::t(&info.found.kind));
-                    fact(ui, tr!("herkunft"), info.origin());
-                    fact(ui, tr!("aktiv"), info.active());
-                    fact(ui, tr!("stil"), &info.style());
-                }
-                if show_facts && !info.found.disambiguation.is_empty() {
-                    ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, &tr!("aus {}", "musicbrainz"), Role::Label, palette.heading(), m);
-                    paragraph(ui, width, &info.found.disambiguation, Role::Content, palette.ink, m);
+                    let paragraph = show_wikipedia && !info.found.about_in(crate::lang::current().key()).0.is_empty();
+                    let (facts, style) = facts_lines(&info, !paragraph);
+                    if !facts.is_empty() {
+                        prose(ui, width, &facts, Role::Content, palette.ink, m);
+                    }
+                    if !style.is_empty() {
+                        prose(ui, width, &style, Role::Label, palette.faint, m);
+                    }
                 }
 
                 let trouble = app.artist.trouble.as_ref().filter(|(k, _)| *k == key);
@@ -120,6 +121,59 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     }
                     prose(ui, width, about, Role::Content, palette.ink, m);
                 }
+                let in_library = |name: &str| {
+                    let plain = crate::library::artistinfo::plain(name);
+                    app.artists
+                        .iter()
+                        .position(|a| crate::library::artistinfo::plain(&a.name) == plain)
+                };
+                for (heading, ties) in [
+                    (tr!("mitglieder"), &info.found.members),
+                    (tr!("in gruppen"), &info.found.groups),
+                ] {
+                    if !show_ties || ties.is_empty() {
+                        continue;
+                    }
+                    ui.add_space(BLOCK_AIR * 2.0);
+                    say(ui, width, heading, Role::Label, palette.heading(), m);
+                    for tie in ties.iter().take(ARTIST_TIES) {
+                        let colour = if in_library(&tie.name).is_some() { palette.mid } else { palette.ink };
+                        match in_library(&tie.name) {
+                            Some(at) => {
+                                if device_action(ui, width, &tie.name, m, palette) {
+                                    go_to = Some(at);
+                                }
+                            }
+                            None => {
+                                match other_row(ui, width, &tie.name, colour, m, palette) {
+                                    Some(Other::Visit) => visit = Some(tie.name.clone()),
+                                    Some(Other::Copy) => copied = Some(tie.name.clone()),
+                                    None => {}
+                                }
+                            }
+                        }
+                        let mut aside = tie.years.clone();
+                        if aside.ends_with('–') {
+                            aside.push_str(tr!("heute|bis jetzt"));
+                        }
+                        if !tie.current {
+                            if !aside.is_empty() {
+                                aside.push(' ');
+                            }
+                            aside.push_str(tr!("(ehemalig)"));
+                        }
+                        if !tie.also.is_empty() {
+                            if !aside.is_empty() {
+                                aside.push_str(" · ");
+                            }
+                            aside.push_str(&tr!("auch in {}", tie.also.join(", ")));
+                        }
+                        if !aside.is_empty() {
+                            prose(ui, width, &aside, Role::Label, palette.faint, m);
+                        }
+                    }
+                }
+
                 let on_radio = app.artist.name.clone().and_then(|name| app.heard_on_radio(&name));
                 let radio_fact = |ui: &mut Ui, heard: &crate::radio::heard::Hearing| {
                     let today = chrono::Local::now().date_naive();
@@ -169,56 +223,6 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     ui.add_space(BLOCK_AIR * 2.0);
                     say(ui, width, tr!("notiz"), Role::Label, palette.heading(), m);
                     prose(ui, width, &info.own.note, Role::Content, palette.ink, m);
-                }
-
-                let in_library = |name: &str| {
-                    let plain = crate::library::artistinfo::plain(name);
-                    app.artists
-                        .iter()
-                        .position(|a| crate::library::artistinfo::plain(&a.name) == plain)
-                };
-                for (heading, ties) in [
-                    (tr!("mitglieder"), &info.found.members),
-                    (tr!("in gruppen"), &info.found.groups),
-                ] {
-                    if !show_ties || ties.is_empty() {
-                        continue;
-                    }
-                    ui.add_space(BLOCK_AIR * 2.0);
-                    say(ui, width, heading, Role::Label, palette.heading(), m);
-                    for tie in ties.iter().take(ARTIST_TIES) {
-                        let colour = if in_library(&tie.name).is_some() { palette.mid } else { palette.ink };
-                        match in_library(&tie.name) {
-                            Some(at) => {
-                                if device_action(ui, width, &tie.name, m, palette) {
-                                    go_to = Some(at);
-                                }
-                            }
-                            None => {
-                                match other_row(ui, width, &tie.name, colour, m, palette) {
-                                    Some(Other::Visit) => visit = Some(tie.name.clone()),
-                                    Some(Other::Copy) => copied = Some(tie.name.clone()),
-                                    None => {}
-                                }
-                            }
-                        }
-                        let mut aside = tie.years.clone();
-                        if !tie.current {
-                            if !aside.is_empty() {
-                                aside.push(' ');
-                            }
-                            aside.push_str(tr!("(ehemalig)"));
-                        }
-                        if !tie.also.is_empty() {
-                            if !aside.is_empty() {
-                                aside.push_str(" · ");
-                            }
-                            aside.push_str(&tr!("auch in {}", tie.also.join(", ")));
-                        }
-                        if !aside.is_empty() {
-                            prose(ui, width, &aside, Role::Label, palette.faint, m);
-                        }
-                    }
                 }
 
                 if show_similar && !info.found.similar.is_empty() {
@@ -277,6 +281,10 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         url: format!("https://www.discogs.com/search/?q={encoded}&type=artist"),
                     });
                 }
+                if let Some(at) = links.iter().position(|l| l.label == "website") {
+                    let site = links.remove(at);
+                    links.insert(0, site);
+                }
                 ui.add_space(BLOCK_AIR * 2.0);
                 say(ui, width, tr!("mehr lesen"), Role::Label, palette.heading(), m);
                 for link in &links {
@@ -289,20 +297,16 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 if device_action(ui, width, tr!("bearbeiten"), m, palette) {
                     edit = true;
                 }
-                if !looking && device_action(ui, width, tr!("neu suchen"), m, palette) {
-                    look = true;
-                }
-                if !info.looked_up.is_empty() {
+                if !looking {
                     let today = chrono::Local::now().date_naive();
-                    ui.add_space(BLOCK_AIR);
-                    say(
-                        ui,
-                        width,
-                        &tr!("gesucht {}", text::day(&info.looked_up, today)),
-                        Role::Label,
-                        palette.faint,
-                        m,
-                    );
+                    let when = if info.looked_up.is_empty() {
+                        String::new()
+                    } else {
+                        tr!("(aktualisiert {})", text::day(&info.looked_up, today))
+                    };
+                    if super::device_col::device_action_noted(ui, width, tr!("aktualisieren"), &when, m, palette) {
+                        look = true;
+                    }
                 }
 
                 let sources = sources(&info, show_picture, full.is_some(), show_wikipedia, show_facts);
@@ -310,9 +314,7 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     ui.add_space(BLOCK_AIR * 2.0);
                     say(ui, width, tr!("quellen"), Role::Label, palette.heading(), m);
                     for (said, url) in sources {
-                        if url.is_empty() {
-                            say(ui, width, &said, Role::Label, palette.faint, m);
-                        } else if link_action(ui, width, &said, m, palette) {
+                        if super::device_col::link_line(ui, width, &said, !url.is_empty(), m, palette) {
                             open_url = Some(url);
                         }
                     }
@@ -383,6 +385,60 @@ fn artist_full_picture(app: &GuiApp) -> Option<std::path::PathBuf> {
     path.is_file().then_some(path)
 }
 
+fn facts_lines(info: &crate::library::artistinfo::ArtistInfo, with_note: bool) -> (String, String) {
+    let kind = info.found.kind.as_str();
+    let person = kind == "person";
+    let what = if person || kind.is_empty() { "" } else { crate::lang::t(kind) };
+    let place = info.origin().trim();
+    let years = info.active().trim();
+    let year = |y: &str| (y.len() == 4 && y.chars().all(|c| c.is_ascii_digit())).then(|| y.to_string());
+    let (begin, end, own) = match years.split_once('–') {
+        Some((b, e)) => (year(b), year(e), (b.is_empty() || year(b).is_some()) && (e.is_empty() || e == "?" || year(e).is_some())),
+        None => (year(years), None, year(years).is_some() || years.is_empty()),
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if person {
+        match (&begin, place.is_empty()) {
+            (Some(b), false) => parts.push(tr!("geboren {} in {}", b, place)),
+            (Some(b), true) => parts.push(tr!("geboren {}", b)),
+            (None, false) => parts.push(tr!("aus {}|herkunft", place)),
+            (None, true) => {}
+        }
+        if let Some(e) = &end {
+            parts.push(tr!("gestorben {}", e));
+        }
+    } else {
+        match (what.is_empty(), place.is_empty()) {
+            (false, false) => parts.push(tr!("{} aus {}", what, place)),
+            (false, true) => parts.push(what.to_string()),
+            (true, false) => parts.push(tr!("aus {}|herkunft", place)),
+            (true, true) => {}
+        }
+        match (&begin, &end) {
+            (Some(b), Some(e)) => parts.push(format!("{b}–{e}")),
+            (Some(b), None) if years.ends_with('–') => parts.push(tr!("seit {}", b)),
+            (Some(b), None) => parts.push(b.clone()),
+            (None, Some(e)) => parts.push(format!("–{e}")),
+            (None, None) => {}
+        }
+    }
+    if !own && !years.is_empty() {
+        parts.push(years.to_string());
+    }
+    let mut sentence = String::new();
+    if !parts.is_empty() {
+        sentence = tr!("{}.", parts.join(tr!(", ")));
+    }
+    let note = if with_note { crate::gui::theme::lower(info.found.disambiguation.trim()) } else { String::new() };
+    if !note.is_empty() {
+        if !sentence.is_empty() {
+            sentence.push(' ');
+        }
+        sentence.push_str(&tr!("{}.", note));
+    }
+    (sentence, info.style())
+}
+
 fn sources(info: &crate::library::artistinfo::ArtistInfo, picture: bool, full: bool, text: bool, facts: bool) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if picture {
@@ -397,7 +453,12 @@ fn sources(info: &crate::library::artistinfo::ArtistInfo, picture: bool, full: b
                     said.push_str(part);
                 }
             }
-            out.push((said, credit.page.clone()));
+            let page = if credit.page.is_empty() {
+                info.found.links.iter().find(|l| l.label == credit.from).map(|l| l.url.clone()).unwrap_or_default()
+            } else {
+                credit.page.clone()
+            };
+            out.push((said, page));
         }
     }
     if text && !info.found.about_from.is_empty() {
@@ -487,10 +548,12 @@ pub(super) fn prose(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Co
     place_wrapped(ui, width, g, colour, m);
 }
 
+const PROSE_TOP: f32 = 2.0;
+
 fn place_wrapped(ui: &mut Ui, width: f32, g: std::sync::Arc<egui::Galley>, colour: Color32, m: Metrics) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, g.size().y + 4.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, g.size().y + PROSE_TOP * 2.0), Sense::hover());
     ui.painter()
-        .galley(egui::pos2(rect.left() + m.marker_pad_x, rect.top() + 2.0), g, colour);
+        .galley(egui::pos2(rect.left() + m.marker_pad_x, rect.top() + PROSE_TOP), g, colour);
 }
 
 pub(super) fn artist_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
@@ -615,7 +678,7 @@ fn other_row(ui: &mut Ui, width: f32, name: &str, colour: Color32, m: Metrics, p
     let content = content_rect(rect, m);
     let line = text::row_line(ui, m.row, Role::Content);
     let hint = text::line(ui, tr!("kopieren"), Role::Label, palette.faint);
-    let hint_at = egui::pos2(content.right() - hint.size().x, text::beside_content(ui, &hint, Role::Label, rect.top(), m.row));
+    let hint_at = egui::pos2(content.right() - hint.size().x, text::on_x_middle(ui, &hint, Role::Label, marker_rect(rect, m).center().y));
     let hint_rect = Rect::from_min_max(
         egui::pos2(hint_at.x - 6.0, rect.top()),
         egui::pos2(rect.right(), rect.bottom()),
@@ -635,4 +698,28 @@ fn other_row(ui: &mut Ui, width: f32, name: &str, colour: Color32, m: Metrics, p
     }
     let at = response.interact_pointer_pos();
     Some(if at.is_some_and(|p| hint_rect.contains(p)) { Other::Copy } else { Other::Visit })
+}
+
+#[cfg(test)]
+mod facts_sentence {
+    use crate::library::artistinfo::ArtistInfo;
+
+    fn said(kind: &str, origin: &str, active: &str, note: &str) -> String {
+        let mut info = ArtistInfo::default();
+        info.found.kind = kind.into();
+        info.found.origin = origin.into();
+        info.found.active = active.into();
+        info.found.disambiguation = note.into();
+        super::facts_lines(&info, true).0
+    }
+
+    #[test]
+    fn the_facts_read_as_a_sentence() {
+        assert_eq!(said("person", "Jacksonville", "1962–", "US soul singer"), "geboren 1962 in Jacksonville. us soul singer.");
+        assert_eq!(said("person", "Memphis", "1946–1994", ""), "geboren 1946 in Memphis, gestorben 1994.");
+        assert_eq!(said("person", "", "", ""), "");
+        assert_eq!(said("gruppe", "Manchester", "1976–1993", ""), "gruppe aus Manchester, 1976–1993.");
+        assert_eq!(said("gruppe", "Edinburgh", "1986–", ""), "gruppe aus Edinburgh, seit 1986.");
+        assert_eq!(said("", "Berlin", "seit den achtzigern", ""), "aus Berlin, seit den achtzigern.");
+    }
 }

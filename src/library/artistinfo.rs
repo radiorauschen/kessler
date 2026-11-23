@@ -48,6 +48,7 @@ pub struct Found {
     pub told: Vec<Told>,
     pub asked: Vec<String>,
     pub tags: Vec<String>,
+    pub genres: Vec<String>,
     pub similar: Vec<String>,
     pub kin: Vec<Kin>,
     pub links: Vec<Link>,
@@ -168,12 +169,24 @@ impl ArtistInfo {
     }
 
     pub fn style(&self) -> String {
-        if self.own.style.is_empty() {
-            self.found.tags.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
-        } else {
-            self.own.style.clone()
+        if !self.own.style.is_empty() {
+            return self.own.style.clone();
         }
+        let from = if self.found.genres.is_empty() { &self.found.tags } else { &self.found.genres };
+        from.iter().filter(|tag| names_a_style(tag)).take(4).cloned().collect::<Vec<_>>().join(", ")
     }
+}
+
+fn names_a_style(tag: &str) -> bool {
+    const NOT_STYLES: [&str; 30] = [
+        "seen live", "favorites", "favourites", "favorite", "favourite", "my favorite",
+        "female vocalists", "female vocalist", "male vocalists", "male vocalist",
+        "female vocals", "male vocals", "singer-songwriter-ish", "awesome", "love",
+        "beautiful", "american", "british", "english", "german", "french", "canadian",
+        "usa", "uk", "us", "check out", "to listen", "spotify", "under 2000 listeners", "all",
+    ];
+    let tag = tag.trim().to_lowercase();
+    !tag.is_empty() && !NOT_STYLES.contains(&tag.as_str())
 }
 
 fn pick<'a>(own: &'a str, found: &'a str) -> &'a str {
@@ -484,7 +497,10 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
     let mut trouble: Option<String> = None;
     fn note(e: KesslerError, trouble: &mut Option<String>) {
         if trouble.is_none() {
-            *trouble = Some(e.to_string());
+            *trouble = Some(match e {
+                KesslerError::Metadata(said) => said,
+                other => other.to_string(),
+            });
         }
     }
 
@@ -768,6 +784,7 @@ fn read_musicbrainz(doc: &Json, found: &mut Found) -> Option<String> {
         }
     }
     named.sort_by(|a, b| b.1.total_cmp(&a.1));
+    found.genres = named.iter().filter(|(_, count)| *count >= 1000.0).map(|(n, _)| n.clone()).collect();
     found.tags = named.into_iter().map(|(n, _)| n).collect();
 
     let mut wikidata = None;
@@ -1092,16 +1109,44 @@ fn without_markup(html: &str) -> String {
         }
     }
     let out = out
-        .replace("&amp;", "&")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&#039;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
         .replace("&lt;", "<")
-        .replace("&gt;", ">");
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
     let out = match out.rfind("Read more on Last.fm") {
         Some(at) => out[..at].to_string(),
         None => out,
     };
-    out.trim().to_string()
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod style_words {
+    use super::*;
+
+    #[test]
+    fn the_style_is_genres_else_tags_that_name_one() {
+        let mut info = ArtistInfo::default();
+        info.found.tags = vec!["seen live".into(), "soul".into(), "american".into(), "r&b".into(), "Female Vocalists".into()];
+        assert_eq!(info.style(), "soul, r&b");
+        info.found.genres = vec!["quiet storm".into()];
+        assert_eq!(info.style(), "quiet storm");
+        info.own.style = "mein stil".into();
+        assert_eq!(info.style(), "mein stil");
+    }
+}
+
+#[cfg(test)]
+mod lastfm_text {
+    #[test]
+    fn its_entities_and_spaces_are_read() {
+        let said = super::without_markup("Al&nbsp;Green&#039;s  <b>soul</b>\n  &amp; more <a href=\"x\">Read more on Last.fm</a>");
+        assert_eq!(said, "Al Green's soul & more");
+    }
 }
 
 #[cfg(test)]
