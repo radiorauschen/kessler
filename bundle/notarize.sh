@@ -179,12 +179,12 @@ if [[ "${UPLOAD:-1}" == "1" ]]; then
   else
     FIXED="$WORK/$NAME-macos.dmg"
     cp "$DMG" "$FIXED"
-    NOTES="$NAME $VERSION für den mac, signiert und notarisiert. dieser link zeigt immer auf die neueste notarisierte fassung."
+    NOTES="$NAME $VERSION for the mac, signed and notarized. this link always points to the newest notarized build."
     if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-      gh release create "$TAG" --repo "$REPO" --prerelease --title "$NAME für den mac" --notes "$NOTES" ||
+      gh release create "$TAG" --repo "$REPO" --prerelease --title "$NAME for the mac" --notes "$NOTES" ||
         fail "das release „$TAG\" liess sich nicht anlegen"
     else
-      gh release edit "$TAG" --repo "$REPO" --notes "$NOTES" >/dev/null
+      gh release edit "$TAG" --repo "$REPO" --title "$NAME for the mac" --notes "$NOTES" >/dev/null
     fi
     gh release upload "$TAG" "$FIXED" --repo "$REPO" --clobber ||
       fail "die dmg liess sich nicht hochladen"
