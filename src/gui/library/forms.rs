@@ -252,6 +252,8 @@ pub(super) fn transfer_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     let width = ui.available_width();
     let mut close = false;
     let mut go: Option<bool> = None;
+    let mut stop = false;
+    let target = crate::ipod::sync::Target::from_name(&app.config.ipod_format);
 
     let taken = ui.vertical(|ui| {
         let Some(transfer) = app.transfer.as_ref() else {
@@ -380,7 +382,7 @@ pub(super) fn transfer_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                         &tr!("{} titel — {} → {}",
                             text::count(plan.incompatible.len() as u64),
                             plan.incompatible_formats().join(", "),
-                            crate::ipod::sync::conversion_word(&plan.incompatible_formats())
+                            crate::ipod::sync::conversion_word(&plan.incompatible_formats(), target)
                         ),
                         palette,
                     );
@@ -456,6 +458,10 @@ pub(super) fn transfer_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     );
                 }
                 ui.add_space(m.row * 0.4);
+                if action(ui, width, tr!("abbrechen"), m, palette) {
+                    stop = true;
+                }
+                ui.add_space(m.row * 0.4);
                 say(
                     ui,
                     width,
@@ -490,6 +496,9 @@ pub(super) fn transfer_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
 
     if let Some(convert) = go {
         app.run_transfer(convert);
+    }
+    if stop {
+        app.stop_transfer();
     }
     if close {
         app.close_transfer();

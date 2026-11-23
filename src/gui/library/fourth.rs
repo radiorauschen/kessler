@@ -119,6 +119,7 @@ pub(super) fn list_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
                         offering: false,
                         arrow: false,
                         pointed: false,
+                        still: false,
                     };
                     let response = queue_row(
                         ui,
@@ -500,6 +501,7 @@ pub(super) fn queue_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &
                         offering: false,
                         arrow: false,
                         pointed: false,
+                        still: false,
                     };
                     let response = queue_row(
                         ui,
@@ -616,7 +618,7 @@ pub(super) fn action(ui: &mut Ui, width: f32, word: &str, m: Metrics, palette: &
     if response.hovered() {
         ui.painter().rect_filled(
             rect.shrink2(Vec2::new(m.marker_pad_x - 4.0, m.marker_inset_y)),
-            MARKER_RADIUS,
+            crate::gui::theme::ROW_RADIUS,
             palette.hover,
         );
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

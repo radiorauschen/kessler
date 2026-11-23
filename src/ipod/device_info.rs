@@ -161,13 +161,82 @@ fn generation_for_model(model: &str) -> Generation {
     }
 }
 
+impl Generation {
+    pub const CHOOSABLE: [Generation; 20] = [
+        Generation::First,
+        Generation::Second,
+        Generation::Third,
+        Generation::Fourth,
+        Generation::Photo,
+        Generation::Mini1,
+        Generation::Mini2,
+        Generation::Nano1,
+        Generation::Nano2,
+        Generation::Nano3,
+        Generation::Nano4,
+        Generation::Video1,
+        Generation::Video2,
+        Generation::Shuffle1,
+        Generation::Shuffle2,
+        Generation::Shuffle3,
+        Generation::Shuffle4,
+        Generation::Classic1,
+        Generation::Classic2,
+        Generation::Classic3,
+    ];
+
+    fn a_model_number(self) -> Option<&'static str> {
+        Some(match self {
+            Self::First => "8513",
+            Self::Second => "8737",
+            Self::Third => "8976",
+            Self::Fourth => "9282",
+            Self::Photo => "A079",
+            Self::Mini1 => "9160",
+            Self::Mini2 => "9800",
+            Self::Nano1 => "A350",
+            Self::Nano2 => "A477",
+            Self::Nano3 => "A978",
+            Self::Nano4 => "B480",
+            Self::Video1 => "A002",
+            Self::Video2 => "A444",
+            Self::Shuffle1 => "9724",
+            Self::Shuffle2 => "A546",
+            Self::Shuffle3 => "C306",
+            Self::Shuffle4 => "C584",
+            Self::Classic1 => "B029",
+            Self::Classic2 => "B562",
+            Self::Classic3 => "C293",
+            Self::Unknown => return None,
+        })
+    }
+}
+
+pub fn write_model(mount_point: &Path, generation: Generation) -> std::io::Result<()> {
+    let Some(number) = generation.a_model_number() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no model to write"));
+    };
+    let dir = mount_point.join("iPod_Control").join("Device");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("SysInfo");
+    let kept: String = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("ModelNumStr"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&path, format!("{kept}ModelNumStr: x{number}\n"))
+}
+
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub generation: Generation,
     pub model_number: Option<String>,
     pub serial: Option<String>,
-    #[allow(dead_code)]
-    pub firewire_id: Option<String>,
+    pub guid: Option<([u8; 8], &'static str)>,
+    pub db_version: Option<u32>,
+    pub signed_database: bool,
+    pub later_signature: bool,
 }
 
 impl DeviceInfo {
@@ -182,49 +251,258 @@ impl DeviceInfo {
             .as_deref()
             .and_then(|s| sysinfo_field(s, "pszSerialNumber"));
 
+        let extended = std::fs::read_to_string(device_dir.join("SysInfoExtended")).ok();
+        let serial = serial.or_else(|| extended.as_deref().and_then(|s| plist_string_after_key(s, "SerialNumber")));
+
         let generation = model_number
             .as_deref()
             .map(normalise_model)
             .map(|m| generation_for_model(&m))
             .filter(|g| *g != Generation::Unknown)
+            .or_else(|| serial.as_deref().and_then(model_for_serial).map(generation_for_model).filter(|g| *g != Generation::Unknown))
             .or_else(|| shuffle_by_its_list(mount_point))
+            .or_else(|| by_usb(mount_point, model_number.is_none()))
             .unwrap_or(Generation::Unknown);
 
-        let firewire_id = std::fs::read_to_string(device_dir.join("SysInfoExtended"))
-            .ok()
-            .and_then(|s| plist_string_after_key(&s, "FirewireGuid"));
+        let firewire_id = extended
+            .as_deref()
+            .and_then(|s| plist_string_after_key(s, "FirewireGuid").or_else(|| plist_string_after_key(s, "FireWireGUID")));
+        let db_version = extended.as_deref().and_then(|s| plist_integer_after_key(s, "DBVersion"));
+        let found = database_signature(mount_point);
 
-        Self {
+        let mut info = Self {
             generation,
             model_number,
             serial,
-            firewire_id,
+            guid: firewire_id
+                .as_deref()
+                .and_then(super::hash58::parse_guid)
+                .map(|g| (g, "SysInfoExtended"))
+                .or_else(|| {
+                    sysinfo
+                        .as_deref()
+                        .and_then(|s| sysinfo_field(s, "FirewireGuid"))
+                        .as_deref()
+                        .and_then(super::hash58::parse_guid)
+                        .map(|g| (g, "SysInfo"))
+                }),
+            db_version,
+            signed_database: found != Signature::None,
+            later_signature: found == Signature::Later || db_version.is_some_and(|v| v >= 4),
+        };
+        if info.guid.is_none() && info.checksum() == Checksum::Hash58 {
+            info.guid = usb_lookup(mount_point, &mut Vec::new())
+                .and_then(|usb| usb.serial)
+                .as_deref()
+                .and_then(super::hash58::parse_guid)
+                .map(|g| (g, "usb"));
         }
+        info
+    }
+
+    pub fn signing(&self) -> Option<[u8; 8]> {
+        (self.checksum() == Checksum::Hash58).then_some(self.guid.map(|(g, _)| g)).flatten()
     }
 
     pub fn checksum(&self) -> Checksum {
+        if self.later_signature {
+            return Checksum::Unknown;
+        }
+        if self.signed_database || self.db_version.is_some_and(|v| v >= 3) {
+            return Checksum::Hash58;
+        }
         self.generation.checksum()
     }
 
     pub fn writable(&self) -> std::result::Result<(), String> {
         match self.checksum() {
             Checksum::None => Ok(()),
+            Checksum::Hash58 if self.guid.is_some() => Ok(()),
             Checksum::Hash58 => Err(format!(
-                "{} signs its database with a checksum (hash58) that kessler \
-                 cannot compute yet. Writing an unsigned database would make the \
-                 iPod show an empty library, so nothing was written.",
-                self.generation.label()
+                "{} signs its database with a checksum (hash58) made from its \
+                 FireWire GUID, and kessler found none — not in SysInfoExtended, \
+                 not in SysInfo, not as the USB serial number. Writing an unsigned \
+                 database would make the iPod show an empty library, so nothing \
+                 was written.",
+                if self.generation == Generation::Unknown || self.signed_database || self.db_version.is_some_and(|v| v >= 3) {
+                    "this iPod"
+                } else {
+                    self.generation.label()
+                }
             )),
+            Checksum::Unknown if self.later_signature => Err(
+                "this iPod wants a later signature on its database than the one \
+                 kessler can write (hash58): the nano of the fifth generation and \
+                 after. Writing would make it show an empty library, so nothing \
+                 was written."
+                    .into(),
+            ),
             Checksum::Unknown => Err(format!(
                 "could not identify this iPod{}. Some models refuse an unsigned \
                  database and then show an empty library, so kessler will not \
                  write to hardware it cannot recognise.",
                 match &self.model_number {
                     Some(m) => format!(" (model {m})"),
-                    None => " — no readable iPod_Control/Device/SysInfo".into(),
+                    None => " — no model number in iPod_Control/Device/SysInfo, nor one on USB".into(),
                 }
             )),
         }
+    }
+}
+
+fn generation_for_usb(product: u16) -> Option<Generation> {
+    Some(match product {
+        0x1201 => Generation::Third,
+        0x1203 => Generation::Fourth,
+        0x1204 => Generation::Photo,
+        0x1205 => Generation::Mini1,
+        0x1209 => Generation::Video1,
+        0x120A => Generation::Nano1,
+        0x1260 => Generation::Nano2,
+        0x1261 => Generation::Classic1,
+        0x1262 => Generation::Nano3,
+        0x1263 => Generation::Nano4,
+        0x1300 => Generation::Shuffle1,
+        0x1301 => Generation::Shuffle2,
+        0x1302 => Generation::Shuffle3,
+        0x1303 => Generation::Shuffle4,
+        _ => return None,
+    })
+}
+
+fn by_usb(mount_point: &Path, missing: bool) -> Option<Generation> {
+    let Usb { vendor, product, .. } = usb_lookup(mount_point, &mut Vec::new())?;
+    if vendor != 0x05AC {
+        return None;
+    }
+    let generation = generation_for_usb(product)?;
+    if !missing {
+        return Some(generation);
+    }
+    if let Err(e) = write_model(mount_point, generation) {
+        tracing::debug!("SysInfo not written: {e}");
+    } else {
+        tracing::info!("model known by usb ({product:04x}): {}", generation.label());
+    }
+    Some(generation)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Usb {
+    vendor: u16,
+    product: u16,
+    serial: Option<String>,
+}
+
+pub fn usb_trace(mount_point: &Path) -> Vec<String> {
+    let mut said = Vec::new();
+    let found = usb_lookup(mount_point, &mut said);
+    said.push(match found {
+        Some(Usb { vendor, product, serial }) => {
+            let serial = match serial {
+                Some(serial) => format!(" · seriennummer {serial}"),
+                None => String::new(),
+            };
+            match (vendor, generation_for_usb(product)) {
+                (0x05AC, Some(generation)) => format!("usb {vendor:04x}:{product:04x} → {}{serial}", generation.label()),
+                _ => format!("usb {vendor:04x}:{product:04x} — keine generation dazu bekannt{serial}"),
+            }
+        }
+        None => "keine usb-kennung gefunden".into(),
+    });
+    said
+}
+
+#[cfg(target_os = "linux")]
+fn usb_lookup(mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
+    let mounts = std::fs::read_to_string("/proc/mounts").ok()?;
+    let wanted = mount_point.to_string_lossy().into_owned();
+    let device = mounts.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let device = parts.next()?;
+        let at = parts.next()?.replace("\\040", " ");
+        (at.trim_end_matches('/') == wanted.trim_end_matches('/')).then(|| device.to_string())
+    });
+    said.push(format!("eingehängt von: {}", device.as_deref().unwrap_or("nicht in /proc/mounts")));
+    let name = Path::new(&device?).file_name()?.to_owned();
+    let mut at = std::fs::canonicalize(Path::new("/sys/class/block").join(name)).ok()?;
+    said.push(format!("in /sys: {}", at.display()));
+    loop {
+        let read = |file: &str| {
+            std::fs::read_to_string(at.join(file)).ok().and_then(|s| u16::from_str_radix(s.trim(), 16).ok())
+        };
+        if let (Some(vendor), Some(product)) = (read("idVendor"), read("idProduct")) {
+            let serial = std::fs::read_to_string(at.join("serial")).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            return Some(Usb { vendor, product, serial });
+        }
+        if !at.pop() || at.as_os_str().len() <= "/sys".len() {
+            said.push("kein usb-gerät darüber".into());
+            return None;
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn usb_lookup(mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
+    let out = std::process::Command::new("/usr/sbin/diskutil").arg("info").arg("-plist").arg(mount_point).output().ok()?;
+    let plist = String::from_utf8_lossy(&out.stdout);
+    let disk = plist_string_after_key(&plist, "ParentWholeDisk");
+    let bus = plist_string_after_key(&plist, "BusProtocol");
+    said.push(format!(
+        "diskutil: {} · {}",
+        disk.as_deref().unwrap_or("keine platte"),
+        bus.as_deref().unwrap_or("bus unbekannt")
+    ));
+    let disk = disk?;
+    let tree = std::process::Command::new("/usr/sbin/ioreg").args(["-r", "-c", "IOUSBHostDevice", "-l", "-w0"]).output().ok()?;
+    let tree = String::from_utf8_lossy(&tree.stdout);
+    let found = usb_in_ioreg(&tree, &disk);
+    said.push(match found {
+        Some(_) => format!("in ioreg: {disk} gefunden"),
+        None if tree.contains(&format!("\"BSD Name\" = \"{disk}\"")) => format!("in ioreg: {disk} ohne usb-kennung davor"),
+        None => format!("in ioreg: kein usb-gerät mit {disk}"),
+    });
+    found
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn usb_in_ioreg(tree: &str, disk: &str) -> Option<Usb> {
+    let bsd = format!("\"BSD Name\" = \"{disk}\"");
+    let before = &tree[..tree.find(&bsd)?];
+    let last = |key: &str| {
+        let needle = format!("\"{key}\" = ");
+        let at = before.rfind(&needle)?;
+        let rest = &before[at + needle.len()..];
+        let n = rest.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u32>().ok().and_then(|n| u16::try_from(n).ok())?;
+        Some((at, n))
+    };
+    let (vendor_at, vendor) = last("idVendor")?;
+    let (_, product) = last("idProduct")?;
+    let own = before[..vendor_at].rfind("+-o ").unwrap_or(0);
+    let serial = ["USB Serial Number", "kUSBSerialNumberString"].iter().find_map(|key| {
+        let needle = format!("\"{key}\" = \"");
+        let at = before.rfind(&needle).filter(|at| *at >= own)?;
+        let rest = &before[at + needle.len()..];
+        Some(rest[..rest.find('"')?].to_string()).filter(|s| !s.is_empty())
+    });
+    Some(Usb { vendor, product, serial })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn usb_lookup(_mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
+    said.push("auf diesem system nicht gefragt".into());
+    None
+}
+
+pub fn device_files(mount_point: &Path) -> String {
+    let dir = mount_point.join("iPod_Control").join("Device");
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => {
+            let mut names: Vec<String> = entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            if names.is_empty() { "leer".into() } else { names.join(", ") }
+        }
+        Err(_) => "kein ordner iPod_Control/Device".into(),
     }
 }
 
@@ -278,6 +556,74 @@ fn readings(raw: &str) -> Vec<String> {
     }
     readings
 }
+
+fn plist_integer_after_key(xml: &str, key: &str) -> Option<u32> {
+    let needle = format!("<key>{key}</key>");
+    let rest = &xml[xml.find(&needle)? + needle.len()..];
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix("<integer>")?;
+    rest[..rest.find("</integer>")?].trim().parse().ok()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Signature {
+    None,
+    Hash58,
+    Later,
+}
+
+fn database_signature(mount_point: &Path) -> Signature {
+    use std::io::Read;
+    let path = mount_point.join("iPod_Control").join("iTunes").join("iTunesDB");
+    let Ok(mut file) = std::fs::File::open(path) else { return Signature::None };
+    let mut head = [0u8; 0x6C];
+    if file.read_exact(&mut head).is_err() || &head[..4] != b"mhbd" {
+        return Signature::None;
+    }
+    let header = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as usize;
+    if header >= 0x32 {
+        match u16::from_le_bytes([head[0x30], head[0x31]]) {
+            0 => {}
+            1 => return Signature::Hash58,
+            _ => return Signature::Later,
+        }
+    }
+    let end = header.clamp(0x58, 0x6C);
+    if head[0x58..end].iter().any(|b| *b != 0) { Signature::Hash58 } else { Signature::None }
+}
+
+fn model_for_serial(serial: &str) -> Option<&'static str> {
+    let serial = serial.trim();
+    let suffix = serial.get(serial.len().checked_sub(3)?..)?.to_ascii_uppercase();
+    SERIAL_MODELS.iter().find(|(s, _)| *s == suffix).map(|(_, m)| *m)
+}
+
+const SERIAL_MODELS: &[(&str, &str)] = &[
+    ("LG6", "8541"), ("NAM", "8541"), ("MJ2", "8541"), ("ML1", "8709"), ("MME", "8709"),
+    ("MMB", "8737"), ("MMC", "8738"), ("NGE", "8740"), ("NGH", "8740"), ("MMF", "8741"),
+    ("NRH", "8976"), ("NLW", "8946"), ("QQF", "9460"), ("PQ5", "9244"), ("PNT", "9244"),
+    ("NLY", "8948"), ("NM7", "8948"), ("PNU", "9245"),
+    ("PS9", "9282"), ("Q8U", "9282"), ("V9V", "9787"), ("S2X", "9787"), ("PQ7", "9268"),
+    ("TDU", "A079"), ("TDS", "A079"), ("TM2", "A127"), ("SAZ", "9830"), ("SB1", "9830"),
+    ("SAY", "9829"), ("R5Q", "9585"), ("R5R", "9586"), ("R5T", "9586"),
+    ("PFW", "9160"), ("PRC", "9160"), ("QKL", "9436"), ("QKQ", "9436"), ("QKK", "9435"),
+    ("QKP", "9435"), ("QKJ", "9434"), ("QKN", "9434"), ("QKM", "9437"), ("QKR", "9437"),
+    ("S41", "9800"), ("S4C", "9800"), ("S43", "9802"), ("S45", "9804"), ("S47", "9806"),
+    ("S4J", "9806"), ("S42", "9801"), ("S44", "9803"), ("S48", "9807"),
+    ("UNA", "A350"), ("UNB", "A350"), ("UPR", "A352"), ("UPS", "A352"), ("SZB", "A004"),
+    ("SZV", "A004"), ("SZW", "A004"), ("SZC", "A005"), ("SZT", "A005"), ("TJT", "A099"),
+    ("TJU", "A099"), ("TK2", "A107"), ("TK3", "A107"),
+    ("VQ5", "A477"), ("VQ6", "A477"), ("V8T", "A426"), ("V8U", "A426"), ("V8W", "A428"),
+    ("V8X", "A428"), ("VQH", "A487"), ("VQJ", "A487"), ("VQK", "A489"), ("VKL", "A489"),
+    ("WL2", "A725"), ("WL3", "A725"), ("X9A", "A726"), ("X9B", "A726"), ("VQT", "A497"),
+    ("VQU", "A497"),
+    ("SZ9", "A002"), ("WEC", "A002"), ("WED", "A002"), ("WEG", "A002"), ("WEH", "A002"),
+    ("WEL", "A002"), ("TXK", "A146"), ("TXM", "A146"), ("WEF", "A146"), ("WEJ", "A146"),
+    ("WEK", "A146"), ("SZA", "A003"), ("SZU", "A003"), ("TXL", "A147"), ("TXN", "A147"),
+    ("V9K", "A444"), ("V9L", "A444"), ("WU9", "A444"), ("VQM", "A446"), ("V9M", "A446"),
+    ("V9N", "A446"), ("WEE", "A446"), ("V9P", "A448"), ("V9Q", "A448"), ("V9R", "A450"),
+    ("V9S", "A450"), ("V95", "A450"), ("V96", "A450"), ("WUC", "A450"), ("W9G", "A664"),
+];
 
 fn plist_string_after_key(xml: &str, key: &str) -> Option<String> {
     let needle = format!("<key>{key}</key>");
@@ -411,6 +757,168 @@ mod tests {
         assert_eq!(DeviceInfo::read(&dir).generation, Generation::Shuffle4);
         std::fs::write(device.join("SysInfo"), "ModelNumStr: xA146\n").unwrap();
         assert_eq!(DeviceInfo::read(&dir).generation, Generation::Video1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_signature_wanted_or_found_keeps_kessler_from_writing() {
+        let dir = std::env::temp_dir().join(format!("kessler-signed-{}", std::process::id()));
+        let itunes = dir.join("iPod_Control").join("iTunes");
+        std::fs::create_dir_all(&itunes).unwrap();
+        write_model(&dir, Generation::Video1).unwrap();
+        let db = crate::ipod::itunesdb::ItunesDb { version: 0, db_id: 7, language: [0, 0], library_id: 0, tracks: Vec::new(), playlists: Vec::new() };
+        std::fs::write(itunes.join("iTunesDB"), crate::ipod::itunesdb::writer::write(&db)).unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert!(!info.signed_database);
+        assert!(info.writable().is_ok());
+        let mut signed = vec![0u8; 0xBC];
+        signed[..4].copy_from_slice(b"mhbd");
+        signed[4..8].copy_from_slice(&0xBCu32.to_le_bytes());
+        signed[0x60] = 0x5A;
+        std::fs::write(itunes.join("iTunesDB"), &signed).unwrap();
+        assert!(DeviceInfo::read(&dir).writable().is_err());
+        std::fs::remove_file(itunes.join("iTunesDB")).unwrap();
+        let device = dir.join("iPod_Control").join("Device");
+        std::fs::write(device.join("SysInfoExtended"), "<dict><key>DBVersion</key>\n<integer>3</integer></dict>").unwrap();
+        assert_eq!(DeviceInfo::read(&dir).db_version, Some(3));
+        assert!(DeviceInfo::read(&dir).writable().is_err());
+        std::fs::remove_file(device.join("SysInfoExtended")).unwrap();
+        std::fs::write(device.join("SysInfo"), "pszSerialNumber: 4H5101QQF\n").unwrap();
+        assert_eq!(DeviceInfo::read(&dir).generation, Generation::Third);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_classic_is_signed_with_its_guid_and_a_later_one_is_left_alone() {
+        let dir = std::env::temp_dir().join(format!("kessler-guid-{}", std::process::id()));
+        let device = dir.join("iPod_Control").join("Device");
+        let itunes = dir.join("iPod_Control").join("iTunes");
+        std::fs::create_dir_all(&device).unwrap();
+        std::fs::create_dir_all(&itunes).unwrap();
+
+        std::fs::write(device.join("SysInfo"), "ModelNumStr: xB029\n").unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert_eq!(info.generation, Generation::Classic1);
+        assert_eq!(info.signing(), None);
+        assert!(info.writable().unwrap_err().contains("FireWire GUID"));
+
+        std::fs::write(device.join("SysInfo"), "ModelNumStr: xB029\nFirewireGuid: 0x000A27001CE1B2D3\n").unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert!(info.writable().is_ok());
+        assert_eq!(info.signing(), Some([0x00, 0x0A, 0x27, 0x00, 0x1C, 0xE1, 0xB2, 0xD3]));
+        assert_eq!(info.guid.map(|(_, from)| from), Some("SysInfo"));
+
+        std::fs::write(
+            device.join("SysInfoExtended"),
+            "<dict><key>FireWireGUID</key><string>000A2700AAAABBBB</string><key>DBVersion</key><integer>3</integer></dict>",
+        )
+        .unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert_eq!(info.guid.map(|(_, from)| from), Some("SysInfoExtended"));
+        assert_eq!(info.signing(), Some([0x00, 0x0A, 0x27, 0x00, 0xAA, 0xAA, 0xBB, 0xBB]));
+
+        let db = crate::ipod::itunesdb::ItunesDb { version: 0, db_id: 7, language: *b"de", library_id: 1, tracks: Vec::new(), playlists: Vec::new() };
+        std::fs::write(itunes.join("iTunesDB"), crate::ipod::itunesdb::writer::write_signed(&db, &info.signing().unwrap())).unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert!(info.signed_database && !info.later_signature);
+        assert!(info.writable().is_ok());
+
+        std::fs::remove_file(device.join("SysInfoExtended")).unwrap();
+        std::fs::remove_file(itunes.join("iTunesDB")).unwrap();
+        std::fs::write(device.join("SysInfo"), "ModelNumStr: x9460\nFirewireGuid: 0x000A27001CE1B2D3\n").unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert_eq!(info.generation, Generation::Third);
+        assert_eq!(info.signing(), None);
+        assert!(info.writable().is_ok());
+
+        std::fs::write(device.join("SysInfo"), "ModelNumStr: xB029\nFirewireGuid: 0x000A27001CE1B2D3\n").unwrap();
+        std::fs::write(device.join("SysInfoExtended"), "<dict><key>DBVersion</key><integer>4</integer></dict>").unwrap();
+        let info = DeviceInfo::read(&dir);
+        assert!(info.later_signature);
+        assert_eq!(info.signing(), None);
+        assert!(info.writable().unwrap_err().contains("later signature"));
+        std::fs::remove_file(device.join("SysInfoExtended")).unwrap();
+        let mut later = vec![0u8; 0xF4];
+        later[..4].copy_from_slice(b"mhbd");
+        later[4..8].copy_from_slice(&0xF4u32.to_le_bytes());
+        later[0x30] = 2;
+        std::fs::write(itunes.join("iTunesDB"), &later).unwrap();
+        assert!(DeviceInfo::read(&dir).writable().is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_usb_serial_is_the_ipods_own() {
+        let tree = r#"+-o USB2.0 Hub@02100000  <class IOUSBHostDevice>
+  |   "USB Serial Number" = "HUB0000000000001"
+  |   "idVendor" = 8457
+  |   "idProduct" = 10263
+  | +-o iPod@02130000  <class IOUSBHostDevice>
+  |   |   "USB Product Name" = "iPod"
+  |   |   "idProduct" = 4705
+  |   |   "USB Serial Number" = "000A27001CE1B2D3"
+  |   |   "idVendor" = 1452
+  |   | +-o IOUSBMassStorageDriver
+  |   |   |                 "BSD Name" = "disk4"
+  | +-o Other@02140000  <class IOUSBHostDevice>
+  |   |   "idProduct" = 4609
+  |   |   "idVendor" = 1452
+  |   |                 "BSD Name" = "disk5"
+"#;
+        let ipod = usb_in_ioreg(tree, "disk4").unwrap();
+        assert_eq!((ipod.vendor, ipod.product), (0x05AC, 0x1261));
+        assert_eq!(ipod.serial.as_deref(), Some("000A27001CE1B2D3"));
+        assert_eq!(usb_in_ioreg(tree, "disk5").unwrap().serial, None);
+    }
+
+    #[test]
+    fn a_usb_number_names_its_generation() {
+        assert_eq!(generation_for_usb(0x1201), Some(Generation::Third));
+        assert_eq!(generation_for_usb(0x1209), Some(Generation::Video1));
+        assert_eq!(generation_for_usb(0x1207), None);
+        assert_eq!(Generation::Third.checksum(), Checksum::None);
+        assert_eq!(generation_for_usb(0x1261).map(Generation::checksum), Some(Checksum::Hash58));
+    }
+
+    #[test]
+    fn the_ipod_behind_a_hub_is_found_by_its_own_numbers() {
+        let tree = r#"+-o USB2.0 Hub@02100000  <class IOUSBHostDevice>
+  |   "USB Product Name" = "USB2.0 Hub"
+  |   "idVendor" = 8457
+  |   "idProduct" = 10263
+  | |   |   "USB Product Name" = "Anker USB-C Hub Device"
+  | |   |   "idVendor" = 10522
+  | |   |   "idProduct" = 33637
+  | |   |   "idProduct" = 4609
+  | |   |   "USB Product Name" = "iPod USB Interface"
+  | |   |   "idVendor" = 1452
+  | |   |   |   "USB Device Info" = {"bcdDevice"=0,"idProduct"=4609,"idVendor"=1452}
+  | |   |   |   "idVendor" = 1452
+  | |   |                 |   "BSD Name" = "disk6"
+  | |   |                   | |   "BSD Name" = "disk6s1"
+  |     |   "idProduct" = 29280
+  |     |   "idVendor" = 8523
+"#;
+        assert_eq!(usb_in_ioreg(tree, "disk6"), Some(Usb { vendor: 0x05AC, product: 0x1201, serial: None }));
+        assert_eq!(usb_in_ioreg(tree, "disk9"), None);
+        assert_eq!(generation_for_usb(0x1201), Some(Generation::Third));
+    }
+
+    #[test]
+    fn a_model_chosen_is_written_and_read_back() {
+        let dir = std::env::temp_dir().join(format!("kessler-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(DeviceInfo::read(&dir).generation, Generation::Unknown);
+        for generation in Generation::CHOOSABLE {
+            write_model(&dir, generation).unwrap();
+            assert_eq!(DeviceInfo::read(&dir).generation, generation, "{}", generation.label());
+        }
+        let sysinfo = dir.join("iPod_Control").join("Device").join("SysInfo");
+        std::fs::write(&sysinfo, "pszSerialNumber: ABC\nModelNumStr: xZZZZ\n").unwrap();
+        write_model(&dir, Generation::Third).unwrap();
+        let read = DeviceInfo::read(&dir);
+        assert_eq!(read.generation, Generation::Third);
+        assert_eq!(read.serial.as_deref(), Some("ABC"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

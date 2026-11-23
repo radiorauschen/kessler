@@ -243,8 +243,6 @@ pub(in crate::gui) fn live_mark(app: &mut GuiApp, ui: &Ui, room: Rect, palette: 
 
 const TOUCH_PICTURE: (usize, usize) = (400, 60);
 const TOUCH_WHOLE: (usize, usize) = (1200, 60);
-const TOUCH_LEAST: usize = 240;
-const TOUCH_MOST: usize = 2000;
 
 const TOUCH_INK: u8 = 200;
 
@@ -267,13 +265,35 @@ pub(in crate::gui) fn touch_bar_picture(app: &mut GuiApp, ui: &Ui) {
     }
     let wanted = on && sounding;
     let Some(chosen) = chosen.filter(|_| wanted) else {
+        let why = if !on {
+            "aus"
+        } else if chosen.is_none() {
+            "kein bild gewählt"
+        } else if app.spectrum.silent() {
+            "kein bild: es klingt nichts"
+        } else {
+            "kein bild: das fenster ist nicht vorn"
+        };
+        say_touch(app, ui, why.to_string(), None);
         if app.touch_sent.take().is_some() {
             crate::media::touchbar_picture(None);
         }
         return;
     };
     let (width, height) = if whole { TOUCH_WHOLE } else { TOUCH_PICTURE };
-    let width = crate::media::touchbar_picture_wide().map_or(width, |points| (points * 2 / 4 * 4).clamp(TOUCH_LEAST, TOUCH_MOST));
+    let laid = crate::media::touchbar_picture_wide();
+    let state = if app.measure.is_some() {
+        format!(
+            "{} · {}×{} px · {} · die leiste gibt {}",
+            chosen.name(),
+            width,
+            height,
+            if whole { "ganze leiste" } else { "neben dem titel" },
+            laid.map_or_else(|| "noch keine breite".to_string(), |points| format!("{points} pt")),
+        )
+    } else {
+        String::new()
+    };
     let now = ui.input(|i| i.time);
     let dots = if chosen == super::FieldPicture::Meter {
         let station = app.player.current_track().is_none() && app.on_air.is_some();
@@ -297,6 +317,7 @@ pub(in crate::gui) fn touch_bar_picture(app: &mut GuiApp, ui: &Ui) {
             match grey {
                 Some(grey) => grey,
                 None => {
+                    say_touch(app, ui, format!("{state} · das bild gibt nichts her"), None);
                     if app.touch_sent.take().is_some() {
                         crate::media::touchbar_picture(None);
                     }
@@ -313,6 +334,10 @@ pub(in crate::gui) fn touch_bar_picture(app: &mut GuiApp, ui: &Ui) {
         dots.hash(&mut hasher);
         hasher.finish()
     };
+    if app.measure.is_some() {
+        let lit = dots.iter().filter(|&&lit| lit).count();
+        say_touch(app, ui, state, Some((lit, dots.len(), app.touch_sent != Some(print))));
+    }
     if app.touch_sent != Some(print) {
         app.touch_sent = Some(print);
         let rgba: Vec<u8> = dots
@@ -331,6 +356,36 @@ pub(in crate::gui) fn touch_bar_picture(app: &mut GuiApp, ui: &Ui) {
             ui.ctx().request_repaint_after(to_tick(ui.ctx(), super::field_art::field_tick(app)));
         }
         _ => {}
+    }
+}
+
+const TOUCH_SAID_EVERY: f64 = 5.0;
+
+fn say_touch(app: &mut GuiApp, ui: &Ui, state: String, shown: Option<(usize, usize, bool)>) {
+    if app.measure.is_none() {
+        return;
+    }
+    let now = ui.input(|i| i.time);
+    let (said, since, sent) = &mut app.touch_said;
+    let mut lines = Vec::new();
+    if *said != state {
+        lines.push(format!("touch bar: {state}"));
+        *said = state;
+        *since = now;
+        *sent = 0;
+    }
+    if let Some((lit, all, new)) = shown {
+        *sent += u32::from(new);
+        if now - *since >= TOUCH_SAID_EVERY {
+            lines.push(format!("touch bar: {} bilder in {:.0} s gesendet · {lit} von {all} punkten an", sent, now - *since));
+            *since = now;
+            *sent = 0;
+        }
+    }
+    if let Some(measure) = app.measure.as_mut() {
+        for line in lines {
+            measure.note(&line);
+        }
     }
 }
 

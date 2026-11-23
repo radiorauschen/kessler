@@ -1,6 +1,8 @@
 use super::types::*;
 
 const MHBD_HEADER: usize = 0x68;
+const MHBD_HEADER_SIGNED: usize = 0xF4;
+const SIGNED_DB_VERSION: u32 = 0x19;
 const MHSD_HEADER: usize = 0x60;
 const MHLT_HEADER: usize = 0x5c;
 const MHLP_HEADER: usize = 0x5c;
@@ -259,6 +261,16 @@ fn playlist_chunk(playlist: &IpodPlaylist, tracks: &[IpodTrack]) -> Vec<u8> {
 }
 
 pub fn write(db: &ItunesDb) -> Vec<u8> {
+    build(db, false)
+}
+
+pub fn write_signed(db: &ItunesDb, guid: &[u8; 8]) -> Vec<u8> {
+    let mut bytes = build(db, true);
+    crate::ipod::hash58::sign(&mut bytes, guid);
+    bytes
+}
+
+fn build(db: &ItunesDb, signed: bool) -> Vec<u8> {
     let ordered = in_master_order(db);
     let db = &numbered(ItunesDb { tracks: ordered, ..db.clone() });
 
@@ -282,16 +294,10 @@ pub fn write(db: &ItunesDb) -> Vec<u8> {
     dataset_playlists.u32(12, 2);
     dataset_playlists.append(&playlists.finish_counted());
 
-    let mut root = Chunk::new(b"mhbd", MHBD_HEADER);
+    let mut root = Chunk::new(b"mhbd", if signed { MHBD_HEADER_SIGNED } else { MHBD_HEADER });
     root.u32(12, 1);
-    root.u32(
-        16,
-        if db.version == 0 {
-            DEFAULT_DB_VERSION
-        } else {
-            db.version
-        },
-    );
+    let version = if db.version == 0 { DEFAULT_DB_VERSION } else { db.version };
+    root.u32(16, if signed { version.max(SIGNED_DB_VERSION) } else { version });
     root.u32(20, 2);
     root.u64(24, db.db_id);
     root.u16(32, 1);
@@ -474,6 +480,41 @@ mod tests {
 
     use super::*;
     use crate::ipod::itunesdb::{parse, test_writer};
+
+    #[test]
+    fn a_signed_database_reads_back_and_carries_its_signature() {
+        let db = sample_db();
+        let guid = crate::ipod::hash58::parse_guid("000A27001CE1B2D3").unwrap();
+        let bytes = write_signed(&db, &guid);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize, MHBD_HEADER_SIGNED);
+        assert_eq!(&bytes[0x30..0x32], &[1, 0], "hashing scheme one");
+        assert!(bytes[0x58..0x6C].iter().any(|b| *b != 0), "a signature at 0x58");
+        assert!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()) >= SIGNED_DB_VERSION);
+
+        let back = parse(&bytes).unwrap();
+        let plain = parse(&write(&db)).unwrap();
+        assert_eq!(back.tracks.len(), plain.tracks.len());
+        for (a, b) in back.tracks.iter().zip(&plain.tracks) {
+            assert_eq!((&a.title, &a.artist, &a.path), (&b.title, &b.artist, &b.path));
+        }
+        assert_eq!(back.playlists.len(), plain.playlists.len());
+        assert_eq!(back.db_id, db.db_id);
+
+        let mut resigned = bytes.clone();
+        crate::ipod::hash58::sign(&mut resigned, &guid);
+        assert_eq!(resigned, bytes);
+    }
+
+    #[test]
+    fn the_unsigned_database_stays_byte_for_byte() {
+        let mut db = sample_db();
+        db.language = *b"de";
+        db.library_id = 0x0102_0304_0506_0708;
+        db.playlists[0].timestamp = Some(1_500_000_000);
+        let bytes = write(&db);
+        let digest = sha1_smol::Sha1::from(&bytes).digest().to_string();
+        assert_eq!((bytes.len(), digest.as_str()), (4180, "42c96653d29ebb3874d5e148fc3db2353ba170c7"));
+    }
 
     fn sample_db() -> ItunesDb {
         let tracks = vec![

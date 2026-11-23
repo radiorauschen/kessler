@@ -18,6 +18,10 @@ pub(super) fn device_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     let mut transfer = false;
     let mut eject = false;
     let mut report = false;
+    let mut tidy = false;
+    let mut model_chosen: Option<crate::ipod::device_info::Generation> = None;
+    let mut toggle_models = false;
+    let mut reconvert = false;
     let taken = ui.allocate_ui(Vec2::new(width, ui.available_height()), |ui| {
         ui.vertical(|ui| {
             let titled = match name.trim() {
@@ -143,6 +147,20 @@ pub(super) fn device_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 ui.add_space(6.0);
                 if let Some(why) = &refusal {
                     say(ui, width, why, Role::Label, palette.faint, m);
+                    if generation == crate::ipod::device_info::Generation::Unknown {
+                        ui.add_space(6.0);
+                        if device_action(ui, width, tr!("modell wählen…"), m, palette) {
+                            toggle_models = true;
+                        }
+                        if app.choosing_model {
+                            for choice in crate::ipod::device_info::Generation::CHOOSABLE {
+                                let label = choice.label().split(" (").next().unwrap_or_default();
+                                if device_action(ui, width, &format!("  {label}"), m, palette) {
+                                    model_chosen = Some(choice);
+                                }
+                            }
+                        }
+                    }
                 } else if summary.missing > 0
                     || !summary.newest_current
                     || summary.retag > 0
@@ -156,6 +174,15 @@ pub(super) fn device_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                     && device_action(ui, width, tr!("bericht speichern"), m, palette)
                 {
                     report = true;
+                }
+                if summary.reconvert > 0
+                    && refusal.is_none()
+                    && device_action_noted(ui, width, tr!("neu umwandeln"), &tr!("{} titel", text::count(summary.reconvert as u64)), m, palette)
+                {
+                    reconvert = true;
+                }
+                if ui.input(|i| i.modifiers.alt) && device_action(ui, width, tr!("aufräumen"), m, palette) {
+                    tidy = true;
                 }
                 if device_action(ui, width, tr!("auswerfen"), m, palette) {
                     eject = true;
@@ -179,6 +206,20 @@ pub(super) fn device_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     }
     if report {
         app.save_device_report();
+    }
+    if tidy {
+        app.tidy_device();
+    }
+    if toggle_models {
+        app.choosing_model = !app.choosing_model;
+    }
+    if let Some(choice) = model_chosen {
+        app.choose_device_model(choice);
+    }
+    if reconvert {
+        if let Err(e) = app.reconvert_on_device() {
+            app.set_status(format!("{e}"));
+        }
     }
     if eject {
         match app.eject_device() {
@@ -226,7 +267,7 @@ fn name_row(app: &mut GuiApp, ui: &mut Ui, width: f32, name: &str, m: Metrics, p
     let line = text::row_line(ui, m.row, Role::Content);
     let typing = app.naming_device.as_ref();
     if typing.is_some() {
-        ui.painter().rect_filled(marker_rect(rect, m), MARKER_RADIUS, palette.marked());
+        ui.painter().rect_filled(marker_rect(rect, m), crate::gui::theme::ROW_RADIUS, palette.marked());
     } else {
         paint_hover(ui, rect, &response, RowState::default(), m, palette);
     }
@@ -334,16 +375,35 @@ pub(super) fn device_action(ui: &mut Ui, width: f32, word: &str, m: Metrics, pal
     response.clicked()
 }
 
+pub(super) fn device_action_noted(ui: &mut Ui, width: f32, word: &str, note: &str, m: Metrics, palette: &Palette) -> bool {
+    let top = ui.cursor().min.y;
+    let clicked = device_action(ui, width, word, m, palette);
+    if !note.is_empty() {
+        let rect = Rect::from_min_size(egui::pos2(ui.min_rect().left(), top), Vec2::new(width, m.row));
+        let left = content_rect(rect, m).left() + text::line(ui, word, Role::Content, palette.mid).size().x + super::rows::MARK_GAP;
+        let room = (content_rect(rect, m).right() - left).max(1.0);
+        let g = text::line_within(ui, note, Role::Label, palette.faint, room);
+        let y = text::beside_content(ui, &g, Role::Label, rect.top(), m.row);
+        ui.painter().galley(egui::pos2(left, y), g, palette.faint);
+    }
+    clicked
+}
+
 pub(super) fn link_action(ui: &mut Ui, width: f32, word: &str, m: Metrics, palette: &Palette) -> bool {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
-    let state = RowState::default();
+    link_line(ui, width, word, true, m, palette)
+}
+
+pub(super) fn link_line(ui: &mut Ui, width: f32, word: &str, goes: bool, m: Metrics, palette: &Palette) -> bool {
+    let sense = if goes { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), sense);
+    let state = RowState { still: !goes, ..RowState::default() };
     paint_hover(ui, rect, &response, state, m, palette);
-    if response.hovered() {
+    if goes && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let left = content_rect(rect, m).left();
     let line = text::row_line(ui, m.row, Role::Content);
-    let colour = if response.hovered() { palette.ink } else { palette.mid };
+    let colour = if goes && response.hovered() { palette.ink } else { palette.mid };
     let arrow = text::line(ui, LINK_ARROW, Role::Content, colour);
     let after = left + arrow.size().x + LINK_ARROW_GAP;
     let room = (content_rect(rect, m).right() - after).max(20.0);

@@ -29,6 +29,8 @@ static LABEL_TRACKING_SHARE: std::sync::atomic::AtomicU32 = std::sync::atomic::A
 
 pub const MARKER_RADIUS: u8 = 2;
 
+pub const ROW_RADIUS: f32 = 4.0;
+
 pub const SCROLL_MARGIN_ROWS: f32 = 3.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -262,7 +262,7 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
                             if *enabled { Sense::click() } else { Sense::hover() },
                         );
                         if (response.hovered() || keyed == Some(i)) && *enabled {
-                            ui.painter().rect_filled(rect, MARKER_RADIUS, lit);
+                            ui.painter().rect_filled(rect, crate::gui::theme::ROW_RADIUS, lit);
                         }
                         let colour = if *enabled { palette.ink } else { palette.faint };
                         let g = text::line(ui, label, Role::Content, colour);
@@ -278,7 +278,7 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
                     if let Some((_, shared)) = &rated {
                         if on_stars {
                             let under = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), ROW));
-                            ui.painter().rect_filled(under, MARKER_RADIUS, lit);
+                            ui.painter().rect_filled(under, crate::gui::theme::ROW_RADIUS, lit);
                         }
                         rate_to = star_row(ui, ROW, *shared, &palette);
                     }

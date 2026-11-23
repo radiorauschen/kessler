@@ -396,6 +396,10 @@ pub fn x_rise(ui: &egui::Ui, role: Role) -> f32 {
     baseline(&probe) - ink.top()
 }
 
+pub fn on_x_middle(ui: &egui::Ui, galley: &Galley, role: Role, middle: f32) -> f32 {
+    middle - baseline(galley) + x_rise(ui, role) / 2.0
+}
+
 pub fn optically_beside(top: f32, bottom: f32, x_top: f32, last_baseline: f32) -> f32 {
     (top + bottom - x_top - last_baseline) / 2.0
 }

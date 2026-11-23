@@ -1,4 +1,5 @@
 pub mod device_info;
+pub mod hash58;
 pub mod itunesdb;
 pub mod itunessd;
 pub mod playcounts;

@@ -499,7 +499,7 @@ fn cmd_ipod(config: &Config, action: IpodAction) -> Result<()> {
                     println!(
                         "To convert:      {} tracks ({formats} → {})",
                         plan.incompatible.len(),
-                        sync::conversion_word(&plan.incompatible_formats())
+                        sync::conversion_word(&plan.incompatible_formats(), sync::Target::from_name(&config.ipod_format))
                     );
                     if !sync::transcoder_available() {
                         println!();
@@ -551,7 +551,8 @@ fn cmd_ipod(config: &Config, action: IpodAction) -> Result<()> {
             }
 
             println!();
-            sync::apply(&device, &info, plan, transcode, |p| match p {
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            sync::apply(&device, &info, plan, transcode, sync::Target::from_name(&config.ipod_format), &stop, |p| match p {
                 sync::SyncProgress::BackedUp(path) => {
                     println!("Backed up the old database to {}", path.display());
                 }

@@ -57,6 +57,37 @@ pub(crate) fn encode(value: &str) -> String {
 }
 
 pub fn fetch(url: &str) -> Result<Vec<u8>> {
+    for wait in BUSY_WAITS {
+        match fetch_once(url) {
+            Err(Fetched::Busy) => std::thread::sleep(std::time::Duration::from_secs(wait)),
+            done => return done.map_err(|e| e.into_error(url)),
+        }
+    }
+    fetch_once(url).map_err(|e| e.into_error(url))
+}
+
+const BUSY_WAITS: [u64; 2] = [2, 5];
+
+enum Fetched {
+    Busy,
+    Slow,
+    Offline,
+    Said(String),
+}
+
+impl Fetched {
+    fn into_error(self, url: &str) -> KesslerError {
+        let host = url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or(url).trim_start_matches("www.");
+        KesslerError::Metadata(match self {
+            Self::Busy => tr!("{} ist gerade überlastet — später noch einmal", host),
+            Self::Slow => tr!("{} antwortet nicht", host),
+            Self::Offline => tr!("kein netz — {} ist nicht zu erreichen", host),
+            Self::Said(said) => said,
+        })
+    }
+}
+
+fn fetch_once(url: &str) -> std::result::Result<Vec<u8>, Fetched> {
     let output = Command::new("curl")
         .args([
             "--silent",
@@ -72,16 +103,18 @@ pub fn fetch(url: &str) -> Result<Vec<u8>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| KesslerError::Metadata(tr!("curl lässt sich nicht starten: {}", e)))?;
+        .map_err(|e| Fetched::Said(tr!("curl lässt sich nicht starten: {}", e)))?;
 
     if !output.status.success() {
         let said = String::from_utf8_lossy(&output.stderr);
         let said = said.trim();
-        return Err(KesslerError::Metadata(if said.is_empty() {
-            tr!("{} antwortet nicht", url)
-        } else {
-            said.to_string()
-        }));
+        return Err(match output.status.code() {
+            Some(6) => Fetched::Offline,
+            Some(7 | 28) => Fetched::Slow,
+            Some(22) if said.contains(" 503") || said.contains(" 429") => Fetched::Busy,
+            _ if said.is_empty() => Fetched::Slow,
+            _ => Fetched::Said(said.to_string()),
+        });
     }
     Ok(output.stdout)
 }

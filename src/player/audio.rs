@@ -151,7 +151,14 @@ impl AudioEngine {
             open.idle_since = None;
             if open.asked_at.elapsed() >= DEVICE_ASKED_EVERY {
                 open.asked_at = Instant::now();
-                if let Some((rate, name)) = device_now().filter(|(rate, _)| *rate != open.rate) {
+                let now = device_now();
+                if let Some((_, name)) = now.as_ref().filter(|(_, name)| !name.is_empty() && !open.name.is_empty() && *name != open.name) {
+                    super::watch::note(format!("ausgabe gewechselt: {} → {name}", open.name));
+                    drop(output);
+                    self.open_afresh();
+                    return;
+                }
+                if let Some((rate, name)) = now.filter(|(rate, _)| *rate != open.rate) {
                     super::watch::note(format!("ausgabe gewechselt: {name} · jetzt {rate} hz (geöffnet mit {} hz)", open.rate));
                     open.rate = rate;
                 }

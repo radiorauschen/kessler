@@ -163,8 +163,9 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 fn tidy(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
     let seen: String = text
-        .chars()
+        .nfc()
         .filter(|c| !matches!(c, '\u{200B}'..='\u{200D}' | '\u{FEFF}' | '\u{00AD}'))
         .collect();
     seen.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -260,7 +261,11 @@ pub fn tag_changes(device: &IpodTrack, library: &Track) -> Vec<(&'static str, St
         ("albumkünstler:in", album_artist, &device.album_artist),
         ("genre", genre, &device.genre),
     ] {
-        if mine != *theirs && (!mine.is_empty() || blank(theirs)) {
+        let same = mine == *theirs || {
+            use unicode_normalization::UnicodeNormalization;
+            mine.nfc().eq(theirs.nfc())
+        };
+        if !same && (!mine.is_empty() || blank(theirs)) {
             changes.push((field, theirs.clone(), mine));
         }
     }
@@ -606,6 +611,7 @@ pub enum SyncProgress {
         lists: usize,
         retagged: usize,
         dropped: usize,
+        stopped: bool,
     },
 }
 
@@ -614,6 +620,8 @@ pub fn apply(
     info: &DeviceInfo,
     plan: SyncPlan,
     transcode: bool,
+    target: Target,
+    stop: &std::sync::atomic::AtomicBool,
     mut progress: impl FnMut(SyncProgress),
 ) -> Result<()> {
     if let Err(why) = info.writable() {
@@ -651,10 +659,15 @@ pub fn apply(
     }
     let total = queue.len();
 
-    let scratch = std::env::temp_dir().join(format!("kessler-transcode-{}", writer::now_unix()));
+    let scratch = std::env::temp_dir().join(format!("{SCRATCH_PREFIX}{}", writer::now_unix()));
+    let mut stopped = false;
 
     for (index, (track, needs_transcode)) in queue.iter().enumerate() {
         let track = *track;
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            stopped = true;
+            break;
+        }
 
         let source = if *needs_transcode {
             progress(SyncProgress::Transcoding {
@@ -662,7 +675,7 @@ pub fn apply(
                 total,
                 title: track.display_title().to_string(),
             });
-            match convert_for_device(track, &scratch, info.generation) {
+            match convert_for_device(track, &scratch, info.generation, target) {
                 Ok(p) => p,
                 Err(e) => {
                     progress(SyncProgress::CopyFailed {
@@ -732,9 +745,12 @@ pub fn apply(
         let mut copied = to_ipod_track(track, next_id, relative, on_device_size);
         copied.soundcheck = plan.soundcheck.get(&track.id).copied().unwrap_or(0);
         if *needs_transcode {
-            let aac = source.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a"));
-            copied.bitrate = if aac { 256 } else { 320 };
-            copied.sample_rate = if aac { 44_100 } else { copied.sample_rate };
+            let (bitrate, rate) = converted_rates(&destination, &source, track, target);
+            copied.bitrate = bitrate;
+            copied.sample_rate = rate;
+            if target == Target::Alac && bitrate >= 500 {
+                copied.filetype = "Apple Lossless audio file".into();
+            }
         }
         new_tracks.push(copied);
         next_id += 1;
@@ -807,7 +823,7 @@ pub fn apply(
     db.playlists = playlists;
     write_lists(&mut db, &plan.lists);
 
-    write_database(device, info.generation, &db)?;
+    write_database(device, info, &db)?;
     let _ = super::playcounts::forget(device);
     for relative in &gone_files {
         let text = relative.to_string_lossy().replace(':', "/");
@@ -819,9 +835,56 @@ pub fn apply(
         lists: plan.lists.len(),
         retagged: plan.retag.len(),
         dropped: plan.drop_lists.len(),
+        stopped,
     });
 
     Ok(())
+}
+
+pub fn unlisted_files(device: &IpodDevice) -> Result<Vec<(PathBuf, u64)>> {
+    if !device.has_database() {
+        return Ok(Vec::new());
+    }
+    let db = device.read_database()?;
+    let listed: HashSet<String> = db
+        .tracks
+        .iter()
+        .filter_map(|t| t.path.as_ref())
+        .map(|p| p.to_string_lossy().replace(':', "/").trim_start_matches('/').to_lowercase())
+        .collect();
+    let music = device.mount_point.join("iPod_Control").join("Music");
+    let mut found = Vec::new();
+    let Ok(folders) = std::fs::read_dir(&music) else { return Ok(found) };
+    for folder in folders.flatten() {
+        let folder_name = folder.file_name().to_string_lossy().into_owned();
+        if folder_name.starts_with('.') || !folder.path().is_dir() {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(folder.path()) else { continue };
+        for file in files.flatten() {
+            let name = file.file_name().to_string_lossy().into_owned();
+            let Ok(meta) = file.metadata() else { continue };
+            if name.starts_with('.') || !meta.is_file() {
+                continue;
+            }
+            let relative = format!("ipod_control/music/{folder_name}/{name}").to_lowercase();
+            if !listed.contains(&relative) {
+                found.push((file.path(), meta.len()));
+            }
+        }
+    }
+    Ok(found)
+}
+
+pub fn remove_unlisted(device: &IpodDevice) -> Result<(usize, u64)> {
+    let mut gone = (0, 0);
+    for (path, size) in unlisted_files(device)? {
+        if std::fs::remove_file(&path).is_ok() {
+            gone.0 += 1;
+            gone.1 += size;
+        }
+    }
+    Ok(gone)
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -865,7 +928,7 @@ pub fn remove(device: &IpodDevice, info: &DeviceInfo, ids: &[u32]) -> Result<Rem
     if device.has_database() {
         backup_database(device)?;
     }
-    write_database(device, info.generation, &db)?;
+    write_database(device, info, &db)?;
     let _ = super::playcounts::forget(device);
     let mut files_left = 0;
     for relative in &files {
@@ -899,7 +962,7 @@ pub fn rename(device: &IpodDevice, info: &DeviceInfo, name: &str) -> Result<()> 
     if device.has_database() {
         backup_database(device)?;
     }
-    write_database(device, info.generation, &db)?;
+    write_database(device, info, &db)?;
     let _ = super::playcounts::forget(device);
     Ok(())
 }
@@ -942,11 +1005,15 @@ fn prune_backups(dir: &Path, keep: usize) {
     }
 }
 
-fn write_database(device: &IpodDevice, generation: Generation, db: &ItunesDb) -> Result<()> {
+fn write_database(device: &IpodDevice, info: &DeviceInfo, db: &ItunesDb) -> Result<()> {
+    let generation = info.generation;
     let final_path = device.itunesdb_path();
     let temp_path = final_path.with_extension("kessler-tmp");
 
-    let bytes = writer::write(db);
+    let bytes = match info.signing() {
+        Some(guid) => writer::write_signed(db, &guid),
+        None => writer::write(db),
+    };
     if let Some(dir) = final_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -1025,37 +1092,69 @@ pub fn transcoder_available() -> bool {
     afconvert().is_some() || transcoder().is_some()
 }
 
-pub fn converts_to(format: &str) -> Option<&'static str> {
-    choose(format, afconvert().is_some(), transcoder().is_some())
+pub const SCRATCH_PREFIX: &str = "kessler-transcode-";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Aac(u32),
+    Alac,
+    Mp3,
 }
 
-fn choose(format: &str, afconvert: bool, ffmpeg: bool) -> Option<&'static str> {
-    let vorbis = matches!(format.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus");
-    if afconvert && !vorbis {
-        Some("aac")
-    } else if ffmpeg {
-        Some("mp3")
-    } else {
-        None
+impl Target {
+    pub const NAMES: [&'static str; 5] = ["aac 256", "aac 320", "aac 192", "alac", "mp3 320"];
+
+    pub fn from_name(name: &str) -> Self {
+        match name.trim() {
+            "aac 320" => Self::Aac(320),
+            "aac 192" => Self::Aac(192),
+            "alac" => Self::Alac,
+            "mp3 320" => Self::Mp3,
+            _ => Self::Aac(256),
+        }
     }
 }
 
-pub fn conversion_word(formats: &[String]) -> String {
-    let mut words: Vec<&str> = formats.iter().filter_map(|f| converts_to(f)).collect();
+pub fn converts_to(format: &str, target: Target) -> Option<&'static str> {
+    choose(format, target, true, true, afconvert().is_some(), transcoder().is_some())
+}
+
+fn choose(format: &str, target: Target, m4a: bool, alac: bool, afconvert: bool, ffmpeg: bool) -> Option<&'static str> {
+    let vorbis = matches!(format.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus");
+    let apple = afconvert && !vorbis;
+    let wanted = match target {
+        _ if !m4a => "mp3",
+        Target::Alac if alac => "alac",
+        Target::Alac | Target::Aac(_) => "aac",
+        Target::Mp3 if ffmpeg => "mp3",
+        Target::Mp3 => "aac",
+    };
+    match wanted {
+        "mp3" if ffmpeg => Some("mp3"),
+        "aac" | "alac" if apple || ffmpeg => Some(wanted),
+        _ => None,
+    }
+}
+
+pub fn conversion_word(formats: &[String], target: Target) -> String {
+    let mut words: Vec<&str> = formats.iter().filter_map(|f| converts_to(f, target)).collect();
     words.sort();
     words.dedup();
     words.join(", ")
 }
 
-fn convert_for_device(track: &Track, scratch: &Path, generation: Generation) -> Result<PathBuf> {
-    let target = if generation.plays("m4a") {
-        converts_to(&track.format)
-    } else {
-        choose(&track.format, false, transcoder().is_some())
+fn convert_for_device(track: &Track, scratch: &Path, generation: Generation, target: Target) -> Result<PathBuf> {
+    let apple = afconvert().is_some() && !matches!(track.format.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus");
+    let kbps = match target {
+        Target::Aac(kbps) => kbps,
+        _ => 256,
     };
-    match target {
-        Some("aac") => transcode_to_aac(track, scratch),
-        Some(_) => transcode_to_mp3(&track.path, scratch),
+    match choose(&track.format, target, generation.plays("m4a"), generation.plays("alac"), afconvert().is_some(), transcoder().is_some()) {
+        Some("aac") if apple => transcode_with_afconvert(track, scratch, false, kbps),
+        Some("alac") if apple => transcode_with_afconvert(track, scratch, true, kbps),
+        Some("aac") => transcode_with_ffmpeg(&track.path, scratch, Codec::Aac(kbps)),
+        Some("alac") => transcode_with_ffmpeg(&track.path, scratch, Codec::Alac),
+        Some(_) => transcode_with_ffmpeg(&track.path, scratch, Codec::Mp3),
         None => Err(KesslerError::Ipod(format!(
             "{}: nothing here converts {} (ffmpeg would: brew install ffmpeg)",
             track.path.display(),
@@ -1064,7 +1163,84 @@ fn convert_for_device(track: &Track, scratch: &Path, generation: Generation) -> 
     }
 }
 
-fn transcode_to_aac(track: &Track, scratch: &Path) -> Result<PathBuf> {
+fn converted_rates(on_device: &Path, made: &Path, track: &Track, target: Target) -> (u32, u32) {
+    let m4a = made.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a"));
+    if !m4a {
+        return (320, track.sample_rate.unwrap_or(44_100));
+    }
+    match target {
+        Target::Alac => {
+            let bytes = std::fs::metadata(on_device).map(|m| m.len()).unwrap_or(0);
+            let seconds = track.duration_secs.max(1.0) as u64;
+            ((bytes * 8 / 1000 / seconds) as u32, 44_100)
+        }
+        Target::Aac(kbps) => (kbps, 44_100),
+        Target::Mp3 => (256, 44_100),
+    }
+}
+
+fn device_form(track: &IpodTrack) -> (&'static str, u32) {
+    let ending = track
+        .path
+        .as_ref()
+        .and_then(|p| p.to_string_lossy().rsplit('.').next().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    if ending == "mp3" {
+        ("mp3", track.bitrate)
+    } else if track.filetype.contains("Lossless") || track.bitrate >= 500 {
+        ("alac", 0)
+    } else {
+        ("aac", track.bitrate)
+    }
+}
+
+pub fn stale_conversions(library: &[Track], device_db: &ItunesDb, generation: Generation, target: Target) -> Vec<(u32, Track)> {
+    let (found, _) = match_library(library, &device_db.tracks);
+    let (apple, ffmpeg) = (afconvert().is_some(), transcoder().is_some());
+    let mut stale = Vec::new();
+    for (i, at) in found.iter().enumerate() {
+        let Some(at) = *at else { continue };
+        let track = &library[i];
+        if generation.plays(&track.format) || !track.path.is_file() {
+            continue;
+        }
+        let Some(wanted) = choose(&track.format, target, generation.plays("m4a"), generation.plays("alac"), apple, ffmpeg) else {
+            continue;
+        };
+        let device = &device_db.tracks[at];
+        let (form, rate) = device_form(device);
+        let kbps = match target {
+            Target::Aac(kbps) => kbps,
+            _ => 256,
+        };
+        let off = form != wanted || (wanted == "aac" && rate.abs_diff(kbps) > 16);
+        if off {
+            stale.push((device.id, track.clone()));
+        }
+    }
+    stale
+}
+
+pub fn sweep_scratch() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(SCRATCH_PREFIX) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > 3600);
+        if old {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn transcode_with_afconvert(track: &Track, scratch: &Path, lossless: bool, kbps: u32) -> Result<PathBuf> {
     std::fs::create_dir_all(scratch)?;
     let stem = track
         .path
@@ -1074,15 +1250,14 @@ fn transcode_to_aac(track: &Track, scratch: &Path) -> Result<PathBuf> {
     let destination = scratch.join(format!("{stem}.m4a"));
     let afconvert = afconvert()
         .ok_or_else(|| KesslerError::Ipod("afconvert is not on this machine".into()))?;
-    let output = std::process::Command::new(&afconvert)
-        .arg("-f")
-        .arg("m4af")
-        .arg("-d")
-        .arg("aac@44100")
-        .arg("-b")
-        .arg("256000")
-        .arg("-q")
-        .arg("127")
+    let mut command = std::process::Command::new(&afconvert);
+    command.arg("-f").arg("m4af");
+    if lossless {
+        command.arg("-d").arg("alac@44100/1");
+    } else {
+        command.arg("-d").arg("aac@44100").arg("-b").arg((kbps * 1000).to_string()).arg("-q").arg("127");
+    }
+    let output = command
         .arg(&track.path)
         .arg(&destination)
         .output()
@@ -1135,21 +1310,28 @@ fn tag_like(path: &Path, track: &Track) -> std::result::Result<(), lofty::error:
     file.save_to_path(path, WriteOptions::default())
 }
 
-fn transcode_to_mp3(source: &Path, scratch: &Path) -> Result<PathBuf> {
+#[derive(Debug, Clone, Copy)]
+enum Codec {
+    Aac(u32),
+    Alac,
+    Mp3,
+}
+
+fn transcode_with_ffmpeg(source: &Path, scratch: &Path, codec: Codec) -> Result<PathBuf> {
     std::fs::create_dir_all(scratch)?;
 
     let stem = source
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "track".into());
-    let destination = scratch.join(format!("{stem}.mp3"));
+    let ending = if matches!(codec, Codec::Mp3) { "mp3" } else { "m4a" };
+    let destination = scratch.join(format!("{stem}.{ending}"));
 
     let ffmpeg = transcoder().ok_or_else(|| {
-        KesslerError::Ipod(
-            "ffmpeg is needed to convert to MP3 and was not found (brew install ffmpeg)".into(),
-        )
+        KesslerError::Ipod("ffmpeg is needed for this conversion and was not found (brew install ffmpeg)".into())
     })?;
-    let output = std::process::Command::new(&ffmpeg)
+    let mut command = std::process::Command::new(&ffmpeg);
+    command
         .arg("-nostdin")
         .arg("-loglevel")
         .arg("error")
@@ -1158,20 +1340,21 @@ fn transcode_to_mp3(source: &Path, scratch: &Path) -> Result<PathBuf> {
         .arg(source)
         .arg("-map_metadata")
         .arg("0")
-        .arg("-id3v2_version")
-        .arg("3")
-        .arg("-codec:a")
-        .arg("libmp3lame")
-        .arg("-b:a")
-        .arg("320k")
-        .arg(&destination)
-        .output()
-        .map_err(|e| {
-            KesslerError::Ipod(format!(
-                "could not run ffmpeg (needed to convert {}): {e}",
-                source.display()
-            ))
-        })?;
+        .arg("-vn");
+    match codec {
+        Codec::Mp3 => {
+            command.arg("-id3v2_version").arg("3").arg("-codec:a").arg("libmp3lame").arg("-b:a").arg("320k");
+        }
+        Codec::Aac(kbps) => {
+            command.arg("-codec:a").arg("aac").arg("-b:a").arg(format!("{kbps}k")).arg("-ar").arg("44100");
+        }
+        Codec::Alac => {
+            command.arg("-codec:a").arg("alac").arg("-sample_fmt").arg("s16p").arg("-ar").arg("44100");
+        }
+    }
+    let output = command.arg(&destination).output().map_err(|e| {
+        KesslerError::Ipod(format!("could not run ffmpeg (needed to convert {}): {e}", source.display()))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1891,7 +2074,7 @@ mod tests {
         let empty = device.read_database().unwrap();
         assert!(empty.tracks.is_empty() && empty.playlists.is_empty());
         assert_ne!(empty.db_id, 0);
-        let info = DeviceInfo { generation: Generation::Third, model_number: None, serial: None, firewire_id: None };
+        let info = DeviceInfo { generation: Generation::Third, model_number: None, serial: None, guid: None, db_version: None, signed_database: false, later_signature: false };
         rename(&device, &info, "kessler").unwrap();
         assert!(device.has_database());
         let written = device.read_database().unwrap();
@@ -1913,7 +2096,7 @@ mod tests {
         std::fs::write(itunes.join("iTunesDB"), writer::write(&db)).unwrap();
         std::fs::write(itunes.join("iTunesPState"), b"old").unwrap();
         let device = IpodDevice::at(&root).unwrap();
-        let info = DeviceInfo { generation: Generation::Shuffle2, model_number: None, serial: None, firewire_id: None };
+        let info = DeviceInfo { generation: Generation::Shuffle2, model_number: None, serial: None, guid: None, db_version: None, signed_database: false, later_signature: false };
         remove(&device, &info, &[7]).unwrap();
         let written = std::fs::read(itunes.join("iTunesSD")).unwrap();
         assert_eq!(written, super::super::itunessd::classic(&device.read_database().unwrap()));
@@ -2008,7 +2191,7 @@ mod tests {
         std::fs::create_dir_all(&itunes).unwrap();
         std::fs::write(itunes.join("iTunesDB"), writer::write(&db)).unwrap();
         let device = IpodDevice::at(&root).unwrap();
-        let info = DeviceInfo { generation: Generation::Third, model_number: None, serial: None, firewire_id: None };
+        let info = DeviceInfo { generation: Generation::Third, model_number: None, serial: None, guid: None, db_version: None, signed_database: false, later_signature: false };
         assert!(rename(&device, &info, "   ").is_err());
         rename(&device, &info, "  mein ipod ").unwrap();
         let after = device.read_database().unwrap();
@@ -2043,13 +2226,49 @@ mod tests {
     }
 
     #[test]
-    fn the_converter_is_chosen_by_what_it_can_read() {
-        assert_eq!(choose("flac", true, false), Some("aac"));
-        assert_eq!(choose("flac", true, true), Some("aac"));
-        assert_eq!(choose("ogg", true, false), None);
-        assert_eq!(choose("ogg", true, true), Some("mp3"));
-        assert_eq!(choose("flac", false, true), Some("mp3"));
-        assert_eq!(choose("flac", false, false), None);
+    fn a_name_taken_apart_is_written_composed_and_not_again() {
+        let apart = "Fu\u{0308}r Felix";
+        let together = "F\u{00FC}r Felix";
+        assert_eq!(tidy(apart), together);
+        let mut library = library_track(1, "Julia Holter", "Album", apart, 200);
+        library.title = apart.into();
+        let mut device = IpodTrack { title: apart.into(), artist: "Julia Holter".into(), album: "Album".into(), ..IpodTrack::default() };
+        device.album_artist = library.album_artist.clone();
+        device.genre = library.genre.clone();
+        device.year = library.year.unwrap_or(0) as u32;
+        device.track_number = library.track_number.unwrap_or(0);
+        device.disc_number = library.disc_number.unwrap_or(0);
+        assert!(tag_changes(&device, &library).iter().all(|(field, ..)| *field != "titel"));
+        device.title = together.into();
+        assert!(tag_changes(&device, &library).iter().all(|(field, ..)| *field != "titel"));
+    }
+
+    #[test]
+    fn the_target_is_what_was_chosen_as_far_as_it_goes() {
+        let aac = Target::Aac(256);
+        assert_eq!(choose("flac", aac, true, true, true, false), Some("aac"));
+        assert_eq!(choose("flac", aac, true, true, false, true), Some("aac"));
+        assert_eq!(choose("ogg", aac, true, true, true, false), None);
+        assert_eq!(choose("ogg", aac, true, true, true, true), Some("aac"));
+        assert_eq!(choose("flac", aac, true, true, false, false), None);
+        assert_eq!(choose("flac", Target::Alac, true, true, true, false), Some("alac"));
+        assert_eq!(choose("flac", Target::Alac, true, false, true, false), Some("aac"));
+        assert_eq!(choose("flac", Target::Mp3, true, true, true, true), Some("mp3"));
+        assert_eq!(choose("flac", Target::Mp3, true, true, true, false), Some("aac"));
+        assert_eq!(choose("flac", aac, false, false, true, true), Some("mp3"));
+        assert_eq!(choose("flac", aac, false, false, true, false), None);
+        assert_eq!(Target::from_name("aac 320"), Target::Aac(320));
+        let copy = |path: &str, filetype: &str, bitrate: u32| IpodTrack {
+            path: Some(PathBuf::from(path)),
+            filetype: filetype.into(),
+            bitrate,
+            ..IpodTrack::default()
+        };
+        assert_eq!(device_form(&copy(":iPod_Control:Music:F00:A.mp3", "MPEG audio file", 320)), ("mp3", 320));
+        assert_eq!(device_form(&copy(":iPod_Control:Music:F00:B.m4a", "AAC audio file", 256)), ("aac", 256));
+        assert_eq!(device_form(&copy(":iPod_Control:Music:F00:C.m4a", "Apple Lossless audio file", 900)), ("alac", 0));
+        assert_eq!(device_form(&copy(":iPod_Control:Music:F00:D.m4a", "AAC audio file", 870)), ("alac", 0));
+        assert_eq!(Target::from_name("was"), Target::Aac(256));
     }
 
     #[test]

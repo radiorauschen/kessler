@@ -611,8 +611,12 @@ fn show_row(
 ) {
     let ahead = row_ahead(ui, width, m);
     let over = super::pointer_rests_on(ui, ahead);
+    let key = egui::Id::unique(("podcast-remove", &show.feed));
+    if follows && !over {
+        super::radio_col::removal_word(ui, key, false);
+    }
     let word = match (over, follows) {
-        (true, true) => tr!("entfernen"),
+        (true, true) => super::radio_col::removal_word(ui, key, true),
         (true, false) => tr!("folgen"),
         (false, true) if found => tr!("gefolgt"),
         _ => "",
@@ -636,7 +640,13 @@ fn show_row(
             *asked = Some(Asked::PodcastMenu(listed, pos));
         }
     } else if response.clicked() {
-        *asked = Some(if on_the_word(ui, &response, word, m, palette) && over { Asked::Follow(show.clone()) } else { Asked::Choose(Some(show.clone())) });
+        if on_the_word(ui, &response, word, m, palette) && over {
+            if !follows || super::radio_col::really(ui, key) {
+                *asked = Some(Asked::Follow(show.clone()));
+            }
+        } else {
+            *asked = Some(Asked::Choose(Some(show.clone())));
+        }
     }
 }
 
@@ -838,7 +848,8 @@ fn episode_queue_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette
         for (i, (episode, show)) in spent.iter().enumerate() {
             let ahead = row_ahead(ui, width, m);
             let over = super::pointer_rests_on(ui, ahead);
-            let word = if over { tr!("entfernen") } else { "" };
+            let key = egui::Id::unique(("podcast-spent-remove", &episode.id));
+            let word = super::radio_col::removal_word(ui, key, over);
             let figure = if word.is_empty() { episode.seconds.map(text::duration).unwrap_or_default() } else { word.to_string() };
             let here = in_picked(&episode.id) || (panel.picked.is_empty() || panel.focus != 3) && looked.as_deref() == Some(episode.id.as_str());
             let state = RowState { selected: here, focused: here && panel.focus == 3, offering: over, spent: true, ..Default::default() };
@@ -854,7 +865,13 @@ fn episode_queue_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette
             if response.double_clicked() {
                 *asked = Some(Asked::PlayQueued(episode.clone(), show.clone()));
             } else if response.clicked() {
-                *asked = Some(if over && on_the_word(ui, &response, word, m, palette) { Asked::Unspend(episode.id.clone()) } else { Asked::LookQueued(episode.clone(), show.clone()) });
+                if over && on_the_word(ui, &response, word, m, palette) {
+                    if super::radio_col::really(ui, key) {
+                        *asked = Some(Asked::Unspend(episode.id.clone()));
+                    }
+                } else {
+                    *asked = Some(Asked::LookQueued(episode.clone(), show.clone()));
+                }
             }
         }
         if let Some((id, title, show)) = &playing {
@@ -880,7 +897,8 @@ fn episode_queue_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette
         for (i, (episode, show)) in queue.iter().enumerate() {
             let ahead = row_ahead(ui, width, m);
             let over = super::pointer_rests_on(ui, ahead);
-            let word = if over { tr!("entfernen") } else { "" };
+            let key = egui::Id::unique(("podcast-queued-remove", &episode.id));
+            let word = super::radio_col::removal_word(ui, key, over);
             let coming = panel.fetching.as_ref().is_some_and(|(e, ..)| e.id == episode.id);
             let figure = if !word.is_empty() {
                 word.to_string()
@@ -916,7 +934,13 @@ fn episode_queue_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette
             } else if response.double_clicked() {
                 *asked = Some(Asked::PlayQueued(episode.clone(), show.clone()));
             } else if response.clicked() {
-                *asked = Some(if over && on_the_word(ui, &response, word, m, palette) { Asked::Queue(episode.clone(), show.clone()) } else { Asked::LookQueued(episode.clone(), show.clone()) });
+                if over && on_the_word(ui, &response, word, m, palette) {
+                    if super::radio_col::really(ui, key) {
+                        *asked = Some(Asked::Queue(episode.clone(), show.clone()));
+                    }
+                } else {
+                    *asked = Some(Asked::LookQueued(episode.clone(), show.clone()));
+                }
             }
         }
         if let Some((y, left, wide)) = drop_line {
@@ -1134,7 +1158,7 @@ fn chapter_row(ui: &mut Ui, id: egui::Id, width: f32, number: usize, title: &str
     let cell = Rect::from_min_max(egui::pos2(left, content.top()), egui::pos2((content.right() - start_width - 12.0).max(left + 1.0), content.bottom()));
     let ink = eased_colour(ui, response.id, state.primary(palette));
     let lead = lead_arrow(ui, id, cell, text::row_line(ui, m.row, Role::Content), state.playing, ink);
-    cell_text(ui, Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max), id, title, state.role(), ink, state.selected || hovered, ground, m);
+    chosen_cell_text(ui, Rect::from_min_max(egui::pos2(cell.left() + lead, cell.top()), cell.max), id, title, state.role(), ink, hovered, state.selected, ground, m);
     response
 }
 
@@ -1234,11 +1258,12 @@ fn episode_row(
         palette.ground
     };
     let shown = ui.ctx().animate_bool_with_time(response.id.with("plate"), plated, HOVER_FADE);
+    let corner = crate::gui::theme::ROW_RADIUS;
     if active && !plated {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, ground);
+        ui.painter().rect_filled(plate, corner, ground);
     }
     if shown > 0.0 {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, marker_colour(palette).gamma_multiply(shown));
+        ui.painter().rect_filled(plate, corner, marker_colour(palette).gamma_multiply(shown));
     }
     let content = content_rect(rect, m);
     let picture = Rect::from_min_size(egui::pos2(content.left(), rect.top() + pad), Vec2::splat(side));

@@ -6,6 +6,23 @@ the topmost version is the one being built.
 a line starting with `## ` is a version; one starting with `- ` is a change.
 everything else is skipped.
 
+## 1.5.354
+
+<p align="center"><img src="https://raw.githubusercontent.com/radiorauschen/kessler/main/docs/screenshots/release-1.5.354.png" width="280" alt="a drawing by felix h-w: a box standing on its edge; from a lever in a slot on its side a string runs to a small weight on the floor; through a window in its front a dog-like animal looks up at a wheel, and beside it a tall slot is filled with round beads"></p>
+
+<p align="center">new new new</p>
+
+- **ipod classic, nano 3g and 4g (beta)**: kessler can sync them now. it signs their database with the device's own key. „(beta)" stands next to the model, so tell us how it goes
+- **ipod detection**: models are recognised the way libgpod does it, by model number, serial number and usb id (behind a hub too). an ipod without its `SysInfo` (a memory card instead of the disk, say) is recognised, or you pick the model by hand under „modell wählen…"
+- **ipod sync**: choose what flac & co. become (aac 256/320/192, alac or mp3 320; on linux ffmpeg does aac and alac too). a running sync can be stopped. „aufräumen" (⌥) clears files the ipod's database does not list, and „neu umwandeln" converts tracks again that sit on the ipod in another format. names go over in composed unicode, so old ipods show „ü" and not a box
+- **ipod column**: the 3rd generation turns as itself, with its four buttons
+- **linux sound**: plays through pulseaudio or pipewire to the output the system has chosen (bluetooth headphones too) and follows it when it changes
+- **informationen**: the facts read as a sentence („born 1962 in jacksonville."), members still in a band say „now", the person or band comes first and your library after. the band's own website is first under „mehr lesen", the picture's source is a link, and „refresh" says when it last looked
+- **look**: every row has the same, slightly rounder plate. words that appear under the pointer sit in its middle. only one long title scrolls per column, and the queue shows the artist on every row
+- **„entfernen"** asks „wirklich?" before it removes
+- **network**: when a service is overloaded (musicbrainz sometimes is) kessler asks again, and says so in plain words if it still fails
+- **fixed**: the touch bar picture shows again
+
 ## 1.5.322
 
 <p align="center"><img src="https://raw.githubusercontent.com/radiorauschen/kessler/main/docs/screenshots/version-1.5.png" width="280" alt="a drawing by felix h-w: a figure in a hooded coat sits on a ladder-back chair at a table, a hammer in one hand, pointing at a small stool standing on the table; on the floor a dog sleeps curled round a log"></p>
