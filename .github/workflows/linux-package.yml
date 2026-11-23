@@ -48,7 +48,7 @@ jobs:
           version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
           tag="v$version"
           awk -v v="## $version" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > notes.md
-          printf '\n---\n\nlinux: `…-linux-arm64` für den raspberry pi (64 bit), `…-linux-x86_64` für einen pc. auspacken, dann `./install.sh` im ordner darin.\n' >> notes.md
+          printf '\n---\n\nlinux: `…-linux-arm64` for the raspberry pi (64 bit), `…-linux-x86_64` for a pc. unpack it, then run `./install.sh` in the folder inside.\n' >> notes.md
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/*.tar.gz --clobber
           else
