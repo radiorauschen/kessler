@@ -16,6 +16,11 @@ pub const PART: &[(&str, &str)] = &[
     ("nachleuchten", "残光"),
     ("jetzt zeigen", "いま表示"),
     ("zart", "やわらかく"),
+    ("systemschrift", "システムフォント"),
+    ("fensterleiste", "タイトルバー"),
+    ("fensterknöpfe", "ウインドウボタン"),
+    ("drei farben", "三色"),
+    ("einfarbig", "単色"),
     ("kräftig", "強く"),
     ("system · {}", "システム · {}"),
 ];

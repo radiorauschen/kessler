@@ -7,6 +7,14 @@ const BY_HAND_LEFT: f64 = 20.0;
 pub struct Placed {
     pub band: f32,
     pub buttons_end: f32,
+    pub middles: [f32; 3],
+    pub across: f32,
+}
+
+static OWN_BUTTONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn own_buttons(own: bool) {
+    OWN_BUTTONS.store(own, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(target_os = "macos")]
@@ -27,12 +35,19 @@ mod by_hand {
         unsafe { button.superview()?.superview() }
     }
 
-    pub fn set(window: &NSWindow) -> Option<f32> {
+    pub fn set(window: &NSWindow) -> Option<(f32, [f32; 3], f32)> {
         use objc2_app_kit::NSWindowStyleMask;
-        if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        let [close, shrink, zoom] = buttons(window)?;
+        let full = window.styleMask().contains(NSWindowStyleMask::FullScreen);
+        let hidden = !full && super::OWN_BUTTONS.load(std::sync::atomic::Ordering::Relaxed);
+        for button in [&close, &shrink, &zoom] {
+            if button.isHidden() != hidden {
+                button.setHidden(hidden);
+            }
+        }
+        if full {
             return None;
         }
-        let [close, shrink, zoom] = buttons(window)?;
         let band = band_view(&close)?;
         let height = f64::from(super::BY_HAND_MIDDLE) * 2.0;
         let mut frame = band.frame();
@@ -48,6 +63,8 @@ mod by_hand {
             step
         });
         let mut end = 0.0;
+        let mut middles = [0.0f32; 3];
+        let mut across = 0.0f64;
         for (at, button) in [&close, &shrink, &zoom].into_iter().enumerate() {
             let size = button.frame().size;
             let origin = NSPoint::new(super::BY_HAND_LEFT + step * at as f64, (height - size.height) / 2.0);
@@ -55,8 +72,10 @@ mod by_hand {
                 button.setFrameOrigin(origin);
             }
             end = origin.x + size.width;
+            middles[at] = (origin.x + size.width / 2.0) as f32;
+            across = size.width.min(size.height) - 2.0;
         }
-        Some(end as f32)
+        Some((end as f32, middles, across.max(8.0) as f32))
     }
 
     thread_local! {
@@ -196,6 +215,11 @@ pub fn zoom() {
     zooming::ASKED.with(|asked| asked.set(true));
 }
 
+pub fn shrink_into_dock() {
+    #[cfg(target_os = "macos")]
+    zooming::SHRINK.with(|asked| asked.set(true));
+}
+
 #[cfg(target_os = "macos")]
 mod zooming {
     use super::{zoom_target, Frame};
@@ -205,6 +229,7 @@ mod zooming {
 
     thread_local! {
         pub static ASKED: Cell<bool> = const { Cell::new(false) };
+        pub static SHRINK: Cell<bool> = const { Cell::new(false) };
         static REMEMBERED: Cell<Option<Frame>> = const { Cell::new(None) };
     }
 
@@ -217,6 +242,9 @@ mod zooming {
     }
 
     pub fn step(window: &NSWindow) {
+        if SHRINK.with(|asked| asked.replace(false)) {
+            window.miniaturize(None);
+        }
         if !ASKED.with(|asked| asked.replace(false)) {
             return;
         }
@@ -247,8 +275,8 @@ pub fn apply(window: &impl raw_window_handle::HasWindowHandle) -> Option<Placed>
     zooming::step(&window);
     window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
     by_hand::keep(&window);
-    let end = by_hand::set(&window)?;
-    Some(Placed { band: BY_HAND_MIDDLE * 2.0, buttons_end: end })
+    let (end, middles, across) = by_hand::set(&window)?;
+    Some(Placed { band: BY_HAND_MIDDLE * 2.0, buttons_end: end, middles, across })
 }
 
 #[cfg(not(target_os = "macos"))]

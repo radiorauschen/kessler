@@ -13,6 +13,9 @@ pub enum Mark {
     Shuffle,
     Repeat,
     RepeatOne,
+    Close,
+    Shrink,
+    Grow,
 }
 
 impl Mark {
@@ -23,6 +26,9 @@ impl Mark {
             Self::Shuffle => (&["uni21F5"], '⇵'),
             Self::Repeat => (&["uni21BB.alt", "uni21BB"], '↻'),
             Self::RepeatOne => (&["uni2460"], '①'),
+            Self::Close => (&["multiply", "uni00D7"], '×'),
+            Self::Shrink => (&["minus", "uni2212"], '−'),
+            Self::Grow => (&["plus", "uni002B"], '+'),
         }
     }
 
@@ -37,7 +43,7 @@ pub const MARK_SIZE: f32 = 12.5;
 struct Face(Arc<Vec<u8>>, f32);
 
 #[derive(Clone, Default)]
-struct Drawn(HashMap<(Mark, u32), Option<TextureHandle>>);
+struct Drawn(HashMap<(Mark, u32, u32), Option<TextureHandle>>);
 
 fn face_id() -> egui::Id {
     egui::Id::unique("kessler-mark-face")
@@ -80,22 +86,26 @@ pub fn use_icon_face(ctx: &Context, data: Option<(Vec<u8>, Place)>) {
 }
 
 pub fn paint(ui: &egui::Ui, mark: Mark, at: Pos2, colour: Color32) -> bool {
+    paint_sized(ui, mark, at, colour, MARK_SIZE)
+}
+
+pub fn paint_sized(ui: &egui::Ui, mark: Mark, at: Pos2, colour: Color32, size: f32) -> bool {
     let ctx = ui.ctx();
     let scale = ctx.pixels_per_point();
-    let key = (mark, scale.to_bits());
+    let key = (mark, scale.to_bits(), size.to_bits());
     let known = ctx.data(|d| d.get_temp::<Drawn>(drawn_id()).and_then(|m| m.0.get(&key).cloned()));
     let texture = match known {
         Some(texture) => texture,
         None => {
             let face = ctx.data(|d| d.get_temp::<Face>(face_id()));
             let texture = face.and_then(|face| {
-                let mask = draw(&face.0, mark, MARK_SIZE * face.1 * scale)?;
+                let mask = draw(&face.0, mark, size * face.1 * scale)?;
                 let image = egui::ColorImage::new(
                     [mask.width, mask.height],
                     mask.cover.iter().map(|&a| Color32::from_white_alpha(a)).collect(),
                 );
                 Some(ctx.load_texture(
-                    format!("mark-{mark:?}-{scale}"),
+                    format!("mark-{mark:?}-{scale}-{size}"),
                     image,
                     egui::TextureOptions::LINEAR,
                 ))
@@ -217,6 +227,7 @@ fn compose(font: &FontRef, mark: Mark, pixels: f32) -> Option<Vec<(Vec2, Vec2)>>
         Mark::Shuffle => pen.shuffle(),
         Mark::Repeat => pen.repeat().concat(),
         Mark::RepeatOne => pen.one(),
+        Mark::Close | Mark::Shrink | Mark::Grow => return None,
     };
     if pen.round > 0.0 {
         shapes = shapes.iter().map(|shape| rounded(shape, pen.round)).collect();

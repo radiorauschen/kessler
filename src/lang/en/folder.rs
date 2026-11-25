@@ -4,6 +4,8 @@ pub const PART: &[(&str, &str)] = &[
     ("macos dunkel", "macos dark"),
     ("gnome hell", "gnome light"),
     ("gnome dunkel", "gnome dark"),
+    ("ubuntu hell", "ubuntu light"),
+    ("ubuntu dunkel", "ubuntu dark"),
     ("solarisiert hell", "solarized light"),
     ("solarisiert dunkel", "solarized dark"),
     ("solarisiert", "solarized"),

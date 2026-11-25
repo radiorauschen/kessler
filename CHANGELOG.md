@@ -6,6 +6,30 @@ the topmost version is the one being built.
 a line starting with `## ` is a version; one starting with `- ` is a change.
 everything else is skipped.
 
+## 1.5.411
+
+<p align="center"><img src="https://raw.githubusercontent.com/radiorauschen/kessler/main/docs/screenshots/release-1.5.411.png" width="280" alt="a drawing by felix h-w: a folding lattice of flat slats with rows of holes, joined by round pins, standing open like a scissor gate"></p>
+
+<p align="center">new new new</p>
+
+- **screen saver**: new "release note drawings" shows the drawings from the release notes, one after another, with the release in the corner
+- **window buttons (mac)**: under appearance → header, the three buttons can be simple circles in the colours of your scheme ("one color", the default, or "three colors"), or the mac's own. the columns now line up with them
+- **system colours**: "macos", "gnome" and the new "ubuntu" scheme take the accent colour you picked in your system settings
+- **linux**: on gnome with wayland the title bar now looks like gnome's, buttons on the side gnome puts them. "title bar: none" hides it, for tiling window managers
+- **system font**: can be chosen under typeface. muto stays the default
+- **emacs**: keyboard → "emacs" adds emacs keys (ctrl + n p f b, ctrl + s, ctrl + g …). `extras/kessler.el` controls kessler from emacs on linux
+- **footer**: "bottom margin" on or off, always the same height. "library counts" and a new "clock" sit in it
+- **header**: in a narrow window the title gets the room, and "super compact" turns into "compact" so the time line fits
+- **radio**: rename stations and give them your own picture (right-click). stations find their logo on their own website, and songs get a cover under "info"
+- **podcasts**: episodes look like albums now, with the date and how much you heard. a click on the podcast's name opens it
+- **look**: an optional thin "outline" around pictures. "fade between views". key `0` makes all columns equal again
+- **colours**: "wilder mann" plays in aqua, "zeitvogel" in lavender, on a calmer green by day
+- **smoother**: no more stutter when scrolling "recent", switching light and dark, or after minimizing. less bounce when scrolling with a trackpad
+- **safer**: kessler only talks http and https, keeps to https for covers, and your settings file is readable by you alone
+- **info**: picks the right artist when several share a name
+
+thank you to everyone who tried kessler, wrote, sent ideas, found bugs and helped test. ♥
+
 ## 1.5.354
 
 <p align="center"><img src="https://raw.githubusercontent.com/radiorauschen/kessler/main/docs/screenshots/release-1.5.354.png" width="280" alt="a drawing by felix h-w: a box standing on its edge; from a lever in a slot on its side a string runs to a small weight on the floor; through a window in its front a dog-like animal looks up at a wheel, and beside it a tall slot is filled with round beads"></p>

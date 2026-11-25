@@ -128,6 +128,13 @@ impl PlayingAt {
         }
     }
 
+    pub fn now(ui: &crate::config::UiConfig) -> Self {
+        match Self::of(ui) {
+            Self::SuperCompact if SQUEEZED.load(std::sync::atomic::Ordering::Relaxed) => Self::Compact,
+            place => place,
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Compact => "kompakt",
@@ -151,6 +158,14 @@ impl PlayingAt {
         ui.playing_at = self.key().to_string();
         ui.header_playing = false;
     }
+}
+
+const SUPER_COMPACT_LEAST: f32 = 1100.0;
+
+static SQUEEZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_window_width(width: f32) {
+    SQUEEZED.store(width < SUPER_COMPACT_LEAST, std::sync::atomic::Ordering::Relaxed);
 }
 
 pub(super) fn search_field(
@@ -535,7 +550,7 @@ pub(super) fn masthead_compact(
     let (row, _) = ui.allocate_exact_size(Vec2::new(width, field_height()), Sense::hover());
     let rect = content_rect(row, m);
     let rect = if in_the_band { clear_of_the_buttons(ui, rect) } else { rect };
-    let super_compact = PlayingAt::of(&app.config.ui) == PlayingAt::SuperCompact;
+    let super_compact = PlayingAt::now(&app.config.ui) == PlayingAt::SuperCompact;
     let words_line = text::line_in_box(ui, field_height(), Role::Label);
     let probe = text::line(ui, "x", Role::Label, palette.mid);
     let top = text::on_line(&probe, row.top(), words_line);
@@ -633,10 +648,14 @@ pub(super) fn masthead_compact(
         })
         .unwrap_or(0.0);
     let station_only = app.player.current_track().is_none() && app.on_air.is_some();
+    let (air_left, air_right) = if super_compact && !station_only { SUPER_COMPACT_RULE_AIR } else { (0.0, 0.0) };
+    let rule_least = super::controls::rule_least(app, ui, palette, m);
     let names_room = if station_only {
         (limit - names_left - HEADER_GAP - station_rule_width(ui, palette) - m.marker_pad_x * 2.0).max(0.0)
     } else {
-        ((limit - names_left) * COMPACT_NAMES_SHARE).max(0.0)
+        let share = ((limit - names_left) * COMPACT_NAMES_SHARE).max(0.0);
+        let left_for_rule = limit - (names_left + natural.min(share).ceil() + HEADER_GAP + air_left) - air_right;
+        if left_for_rule >= rule_least { share } else { (limit - names_left).max(0.0) }
     };
     let names_width = natural.min(names_room).ceil();
     let names_width = if station_only {
@@ -652,14 +671,13 @@ pub(super) fn masthead_compact(
         playing_line(app, ui, palette, cell, words_line, names);
     }
 
-    let (air_left, air_right) = if super_compact && !station_only { SUPER_COMPACT_RULE_AIR } else { (0.0, 0.0) };
     let rule_left = if names_width > 0.0 {
         names_left + names_width + HEADER_GAP + air_left
     } else {
         names_left
     };
     let long = limit - rule_left - air_right;
-    if long > 80.0 {
+    if long >= rule_least || (station_only && long > 0.0) {
         let middle = text::ink_middle(ui, Role::Label, top);
         let strip = Rect::from_min_size(
             egui::pos2(rule_left - m.marker_pad_x, middle - 7.0),

@@ -67,11 +67,23 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "emacs",
+        &[
+            ("[ctrl] + [n] [p]", "zeile hoch, runter"),
+            ("[ctrl] + [f] [b]", "spalte wechseln"),
+            ("[ctrl] + [v] / [alt] + [v]", "eine seite runter, hoch"),
+            ("[alt] + [<] [>]", "an den anfang, ans ende"),
+            ("[ctrl] + [s]", "suchen, esc beendet"),
+            ("[ctrl] + [g]", "abbrechen, wie esc"),
+        ],
+    ),
+    (
         "ansichten",
         &[
             ("[1] [2] [3] [4]", "musik, radio, podcasts, ipod"),
             ("[c] + [1] [2] [3]", "musik, radio, podcasts ausschalten"),
             ("[1] [2] [3]", "ausgeschaltet: einschalten und öffnen"),
+            ("[0]", "alle spalten gleich breit"),
         ],
     ),
     (
@@ -945,8 +957,12 @@ pub fn render(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metrics)
                     let room = room - PADDING * 2.0 - head;
 
                     let content = |app: &mut GuiApp, ui: &mut Ui, height: f32, width: f32| {
+                        let salt = ("menu-body", app.menu_tab);
+                        let below_id = egui::Id::unique(("menu-below", app.menu_tab));
+                        let over = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width + HOVER_BLEED * 2.0, height));
+                        super::library::damp_scrolling(ui, ui.make_persistent_id(egui::IdSalt::new(salt)), below_id, over);
                         let output = egui::ScrollArea::vertical()
-                            .id_salt(("menu-body", app.menu_tab))
+                            .id_salt(salt)
                             .max_height(height)
                             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                             .show(ui, |ui| {
@@ -956,6 +972,7 @@ pub fn render(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metrics)
                                     .show(ui, |ui| tab_content(app, ui, &palette, height))
                                     .inner
                             });
+                        super::library::note_below(ui, below_id, &output);
                         let viewport = output.inner_rect;
                         let above = output.state.clamped_offset().y;
                         let below = (output.content_size.y - above - viewport.height()).max(0.0);
@@ -1044,6 +1061,9 @@ pub fn keys_sheet(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metr
                     let asked_id = egui::Id::unique("keys-sheet-asked");
                     let changed = ctx.data(|d| d.get_temp::<String>(asked_id)).as_deref() != Some(app.keys_query.as_str());
                     ctx.data_mut(|d| d.insert_temp(asked_id, app.keys_query.clone()));
+                    let sheet_below = egui::Id::unique("keys-sheet-below");
+                    let over = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), room));
+                    super::library::damp_scrolling(ui, ui.make_persistent_id(egui::IdSalt::new("keys-sheet-body")), sheet_below, over);
                     let mut area = egui::ScrollArea::vertical()
                         .id_salt("keys-sheet-body")
                         .max_height(room)
@@ -1057,8 +1077,10 @@ pub fn keys_sheet(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metr
                         ui.scroll_with_delta(Vec2::new(0.0, -asked));
                     }
                     let query = app.keys_query.trim();
+                    let emacs = app.config.ui.keymap == "emacs";
                     let shown: Vec<(&str, Vec<KeyShown>)> = SHORTCUTS
                         .iter()
+                        .filter(|(group, _)| *group != "emacs" || emacs)
                         .map(|(group, keys)| {
                             let group_said = crate::lang::t(group);
                             let lines = keys
@@ -1100,6 +1122,7 @@ pub fn keys_sheet(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metr
                     });
                     ui.spacing_mut().item_spacing.x = spacing;
                         });
+                    super::library::note_below(ui, sheet_below, &output);
                     let viewport = output.inner_rect;
                     let above = output.state.clamped_offset().y;
                     let below = (output.content_size.y - above - viewport.height()).max(0.0);
@@ -1158,6 +1181,13 @@ fn general_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if row(ui, tr!("tasten"), tr!("alle zeigen"), true, palette).clicked() && app.menu_leaving.is_none() {
         app.menu_leaving = Some(ui.input(|i| i.time));
     }
+    set_in(ui, |ui| {
+        let emacs = app.config.ui.keymap == "emacs";
+        if row(ui, tr!("tastatur"), if emacs { "emacs" } else { "vim" }, true, palette).clicked() {
+            app.config.ui.keymap = if emacs { "vim" } else { "emacs" }.to_string();
+            app.save_config();
+        }
+    });
     let mut open: Option<String> = None;
     let asking = app.update.as_mut().is_some_and(super::update::Check::tend);
     if asking {
@@ -1292,8 +1322,14 @@ fn podcasts_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
         app.config.ui.podcast_check = CHECKS[at].to_string();
         app.save_config();
     }
-    let now = if app.checking_for_episodes() { tr!("sehe nach…") } else { tr!("jetzt nachsehen") };
-    if row(ui, "", now, true, palette).clicked() && !app.checking_for_episodes() {
+    let now = if app.checking_for_episodes() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        let dots = 1 + (ui.input(|i| i.time) / 0.4) as usize % 3;
+        format!("{}{}{}", tr!("sehe nach"), ".".repeat(dots), " ".repeat(3 - dots))
+    } else {
+        tr!("jetzt nachsehen").to_string()
+    };
+    if row(ui, "", &now, true, palette).clicked() && !app.checking_for_episodes() {
         app.check_for_episodes();
     }
     explanation(ui, tr!("„archivieren“ nimmt eine folge aus den listen — ihre datei bleibt, außer „archivierte dateien löschen“ ist an. „datei löschen“ gibt nur den platz frei, die folge bleibt in der liste. „heruntergeladene löschen nach“ räumt dateien von selbst weg, ob archiviert oder nicht — nur von hand heruntergeladene bleiben."), palette);
@@ -1353,6 +1389,7 @@ const SECTIONS: &[Section] = &[
     general_section,
     podcasts_section,
     about_section,
+    foot_section,
 ];
 
 const ABOUT: usize = 18;
@@ -1369,6 +1406,8 @@ const GENERAL: usize = 16;
 
 const PODCASTS: usize = 17;
 
+const FOOT: usize = 19;
+
 fn shown(at: usize) -> bool {
     match at {
         IPOD => IPOD_ON.load(std::sync::atomic::Ordering::Relaxed),
@@ -1382,7 +1421,7 @@ fn shown(at: usize) -> bool {
 pub(in crate::gui) const TABS: &[(&str, &[usize])] = &[
     ("allgemein", &[GENERAL, 6, 5]),
     ("bibliothek", &[0, 1]),
-    ("darstellung", &[2, 3, 4, MENUBAR]),
+    ("darstellung", &[2, 3, FOOT, 4, MENUBAR]),
     ("spalten", &[7, 8, 9, SIDES]),
     ("wiedergabe", &[11, 12]),
     ("radio", &[RADIO]),
@@ -1543,7 +1582,7 @@ fn tab_content(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, view: f32) -> f
     tallest
 }
 
-const DRAWING: &[u8] = include_bytes!("drawing.png");
+pub(in crate::gui) const DRAWING: &[u8] = include_bytes!("drawing.png");
 
 fn drawing(ui: &Ui, room: Rect, palette: &Palette) -> f32 {
     static MASK: std::sync::OnceLock<image::GrayImage> = std::sync::OnceLock::new();
@@ -1833,10 +1872,15 @@ fn look_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
         app.config.ui.all_columns = !all_columns;
         app.save_config();
     }
+    let fade = app.config.ui.view_fade;
+    if toggle(ui, tr!("ansichten überblenden"), fade, AN_AUS, palette).clicked() {
+        app.config.ui.view_fade = !fade;
+        app.save_config();
+    }
 
     if app.families.len() > 1 {
         if let Some(name) = app.typeface.clone() {
-            if row(ui, tr!("schrift"), &name, true, palette).clicked() {
+            if row(ui, tr!("schrift"), crate::lang::t(&name), true, palette).clicked() {
                 let back = ui.input(|i| i.modifiers.shift);
                 app.next_typeface(ui.ctx(), back);
             }
@@ -1904,20 +1948,32 @@ fn look_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
 fn header_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("kopfzeile"), palette);
 
+    if cfg!(target_os = "linux") {
+        let bar = app.config.ui.window_bar == "ohne";
+        let said = if bar { tr!("ohne") } else { tr!("system") };
+        if row(ui, tr!("fensterleiste"), said, true, palette).clicked() {
+            app.config.ui.window_bar = if bar { "system" } else { "ohne" }.to_string();
+            app.save_config();
+        }
+    }
+    if cfg!(target_os = "macos") {
+        const BUTTONS: [&str; 3] = ["system", "drei farben", "einfarbig"];
+        let at = BUTTONS.iter().position(|b| *b == app.config.ui.window_buttons).unwrap_or(0);
+        let said = match BUTTONS[at] {
+            "drei farben" => tr!("drei farben"),
+            "einfarbig" => tr!("einfarbig"),
+            _ => tr!("system"),
+        };
+        if row(ui, tr!("fensterknöpfe"), said, true, palette).clicked() {
+            app.config.ui.window_buttons = BUTTONS[(at + 1) % BUTTONS.len()].to_string();
+            app.save_config();
+        }
+    }
+
     let place = super::library::PlayingAt::of(&app.config.ui);
     if row(ui, tr!("was läuft"), crate::lang::t(place.name()), true, palette).clicked() {
         place.next().store(&mut app.config.ui);
         app.save_config();
-    }
-    if place.compact() {
-        set_in(ui, |ui| {
-            let shown = app.config.ui.library_line;
-            let said = if shown { tr!("unten links") } else { tr!("aus") };
-            if row(ui, tr!("bibliothekszahlen"), said, true, palette).clicked() {
-                app.config.ui.library_line = !shown;
-                app.save_config();
-            }
-        });
     }
     let in_queue = app.config.ui.modes_in_queue;
     let said = if in_queue { tr!("über der warteschlange") } else { tr!("in der kopfzeile") };
@@ -1987,6 +2043,46 @@ fn header_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     });
 }
 
+fn foot_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
+    heading(ui, tr!("fußzeile"), palette);
+    let edge = app.config.ui.columns_to_edge;
+    if toggle(ui, tr!("rand unten"), !edge, AN_AUS, palette).clicked() {
+        app.config.ui.columns_to_edge = !edge;
+        app.save_config();
+    }
+    let margin = !edge;
+    set_in(ui, |ui| {
+        if super::library::PlayingAt::of(&app.config.ui).compact() {
+            let shown = app.config.ui.library_line;
+            let said = match (margin, shown) {
+                (false, _) => tr!("nur mit rand"),
+                (true, true) => tr!("unten links"),
+                (true, false) => tr!("aus"),
+            };
+            if row(ui, tr!("bibliothekszahlen"), said, margin, palette).clicked() && margin {
+                app.config.ui.library_line = !shown;
+                app.save_config();
+            }
+        }
+        let clock = app.config.ui.foot_clock.clone();
+        let said = match (margin, clock.as_str()) {
+            (false, _) => tr!("nur mit rand"),
+            (true, "uhr") => tr!("uhrzeit"),
+            (true, "datum") => tr!("datum und uhrzeit"),
+            _ => tr!("aus"),
+        };
+        if row(ui, tr!("uhr"), said, margin, palette).clicked() && margin {
+            app.config.ui.foot_clock = match clock.as_str() {
+                "uhr" => "datum",
+                "datum" => "aus",
+                _ => "uhr",
+            }
+            .to_string();
+            app.save_config();
+        }
+    });
+}
+
 fn radio_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("radio"), palette);
     if !app.config.ui.radio {
@@ -1995,6 +2091,11 @@ fn radio_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let logos = app.config.ui.radio_logos;
     if toggle(ui, tr!("logos der stationen laden"), logos, AN_AUS, palette).clicked() {
         app.config.ui.radio_logos = !logos;
+        app.save_config();
+    }
+    let covers = app.config.ui.radio_song_covers;
+    if toggle(ui, tr!("cover des titels suchen"), covers, AN_AUS, palette).clicked() {
+        app.config.ui.radio_song_covers = !covers;
         app.save_config();
     }
     let found = app.config.ui.radio_found.clone();
@@ -3349,6 +3450,18 @@ fn pictures_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let value = if dithered { tr!("gerastert") } else { tr!("im original") };
     if row(ui, tr!("anzeige"), value, true, palette).clicked() {
         app.config.ui.cover_dither = !dithered;
+        app.save_config();
+    }
+    const OUTLINES: [&str; 4] = ["aus", "zart", "tinte", "akzent"];
+    let at = OUTLINES.iter().position(|o| *o == app.config.ui.picture_outline).unwrap_or(0);
+    let said = match OUTLINES[at] {
+        "zart" => tr!("zart"),
+        "tinte" => tr!("tinte"),
+        "akzent" => tr!("akzent"),
+        _ => tr!("aus"),
+    };
+    if row(ui, tr!("umrandung"), said, true, palette).clicked() {
+        app.config.ui.picture_outline = OUTLINES[(at + 1) % OUTLINES.len()].to_string();
         app.save_config();
     }
     if !dithered {

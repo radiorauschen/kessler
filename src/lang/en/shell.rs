@@ -18,4 +18,9 @@ pub const PART: &[(&str, &str)] = &[
     ("zart", "gentle"),
     ("kräftig", "strong"),
     ("system · {}", "system · {}"),
+    ("systemschrift", "system font"),
+    ("fensterleiste", "title bar"),
+    ("fensterknöpfe", "window buttons"),
+    ("drei farben", "three colors"),
+    ("einfarbig", "one color"),
 ];

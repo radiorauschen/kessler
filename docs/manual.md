@@ -65,13 +65,26 @@ asked for, and only to the place that has it:
   the words.
 - **radio and podcasts:** only once switched on — the stations and feeds you
   chose, radio browser when you search for a station, apple's podcast
-  directory when you search for a podcast.
+  directory when you search for a podcast. while a station plays: its logo
+  from its site, what it plays next from the station's own page where it
+  has one (nts, spinitron), and, with `cover des titels suchen`, the
+  playing song's artist and title asked of the itunes store for its cover.
+  a podcast's episodes come from wherever its feed points, often through
+  the publisher's counting service.
 - **last.fm:** what you play is scrobbled only once you have signed in.
-- **updates:** checked only when you click the row under `über`, one
-  question to github.
+- **updates:** checked only when you click the row under `über`, or at
+  each start once that is switched on — one question to github.
 
 each request carries only `kessler` and its version as its name; nothing
 that tells you, your computer or your installation apart goes with it.
+like every connection, each shows the server your address on the network.
+
+everything goes through `curl`, with certificates checked, and only over
+`http` and `https`, also where a server sends kessler on elsewhere — a
+search, a cover or a picture asked over `https` stays on `https`. an
+address in a feed cannot have a file of your computer read, nor be taken
+for an instruction to curl. the settings file, which holds the last.fm key
+once you have signed in, can be read by your account alone.
 
 ## usage
 
@@ -189,6 +202,15 @@ and dropped the next time the file is saved.
 
 ## keys
 
+vim's keys are always there. **menü → allgemein → tasten → tastatur**
+(`[ui] keymap`): `vim` (the default) or `emacs`, which adds emacs's own on
+top of them, the control key on a mac too, not command: `ctrl` + `n` `p` a
+row down and up, `ctrl` + `f` `b` a column right and left (in the search
+field, the cursor), `ctrl` + `v` and `alt` + `v` a page (ten rows) down and
+up, `alt` + `<` `>` the top and the foot, `ctrl` + `s` the search, `ctrl` +
+`g` as `esc`. the key sheet (`?`) then has them in a group of their own.
+`pos1` and `ende`, `bild ab` and `bild auf` work in either.
+
 | key | action |
 | --- | --- |
 | `space` | play / pause |
@@ -197,6 +219,7 @@ and dropped the next time the file is saved.
 | `1` `2` `3` `4` | the library, the radio, the podcasts, the ipod — each on its own key, as far as it is there (the podcasts on `3` and the ipod on `4`)|
 | `v` / `shift` + `F10` / the menu key | the right-click menu for the row the keyboard stands on — a track (or the tracks picked), a record, a name, a row of the queue or a list, a list, a station, an episode, a podcast — opened beside that row. in it `↑` `↓` (`k` `j`, `tab`) go along the entries, past those greyed out, and on to the stars at the foot of a track's menu, where `←` `→` (`h` `l`) give one star less or more at once; `enter` does the one stood on (on the stars, closes the menu), `esc` (or the same key) closes it, as it now closes a menu a right-click opened|
 | `c` then `1` `2` `3` | switch the music, the radio or the podcasts off, as under menü → allgemein → funktionen (a view switched off while open goes back to the one open before it, where that is still on — the radio after the podcasts opened from it): within a second of `c`, or while `c` is held, for as many digits as are pressed under it. the foot says how to switch it back on — or, for a view off already, that it is (`podcasts sind schon aus — 3 schaltet sie ein`)|
+| `0` | every column as wide as the others again, in the library, the radio and the podcasts — as the window opens, and as a double click on a gap does for the two beside it; they slide there rather than jump |
 | `1` `2` `3` on a view switched off | switch it on again and open it (the same digit twice within a second)|
 | `j` `k` / `↓` `↑` | move down / up (`shift` to select several) |
 | `cmd` + `a` | select all: every track, from the tracks or the albums; every row, from the queue. not in the artists, nor in an open list (`ctrl` + `a` on linux) |
@@ -853,6 +876,21 @@ saying what is playing behaves the same way; there, title, artist and album are
 laid out as a single line that happens to change colour, so a long one scrolls
 as a whole instead of as three pieces sliding apart.
 
+**menü → darstellung → kopfzeile → fensterknöpfe** (`[ui] window_buttons`,
+mac only): the window's three buttons as plain circles in the scheme's own
+colours, where the mac's stand — `einfarbig` (the default), all three in the
+third tone, coming up to the accent under the pointer, or `drei farben`, the
+accent, the heads' colour and the second tone in the order of the mac's red,
+yellow and green — or as the mac draws them (`system`). under the pointer
+they fade into their colour and show ×, − and +, in the window's own
+typeface where it has them; in a window in the back they step back to the
+third tone.
+the first puts the window away as the mac's red button does, the second
+lays it in the dock, the third makes it full screen (with `alt`, as big as
+the screen). holding the green button for the mac's menu of tiling the
+window is the one thing they do not do; in full screen the mac's own are
+there.
+
 on a mac the window's three buttons stand in from the corner, where a mac
 puts them in a window with a toolbar, in a band 56 points tall. kessler sets
 them there itself, every frame, with no toolbar: a toolbar would take every
@@ -970,26 +1008,28 @@ can stand:
   once it has rested there a tenth of a second — and the names and the rule
   move along to make room; then the names at label size (while a station
   plays they take what the long rule would), the time and its rule, the
-  transport keys, `vol`, the view and `menü`. a column with nothing written
-  under it — in the music, the radio and the podcasts alike — runs down into
-  the foot's band, as far as the sides' margin, and
-  slides back up when the library's figures or what the status line says
-  come to stand under it. a list scrolled to its end stays where it stands
-  as its column goes up and down (the queue slid down at every pause, as
-  last.fm's count at the foot went away). what the status line says goes
+  transport keys, `vol`, the view and `menü`. with `rand unten` on, every
+  column ends above the foot's band, the band the same height whatever
+  stands in it; with it off, a column runs down to the window's edge and
+  slides back up while what the status line says stands under it. a list scrolled to its end keeps only its own air
+  under the last row, wherever its column ends, and its end slides with the
+  column. what the status line says goes
   down to the bottom right-hand corner, in short (`last.fm zählt in 0:39` — the
   time until the track counts for last.fm, gone while paused — `ipod 14
   titel · 4.8 gb frei`, `auswerfen`), in a band of its own, its baseline as
   far from the window's bottom edge as the sides are from its sides (24
   points; 28 before): the lists end a little earlier in this place, so the
-  queue's fade is over before the status begins. at the other end of that
+  queue's fade is over before the status begins — 28 points into the
+  foot's band, not a whole band above the words. at the other end of that
   line, flush left and there all the time, what the library holds: titles,
-  albums, how long it plays, what it weighs. `bibliothekszahlen` under `was
-  läuft` (`[ui] library_line`) shows it (`unten links`) or leaves it out
+  albums, how long it plays, what it weighs. `bibliothekszahlen` under
+  `fußzeile` (`[ui] library_line`) shows it (`unten links`) or leaves it out
   (`aus`), here, under `super kompakt` and in a narrow window. what the
   status line says stands at the bottom right always (the key is no longer
   read). the keys are no longer read.
-- `super kompakt` — the same line, set where the title bar was: on a mac in
+- `super kompakt` — the same line, set where the title bar was (in a window
+  narrower than 1100 points it stands as `kompakt`, where the time and its
+  rule still have room): on a mac in
   the band beside the window's three buttons (see above), elsewhere at the
   top with the flatter field, as far from the window's top edge as the sides
   are from its sides (under `kompakt` the line with the switch and `menü`
@@ -1064,7 +1104,9 @@ columns' plates.
 **margins**: the columns, the masthead and the foot stand at most 24 points
 in from the window's sides, so „menü"'s plate is as far from the right edge
 as `super kompakt` sets it from the top on a mac; the words of two columns
-stand two points less than twice as far apart as from the window's edge.
+stand two points less than twice as far apart as from the window's edge. on a
+mac the sides are where the first of the window's three buttons begins, so
+the field and every list stand on one line down from the circles.
 
 **arrows**: what is active has an arrow before it, pushing in from the left
 over a sixth of a second and taking the name along — only on a row that
@@ -1078,7 +1120,9 @@ its number and its title. `alle`, `zuletzt` and `kompilationen` have it
 while they are the row chosen, and no figure beside them — one counted
 tracks, the next artists (the row the window opens on wears no marker until
 the first key or click): they are views rather than names, and chosen, the
-view is open.
+view is open; chosen, they keep their second tone — the arrow and the word
+alike, in bold — rather than turning to the ink a chosen name takes, so
+they stay apart from the names. so do the podcasts' views.
 
 ### one artist, one row
 
@@ -1466,6 +1510,24 @@ dividers cannot be dragged while it is on. it needs the same width as a column
 of its own for the side, and then works in the view with both name columns
 too; in a narrower window everything is as before, one at a time.
 
+**fußzeile**, after `kopfzeile` under `darstellung`, holds what is about the
+bottom line. **rand unten** (`[ui] columns_to_edge` off when it is on;
+off by default): on, every column stops a margin above the window's bottom
+edge and the margin is always as tall, with words in it or none; off, the
+columns run down to the window's very edge, their lists cut off there
+without a fade, and a column goes up only while what the status says
+stands under it. set in under it, and only to be changed with the margin
+on (else they say `nur mit rand`): `bibliothekszahlen` (see above) and
+**uhr** (`[ui] foot_clock`, off): `uhrzeit` or `datum und uhrzeit` at the
+foot's right end, faint as the library's counts at the other, as the
+language writes them (`24.11.2026  7:00`); what the status says then stands
+left of it. the margin can be on with neither.
+
+**ansichten überblenden** (`[ui] view_fade`, on): a change of view — the
+music, the radio, the podcasts, the ipod — comes up out of the ground under
+the header, over the twelfth of a second the menu fades in with, rather than
+standing there at once.
+
 menu → künstler:innen → `zuletzt-zeile` (`[ui] show_recent`) shows the
 `zuletzt` row or hides it; hidden, the lists lose their row of the newest
 tracks too and the window opens on the whole library (the ipod keeps its
@@ -1511,6 +1573,12 @@ dots are laid down: geordnet, halbton, streuung, atkinson, rauschen, and
 blaues rauschen — blue noise, dots as scattered as the grain's but kept
 apart, no clumps and no holes) and `feinheit` (from a mosaic to nearly the
 picture back) — `[ui] cover_dither`, `dither_method`, `dither_fineness`.
+`umrandung` (`[ui] picture_outline`, off at first) draws a hairline, one
+pixel of the screen, inside the edge of every picture — and of the tile
+with an initial that stands in for a missing one — round its corner:
+`zart` in the third tone, `tinte` in the ink, `akzent` in the receded accent
+the drawings are in; a click on the row steps through them and back to
+`aus`.
 under the rows stands an example, drawn as every picture is now and again at
 once with each row changed: a ground running from dark to light for the
 tones, a lit ball for a soft passage, a flat triangle and a flat square for
@@ -1613,7 +1681,12 @@ scope's still figure.
 field's quiet pictures — `schlange`, `mandelbrot`, `leben`, `kugel` —
 filling the window in coarse cells in the accent, 48 rows of them, moving on
 the same ticks as in the field (four a second, one on the air) and drawn
-only on those, also with nothing playing; or `liedtext`, the words of the
+only on those, also with nothing playing; `release note drawings`, felix's
+drawings one after the other — the one under `über` from the start, then the
+one at the head of each public release's notes, newest first — in the
+receded accent, each standing 24 seconds and going over into the next, with
+which release it is from in the bottom right-hand corner (`initial release`,
+`release 1.5.354`), also with nothing playing; or `liedtext`, the words of the
 song filling the window. timed words show the line being sung in the very
 middle of the window (before the first line, the first, not yet coloured),
 in the accent, the four before and after it in the middle tone, fading
@@ -1707,6 +1780,12 @@ this anyway and are not slowed.
 on a mac a frame waits for the screen behind at most one other, so what the
 hand does is shown a refresh sooner (some 8 ms at 120 hz).
 
+with `wie der bildschirm` there is still a ceiling of 125 frames a second,
+above every screen, and of 60 while the window is in the back: a window
+behind others or on another desktop is not always held to the screen's
+refresh, and an animation could then be drawn far more often than anybody
+sees.
+
 with nothing playing and the pointer still, the window draws nothing at all
 — resting on a row included, unless its title is too long and runs along.
 
@@ -1771,7 +1850,10 @@ the settled schemes:
 `macos`, built from the system's own values so the window sits in a mac
 desktop rather than on it; `gnome`, the same for gnome — adwaita's window
 ground, its text at the opacities libadwaita sets labels at, and gnome's
-blue; `solarisiert`, `nord`, `dracula` and `sublime` — the schemes people
+blue; `ubuntu`, yaru as ubuntu paints it now — the same window grounds,
+yaru's warmer grey text, ubuntu orange for what plays (darkened on the
+light ground until it reads as words) and aubergine for the heads, the dark
+half's icon on ubuntu's dark aubergine; `solarisiert`, `nord`, `dracula` and `sublime` — the schemes people
 already read code in all day, the last being mariana, the one sublime text
 opens with, with its caret's orange as the accent (nord's light half is its
 snow storm, dracula's is alucard); and `ipod classic`, which comes from an
@@ -1782,7 +1864,7 @@ the ground, black text, the white of its lists behind the picked row and the
 navy of its title bar as the accent, taken off a screenshot of it.
 
 the list stands in groups, two columns side by side so all of them fit
-without scrolling: **system** (macos, gnome), **klassiker** (solarisiert,
+without scrolling: **system** (macos, gnome, ubuntu), **klassiker** (solarisiert,
 nord, nord frost, dracula, sublime, soulseek), **geräte** (ipod classic,
 hu-card, pc engine, pc-fx, fm towns, pc-98, x68000), **eigene welten** (公園,
 paysage d'hiver, coco壱番屋, runebending, rubrik, wilder mann, ochsenblut,
@@ -1807,11 +1889,11 @@ colours round. most come from machines that never left japan:
 | `coco壱番屋` | the curry house's sign: its yellow, paled as the ground, the curry's brown as the words, dark gold figures, curry-orange heads, a curry red for what plays; dark, the roux as the ground, rice-white words, golden rice beside them, terracotta figures, the sign's yellow for the heads|
 | `runebending` | (the colourful `runebender` beside it is gone, as are `famicom`, `disk system` and `virtual boy` — a config naming one opens on `pc engine`) runebender the other way round, for the type: the grounds a quiet warm grey, everything behind the words a shade of it, and the colour all in the words — names in ink, what stands beside them in the grid's green, the figures in its orange, what plays in the comb's violet, the column heads in a lilac of their own; dark, the toolbar's black with the green and orange lifted, pink for what plays and the comb's lilac for the heads|
 | `rubrik` | rubrication, as old books were printed: black and red on a verdigris paper — names in black, what stands beside them in the rubricator's red, the figures in a slate blue-grey, what plays in blue, nothing behind the words but the paper a shade darker; dark, by lamplight, cream on a dark paper with a warmer red and a lighter blue|
-| `wilder mann` | gruvbox's colours, every kind of thing in one of its own, so a head, a name, what stands beside it, a figure and what plays are told apart before they are read: column heads in yellow, names in gruvbox's cream, what stands beside them in blue, figures in grey, what plays in red; by day on gruvbox's light ground in its deeper colours. named after the „wilder mann", the brace figure of a hessian half-timbered house|
+| `wilder mann` | gruvbox's colours, every kind of thing in one of its own, so a head, a name, what stands beside it, a figure and what plays are told apart before they are read: column heads in yellow, names in gruvbox's cream, what stands beside them in blue, figures in grey, what plays in aqua; by day on gruvbox's light ground in its deeper colours. named after the „wilder mann", the brace figure of a hessian half-timbered house|
 | `ochsenblut` | the same idea in the ox-blood red the timbers were painted: heads in red, what stands beside the names in orange, what plays in green, the marked row a dark red; by day on pale plaster|
 | `lehmgefach` | the clay of the panels between the timbers: a cream ground, names in the timbers' dark, heads in burnt clay, what stands beside the names in moss green, figures in a dull violet, what plays in blue; by night the clay dark and every colour lifted|
 | `rgb` | only the colours whose channels are all full or off: white names on black, green beside them, cyan figures, magenta heads, red for what plays, pure blue behind the picked row, in the search field and in the rule (the hover a blue at half, the one exception). on white only blue, red and magenta read, with yellow, cyan and green behind the words. louder behind the words than the contrast test lets any other scheme be|
-| `zeitvogel` | the bird that lives in time, from a toy's tile with a cuckoo clock printed on it, lime and lavender tiles round it: by day the lime as the ground, dark green words, the roof's teal beside the names, heads in violet, coral for what plays, the lavender tile behind the picked row; by night the lavender darkened to a deep violet, the clock's green lightened beside the names, the roof's teal for the heads, the lime behind the picked row. no other scheme has either ground.|
+| `zeitvogel` | the bird that lives in time, from a toy's tile with a cuckoo clock printed on it, lime and lavender tiles round it: by day the lime, paled to a linden, as the ground, dark green words, the roof's teal beside the names, heads in coral, the lavender deepened for what plays, the lavender tile behind the picked row; by night the lavender darkened to a deep violet, the clock's green lightened beside the names, the roof's teal for the heads, the lavender lit up for what plays, the lime behind the picked row. no other scheme has either ground.|
 | `eigenes` | one's own, made in the menu: under „farben" four colours — ground, text, accent, heads — each with three rules (lightness, colourfulness, hue, in oklab). the rest is worked out from them: the second and third tones step from the text towards the ground, the marker, search field, rule and hover step from the ground towards the text, the faint accent goes halfway to the ground. the other half turns every lightness over and keeps the hues. kept in `[ui] custom_colours` as a code like `k1-282828-ebdbb2-fb4934-fabd2f`; under the three rules, „hex" takes the colour typed in (`#fb4934`, `fb4934` or `#f43`, enter takes it); a click on „code" copies it, „code einfügen…" takes somebody else's (with or without `k1`, `#` or spaces)|
 | `paysage d'hiver` | grey and nothing else, after the band's page: black and the greys of snow at night, what plays in pure white; light, the static grey of its header with black words |
 
@@ -2205,7 +2287,8 @@ artists' does, without `schliessen`; `musik` in the switch gives the library
 back, `ipod` the device. in a narrow window the stations, the station and
 what was heard share one column. `↑` `↓` move among the stations and `enter`
 plays one, as in any column. the tab also has `logos der stationen laden`
-(`[ui] radio_logos`, on), `beispielsender hinzufügen` (with ⌥ held), and,
+(`[ui] radio_logos`, on), `cover des titels suchen` (`[ui]
+radio_song_covers`, on, see below), `beispielsender hinzufügen` (with ⌥ held), and,
 with last.fm connected, the two rows below. switched off, a station on the
 air stops. the stations kept are there — none to begin with: the list starts
 empty and says how to fill it, `noch keine stationen — oben im suchfeld
@@ -2353,11 +2436,33 @@ the stations' column is headed `stationen` (`sender` heads the column beside
 it). the stations kept can be dragged into another order: a line shows where
 the one carried will go. `KESSLER_RADIO_BROWSER` points the directory elsewhere, for testing.
 
-a station's picture is its own from the directory when that is one that
-can be shown and at least 48 pixels; otherwise the icon its own page names
-(the home-screen icon, then the picture it shows when shared, then its
-favicon, kept under `radio-logos/site-<md5>`), then its wikipedia article's
-picture. while nts plays, the show on now brings its own picture, shown in
+a kept station can be given a name and a picture of one's own, both from
+the right-click menu: on its row in the stations, `umbenennen` writes its
+name anew in the row itself, as a list's is (enter keeps it, escape or a
+click elsewhere leaves it), and the name stays — in the lists, in
+`radio.toml` and in the header — whatever the stream calls itself; on its
+picture under `sender`, `bild wählen…` takes a picture from a file, copied
+beside the settings (`radio-logos/own-<md5>`), in place of every other, and
+`eigenes bild entfernen` lets go of it again.
+
+a station's picture is otherwise its own from the directory when that is one that
+can be shown and at least 48 pixels; otherwise a picture on its own page
+whose file bears the station's name (its letters and figures, without what
+stands in brackets after it: `JazzSakuraLogo2019.jpeg` for „jazz sakura" —
+a network's page of all its channels names no icon for each), the largest
+of them, kept under `radio-logos/named-<md5>`; then the icon its own page
+names (the home-screen icon, then the picture it shows when shared, then
+its favicon, kept under `radio-logos/site-<md5>`), then its wikipedia
+article's picture.
+
+`cover des titels suchen` (`[ui] radio_song_covers`, on): while a station
+names the song it plays as „artist - title", its cover is looked up in the
+itunes store's open search (the united states' store, then japan's) and
+shown under `informationen` in the artist's place where the artist has no
+picture of their own, for as long as the song plays; `sender` always shows
+the station's own picture. only an answer by the artist named counts —
+no picture rather than another artist's. each song is asked once; the
+answer is kept under `radio-covers/<md5>`, an empty file for none. while nts plays, the show on now brings its own picture, shown in
 the header's cover and under `informationen`.
 
 the radio's columns share the row evenly, as the library's do. the gaps
@@ -2655,8 +2760,12 @@ size; and there only), and so do a station's facts and the small notes in
 those columns, such as `nichts gefunden — …`.
 
 the first time an artist is shown, the sources are asked, once, on a thread
-of their own: **musicbrainz** for who it is and the links (the name has to
-match, alias included), **wikipedia** through the wikidata link musicbrainz
+of their own: **musicbrainz** for who it is and the links — the artist
+last.fm's page names, where a key is set up and it names one; else the best
+of musicbrainz's own search whose name or alias matches, and none where two
+of that name score all but alike (five points apart or less: „hiromi" there
+is first a singer who died in 2010, the pianist not among the first five),
+since another's facts are worse than none — **wikipedia** through the wikidata link musicbrainz
 gives — never by name, because „coil" by name is a spring — in the window's
 language first, **deezer** for a square picture when the name is exactly
 theirs, and **last.fm**, when a key is set up, for tags, similar artists and
@@ -2835,19 +2944,25 @@ columns, so it can go again as easily as it came. choosing `musik` or
   whose files are still there, the newest first, whether their podcast is
   still followed or not (kessler notes each one fetched in `podcasts.toml`).
   each is set as a record's head is in the track list: its podcast's picture
-  small, the title in the bold face, and under it whose it is (under
-  `alle`), the day, and how long it plays or where you are — `noch 12:30`,
-  `gehört` (heard ones in the quieter tone). where the list comes newest
+  small, the title in the bold face, under it whose it is as a record's
+  artist — the plain cut, the second tone (where the list holds several
+  podcasts) — then the day on a line of its own, small (`heute`, `gestern`,
+  from the day before that on the date), and under it how long it plays or
+  where you are — `noch 12:30`, `gehört` (heard ones in the quieter
+  tone). where the list comes newest
   first, `heute`, `diese woche` (the last seven days) and `älter` stand over
-  its parts. under the pointer a row offers `archivieren` at the end of its
-  title (`zurückholen` for one archived). one fetched says `heruntergeladen` in the
-  accent (a line of its own under the facts, which are set in the small
-  face and the colour `flac` has; beside a picture a little taller than
-  them, three lines in the middle of its height, the facts as far under the
-  title as a record's line under its name in the music, the third under them
-  at the small face's own step, as a station's facts stand: the title, whose it
-  is and the day, then `heruntergeladen` and how far it was heard — `noch 18:29`, `noch nicht gehört` or `fertig
-  gehört`; the row's picture is always the podcast's, the episode's own
+  its parts. under the pointer a row offers `archivieren` in the top right
+  corner of its plate, as far in from the top as from the side
+  (`zurückholen` for one archived) — in the ink once the pointer is on
+  the word itself, as every word at a row's end (`entfernen`, `merken`,
+  `wirklich?`) is. one fetched says `heruntergeladen` in the
+  accent (before how far it was heard, on the last line; the small lines
+  in the colour `flac` has; beside a picture a little taller than the lines,
+  in the middle of its height, each of the two large lines a heading's step
+  under the one before, as a record's in the music, the small ones at the
+  small face's own step: the title, whose it is, the day, then
+  `heruntergeladen` and how far it was heard — `noch 18:29`, `noch nicht
+  gehört` or `fertig gehört`; the row's picture is always the podcast's, the episode's own
   stands in the third column). the one playing has the arrow before its
   title, an archived one's picture is quieter. in the first column `alle`,
   `offen`, `heruntergeladen` and `gemerkt` are views, set as `alle` and
@@ -2912,7 +3027,8 @@ opens when the last look is more than five minutes back. how often is `nach
 neuen folgen sehen` in the podcasts' tab (`[ui] podcast_check`): every 15 or
 30 minutes, every hour, every three hours, or `nur von hand` — then only
 `jetzt nachsehen` under it, or `aktualisieren` at the end of the first
-column's head under the pointer, looks — at rest that place says how many
+column's head under the pointer, looks (both say `sehe nach` while it does,
+their dots going round, one to three) — at rest that place says how many
 podcasts are followed, or how many a search found, as the stations' head
 does — (the feeds are still read once as the view first opens, to have
 something to show). an episode out since the podcasts were last left, and
@@ -2925,7 +3041,11 @@ nothing is new. the head offers `folgen` / `nicht mehr folgen` for the
 podcast chosen. a click picks an episode, a double click plays it; until it
 plays, `lädt` stands where the row says how far it was heard, its dots
 going.
-- **the episode** — the third: the podcast's picture (fetched once its feed
+- **the episode** — the third: its title first, in the plain cut as an
+  artist's name in `informationen`, on the
+  line every other column's first row stands on, as an artist's name heads
+  their page, and like it outside what scrolls, so it stays while a long
+  page is read; under it the podcast's picture (fetched once its feed
   is read, screened as a station's is) — or, the episode's own where the
   feed gives it one (`itunes:image` in the item), fetched as it is looked at
   or played and then standing in its row in the list too — on the page a
@@ -2934,9 +3054,12 @@ going.
   once it is seen to be wider than tall), as the square is often cut from
   it; a picture that is
   not square stands in its own proportions, as wide as the column and at most
-  four fifths as tall as wide (a taller one narrower, never squeezed) — its title, its
-  podcast (set as a record's head sets its title and artist under the
-  cover: the same cuts, tones and steps), the day it came out, how long it plays, `heruntergeladen` once fetched;
+  four fifths as tall as wide (a taller one narrower, never squeezed) — then
+  its podcast (as a record's artist under the cover: the plain cut, the
+  second tone; clicked, the podcast is chosen in the first column, its page
+  and its episodes beside) and under it, side by side in the small face, the day it came
+  out (`heute`, `gestern`, else the date), how long it plays and
+  `heruntergeladen` once fetched;
   then what can be done to it, in three groups under small heads, each its
   words one under another, the groups side by side where the column has room
   for them (all three equally wide, so none moves when a word in another
@@ -2986,7 +3109,9 @@ going.
   serial`) is listed from its first episode, by season and number where the
   feed counts them, and kept whole; an episode's place shows with its date,
   `staffel 2, folge 4` or `folge 4`; under them the start of what it is
-  about, all of it after `mehr`. `alle`, `offen`, `heruntergeladen` and `gemerkt`
+  about, all of it after `mehr` (an action, so without the › links have;
+  the rest slides open downward, and closed again with `weniger`, at the
+  pace the side's columns slide in). `alle`, `offen`, `heruntergeladen` and `gemerkt`
   have none, their episodes being of many podcasts. the same page, at full
   size, is what `i` shows of the podcast playing. the pictures are read two
   at a time, each made small as it is read, and let go of once they have not
@@ -3635,6 +3760,12 @@ Canada`, `NTS 1` — instead of all in small letters; the window's own words
 are written small in the first place and stay so. while it is on the row
 stays.
 
+**systemschrift**, one more step of schrift, always there: the face the
+system sets its own interface in, read where it lies — on a mac san
+francisco, on linux the one gnome is set to (ubuntu sans on ubuntu), else
+fontconfig's sans; its bold where the system has one, or from its weight
+axis. the window still opens in muto.
+
 **the machine's own faces**, for trying out: with ⌥ held in the menu, a row
 **systemschriften** shows under schrift. turned on (`[ui] system_fonts =
 true`), schrift steps on past the folder's families into the ones installed
@@ -3704,7 +3835,8 @@ weight axis, its regular is set at 520 rather than 400, where its strokes
 are as heavy as theirs. it is set a little smaller than the chosen face, so
 that a kanji stands just over that face's capitals — a kanji fills its
 square, a capital does not — and a japanese title is no taller than a latin
-one beside it. it is not offered as a typeface of its own. what it lacks too
+one beside it; and lifted a little, so a kanji stands on the latin baseline
+rather than reaching under it, as a japanese face draws them. it is not offered as a typeface of its own. what it lacks too
 — korean, the rarer chinese — falls to whatever the machine has; `menü →
 darstellung → ersatzzeichen` names the face, and `[ui] font_fallback` points
 at a different one in place of both.
@@ -3947,6 +4079,48 @@ most other desktops send play, pause, next and previous. the same registration
 puts what is playing, with its cover, into the panel's media controls. seeking
 from the panel is not offered. on a machine without a session bus (a pi
 started from the console) there are no media keys, and nothing else changes.
+
+### the title bar on linux
+
+where the desktop draws the window's title bar itself — kde, xfce,
+cinnamon, every x11 desktop — kessler wears the desktop's own. gnome on
+wayland draws none for it, and kessler then draws one in gnome's own look
+(adwaita): light or dark with the desktop, its buttons on the side gnome is
+set to put them (`org.gnome.desktop.wm.preferences button-layout`).
+
+**menü → darstellung → kopfzeile → fensterleiste** (`[ui] window_bar`,
+linux only): `system` (the default), the bar as above, or `ohne`, none at
+all — for a tiling window manager, where it only takes room. without it the
+empty parts of the band at the top move the window and a double click there
+makes it as big as the screen and back, and the window grows from its edges
+and corners.
+
+### the system's accent colour
+
+`macos`, `gnome` and `ubuntu` take the accent colour the system is set
+to, with no setting of their own: chosen in the system, it is there — on a mac the one under system settings → appearance (looked at again
+every few seconds; on `mehrfarbig` the scheme keeps its own blue), on linux
+gnome's, ubuntu's or kde's, as the desktop portal says them — for what
+plays, in its hue, as dark on the light ground or as light on the dark one
+as words need it. the heads lose their own colour where it is the accent's
+hue. where the system says none, and in every other scheme, the scheme's
+own accent stays.
+
+### emacs
+
+`extras/kessler.el` works kessler from emacs, on linux, through the same
+command line (`kessler toggle`, `next`, `prev`, `stop`, `now`):
+
+```elisp
+(load "/path/to/kessler/extras/kessler.el")
+(kessler-keys-mode 1)        ; c-c k space, n, p, s, i
+(kessler-mode-line-mode 1)   ; what plays, in the mode line
+```
+
+`kessler-program` names the program where it is not on the path,
+`kessler-mode-line-every` how often the mode line asks (five seconds). the
+commands are there without the modes too: `kessler-toggle`, `kessler-next`,
+`kessler-previous`, `kessler-stop`, `kessler-now`.
 
 ### a tiling window manager, and other desktops
 

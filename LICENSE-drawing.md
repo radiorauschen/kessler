@@ -32,6 +32,13 @@ whatever drawing is added later. at present:
 - `bundle/release-1.5.354-scan.webp` and
   `docs/screenshots/release-1.5.354.png` — the drawing at the head of the
   release notes of 1.5.354: its scan and its tinted copy
+- `bundle/release-1.5.411-scan.webp` and
+  `docs/screenshots/release-1.5.411.png` — the drawing at the head of the
+  release notes of 1.5.411: its scan and its tinted copy
+- `src/gui/release-1.5.322.png`, `src/gui/release-1.5.354.png` and
+  `src/gui/release-1.5.411.png` — the masks of the drawings for 1.5, 1.5.354
+  and 1.5.411, made from their scans by `bundle/make-drawing.py`, for the
+  screen saver „release note drawings"
 - `bundle/dmg/seesaw-scan.webp`, `bundle/dmg/arrow-scan.webp`,
   `bundle/dmg/background.png` and `background@2x.png` — the disk image's
   picture, its scans and what is made from them

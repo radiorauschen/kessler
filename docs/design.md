@@ -104,12 +104,18 @@ scheme is on:
   arrow (and the darker plate where the column has the keys), never the
   accent. a chosen name is bold and on the plate, no arrow.
 - **chosen** is in the ink and the bold cut in every list — a played row of
-  a queue, a view over the names, a station heard alike; only a row whose
-  file is gone stays in the second tone.
+  a queue, a station heard alike; only a row whose file is gone stays in
+  the second tone, and a view over the names (`alle`, `zuletzt`,
+  `kompilationen`, the podcasts' `alle` and the like) keeps its second tone,
+  arrow and word alike, bold.
 - the darker plate goes where the last click went: on what is chosen in the
   column clicked last, nowhere else — the others keep their arrow, accent or
   bold.
-- **muted** (heard, a view's name): second tone. **spent** (played,
+- **muted** (heard, a view's name): second tone, chosen or not.
+- the first words under a column's head — the artist's name in
+  `informationen`, the show on now, a record's name in a head without its
+  cover — stand on a row's line, as every other column's first row does,
+  however many lines they wrap to. **spent** (played,
   archived): faint; an archived episode's picture under a veil of the ground
   (`ARCHIVED_VEIL` 0.6).
 - **a choice, which way it runs decides its mark**: words side by side —
@@ -127,7 +133,9 @@ scheme is on:
 - numbers before titles in the number column (`TrackColumn::Number`, 26 wide,
   `number_gap`) — tracks of a record, chapters of an episode.
 - the word at a row's end (`row_ahead`, `point_at_word`, `on_the_word`):
-  the figure at rest, the action word under the pointer, a hand over it.
+  the figure at rest, the action word under the pointer — in the second
+  tone on its row, in the ink with the pointer on the word itself — a hand
+  over it.
   taking something out asks in the word itself: `entfernen` becomes
   `wirklich?` on the first click, and the second does it (`removal_word`,
   `really`) — no dialog.
@@ -156,6 +164,10 @@ scheme is on:
   `FADE_GROWS_OVER` 48 points that go under the edge, along an eased curve
   with no edge of its own; under the last row `LIST_END_AIR` (the fade's
   height), so the end reads as an end.
+- **plates that answer the hand** — a word's under the pointer, the heads'
+  offers, the status, the switch's drop plate — have the rows' corner,
+  `ROW_RADIUS`; pictures, fields and the marks of what is typed keep
+  `MARKER_RADIUS`.
 - **empty**: one sentence in `faint` saying what would be there and how it
   gets there.
 

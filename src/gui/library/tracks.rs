@@ -347,8 +347,7 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     }
 
     if below < MORE_RECENT_WITHIN && app.more_recent_to_fetch() {
-        app.recent_more += crate::config::RECENT_SHOWN;
-        if let Err(e) = app.reload_dependent() {
+        if let Err(e) = app.fetch_more_recent() {
             app.set_status(format!("{e}"));
         }
     }
@@ -620,7 +619,11 @@ pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, mo
     let beside = size.max(block);
     let under = size + ALBUM_HEAD_UNDER + block;
     let tall = if cover.is_some() { beside + (under - beside) * stack } else { beside };
-    tall + m.marker_pad_x * 2.0 + m.marker_inset_y
+    tall + head_pad_top(cover, m) + m.marker_pad_x + m.marker_inset_y
+}
+
+fn head_pad_top(cover: Option<f32>, m: Metrics) -> f32 {
+    if cover.is_some() { m.marker_pad_x } else { 0.0 }
 }
 
 pub(super) fn heads_stack(ctx: &egui::Context, cover: Option<f32>, width: f32, m: Metrics) -> f32 {
@@ -667,7 +670,7 @@ pub(super) fn album_head(
     let block = words_block(lines, more, m);
     let beside_tall = size.max(block);
     let tall = beside_tall * (1.0 - stack) + size * stack;
-    let pad = m.marker_pad_x;
+    let pad = head_pad_top(cover, m);
     let height = album_head_height(cover, width, lines, more, stack, m);
     let plate_height = height - m.marker_inset_y;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());

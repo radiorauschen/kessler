@@ -51,7 +51,7 @@ pub(in crate::gui) fn paint_control_hover(
     palette: &Palette,
 ) {
     if response.hovered() {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, palette.hover);
+        ui.painter().rect_filled(plate, crate::gui::theme::ROW_RADIUS, palette.hover);
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 }
@@ -231,6 +231,20 @@ fn chapter_number(ui: &Ui, rule: Rect, x: f32, number: usize, plated: bool, pale
     painter.galley(text::ink_centred(&g, plate), g, tone);
 }
 
+const TIME_GAP: f32 = 14.0;
+
+const RULE_STROKE_LEAST: f32 = 40.0;
+
+pub(super) fn rule_least(app: &GuiApp, ui: &Ui, palette: &Palette, m: Metrics) -> f32 {
+    let time = if app.player.current_track().is_some() {
+        let whole = text::duration(app.player.duration().as_secs());
+        text::line(ui, &format!("{whole} / {whole}"), Role::FiguresLabel, palette.mid).size().x + TIME_GAP
+    } else {
+        0.0
+    };
+    time + RULE_STROKE_LEAST + m.marker_pad_x * 2.0
+}
+
 pub(super) fn progress_rule(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -239,7 +253,6 @@ pub(super) fn progress_rule(
     width: f32,
 ) {
     const GRAB_HEIGHT: f32 = 14.0;
-    const TIME_GAP: f32 = 14.0;
 
     let (row, response) =
         ui.allocate_exact_size(Vec2::new(width, GRAB_HEIGHT), Sense::click_and_drag());
@@ -347,7 +360,7 @@ pub(super) fn progress_rule(
         let under = share.filter(|_| starts.len() > 1).map(|s| starts.iter().rposition(|start| *start <= s).unwrap_or(0));
         point_at_chapter(ui.ctx(), ON_THE_RULE, under);
         let lit = under.or_else(|| pointed_chapter(ui.ctx(), IN_THE_LIST));
-        let plated = PlayingAt::of(&app.config.ui) != PlayingAt::SuperCompact;
+        let plated = PlayingAt::now(&app.config.ui) != PlayingAt::SuperCompact;
         paint_chapters(ui, rule, &starts, palette, lit, plated);
     }
 
@@ -615,7 +628,7 @@ pub(super) fn paint_key(
     palette: &Palette,
 ) {
     if hovered {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, palette.hover);
+        ui.painter().rect_filled(plate, crate::gui::theme::ROW_RADIUS, palette.hover);
     }
     let letters = if hovered && letters != palette.accent { palette.ink } else { letters };
 

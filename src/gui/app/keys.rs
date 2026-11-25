@@ -14,6 +14,10 @@ impl GuiApp {
         const NONE: Modifiers = Modifiers::NONE;
         const SHIFT: Modifiers = Modifiers::SHIFT;
 
+        if self.config.ui.keymap == "emacs" {
+            emacs_keys(ctx);
+        }
+
         if self.reeling() {
             if pressed(ctx, NONE, Key::Escape)
                 || pressed(ctx, Modifiers::ALT | SHIFT, Key::G)
@@ -49,6 +53,13 @@ impl GuiApp {
         }
         if self.naming_device.is_some() && !self.menu_open {
             self.handle_naming_keys(ctx);
+            return Ok(());
+        }
+        if self.naming_station.is_some() && !self.showing_radio() {
+            self.naming_station = None;
+        }
+        if self.naming_station.is_some() && !self.menu_open {
+            self.handle_station_naming_keys(ctx);
             return Ok(());
         }
         if self.menu_open {
@@ -357,6 +368,16 @@ impl GuiApp {
                 _ => self.g_pressed_at = Some(now),
             }
         }
+        if pressed(ctx, NONE, Key::Home) {
+            self.move_selection(i32::MIN / 2)?;
+        }
+        if pressed(ctx, NONE, Key::End) {
+            self.move_selection(i32::MAX / 2)?;
+        }
+        let page = PAGE_ROWS * (taken(ctx, NONE, Key::PageDown) as i32 - taken(ctx, NONE, Key::PageUp) as i32);
+        if page != 0 {
+            self.move_selection(page)?;
+        }
         let down = taken(ctx, NONE, Key::J) + taken(ctx, NONE, Key::ArrowDown);
         let up = taken(ctx, NONE, Key::K) + taken(ctx, NONE, Key::ArrowUp);
         let right = taken(ctx, NONE, Key::L) + taken(ctx, NONE, Key::ArrowRight);
@@ -431,6 +452,12 @@ impl GuiApp {
         }
         if pressed(ctx, NONE, Key::Num4) && self.attached.is_some() {
             self.read_from(false, true);
+        }
+        if pressed(ctx, NONE, Key::Num0) {
+            crate::gui::library::ease_columns_from_now(ctx);
+            self.config.ui.even_columns_again();
+            self.save_config();
+            self.set_status(tr!("alle spalten gleich breit"));
         }
         let bigger = taken(ctx, Modifiers::COMMAND, Key::Plus) + taken(ctx, Modifiers::COMMAND, Key::Equals);
         let smaller = taken(ctx, Modifiers::COMMAND, Key::Minus);
@@ -1084,5 +1111,71 @@ impl GuiApp {
         self.row_menu_focus = None;
         self.row_menu_step = 1;
         self.row_menu_enter = false;
+    }
+}
+
+const PAGE_ROWS: i32 = 10;
+
+fn emacs_keys(ctx: &egui::Context) {
+    use egui::{Event, Key, Modifiers};
+    ctx.input_mut(|i| {
+        for event in i.events.iter_mut() {
+            let Event::Key { key, modifiers, pressed, repeat, physical_key } = event.clone() else { continue };
+            let ctrl = modifiers.ctrl && !modifiers.alt && !modifiers.shift && !modifiers.mac_cmd;
+            let alt = modifiers.alt && !modifiers.ctrl && !modifiers.mac_cmd;
+            let to = match (key, ctrl, alt) {
+                (Key::N, true, _) => Some(Key::ArrowDown),
+                (Key::P, true, _) => Some(Key::ArrowUp),
+                (Key::F, true, _) => Some(Key::ArrowRight),
+                (Key::B, true, _) => Some(Key::ArrowLeft),
+                (Key::V, true, _) => Some(Key::PageDown),
+                (Key::V, _, true) if !modifiers.shift => Some(Key::PageUp),
+                (Key::Comma, _, true) if modifiers.shift => Some(Key::Home),
+                (Key::Period, _, true) if modifiers.shift => Some(Key::End),
+                (Key::G, true, _) => Some(Key::Escape),
+                (Key::S, true, _) => {
+                    if pressed {
+                        *event = Event::Text("/".into());
+                    }
+                    None
+                }
+                _ => None,
+            };
+            if let Some(to) = to {
+                *event = Event::Key { key: to, modifiers: Modifiers::NONE, pressed, repeat, physical_key };
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod emacs_tests {
+    use eframe::egui::{self, Event, Key, Modifiers};
+
+    #[test]
+    fn emacs_chords_become_the_windows_keys() {
+        let key = |key: Key, modifiers: Modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        let ctrl = Modifiers { ctrl: true, ..Default::default() };
+        let alt_shift = Modifiers { alt: true, shift: true, ..Default::default() };
+        let raw = egui::RawInput {
+            events: vec![key(Key::N, ctrl), key(Key::V, ctrl), key(Key::Comma, alt_shift), key(Key::G, ctrl), key(Key::S, ctrl), key(Key::J, Modifiers::NONE)],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let mut seen = Vec::new();
+        let _ = ctx.run_ui(raw, |ui| {
+            super::emacs_keys(ui.ctx());
+            seen = ui.input(|i| i.events.clone());
+        });
+        let keys: Vec<String> = seen
+            .iter()
+            .map(|e| match e {
+                Event::Key { key, modifiers, .. } => format!("{key:?}{}", if modifiers.any() { "+" } else { "" }),
+                Event::Text(t) => format!("text {t}"),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(keys, ["ArrowDown", "PageDown", "Home", "Escape", "text /", "J"]);
     }
 }

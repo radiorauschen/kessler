@@ -262,10 +262,23 @@ pub(super) fn device_fact(
 }
 
 fn name_row(app: &mut GuiApp, ui: &mut Ui, width: f32, name: &str, m: Metrics, palette: &Palette) {
+    if typed_row(ui, width, tr!("name"), name, app.naming_device.as_ref(), m, palette).clicked() && app.naming_device.is_none() {
+        app.start_naming_device();
+    }
+}
+
+pub(super) fn typed_row(
+    ui: &mut Ui,
+    width: f32,
+    label: &str,
+    shown: &str,
+    typing: Option<&crate::gui::tagedit::Entry>,
+    m: Metrics,
+    palette: &Palette,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
     let content = content_rect(rect, m);
     let line = text::row_line(ui, m.row, Role::Content);
-    let typing = app.naming_device.as_ref();
     if typing.is_some() {
         ui.painter().rect_filled(marker_rect(rect, m), crate::gui::theme::ROW_RADIUS, palette.marked());
     } else {
@@ -275,21 +288,18 @@ fn name_row(app: &mut GuiApp, ui: &mut Ui, width: f32, name: &str, m: Metrics, p
         let icon = if typing.is_some() { egui::CursorIcon::Text } else { egui::CursorIcon::PointingHand };
         ui.ctx().set_cursor_icon(icon);
     }
-    let label = text::line(ui, tr!("name"), Role::Content, palette.mid);
+    let label = text::line(ui, label, Role::Content, palette.mid);
     let label_width = label.size().x;
     ui.painter().galley(egui::pos2(content.left(), text::on_line(&label, rect.top(), line)), label, palette.mid);
     let room = (content.width() - label_width - 14.0).max(0.0);
     match typing {
         None => {
-            let figure = text::line_within(ui, name, Role::Content, palette.ink, room);
+            let figure = text::line_within(ui, shown, Role::Content, palette.ink, room);
             ui.painter().galley(
                 egui::pos2(content.right() - figure.size().x, text::on_line(&figure, rect.top(), line)),
                 figure,
                 palette.ink,
             );
-            if response.clicked() {
-                app.start_naming_device();
-            }
         }
         Some(entry) => {
             let figure = text::cased_within(ui, entry.text(), Role::Content, palette.ink, room);
@@ -315,6 +325,7 @@ fn name_row(app: &mut GuiApp, ui: &mut Ui, width: f32, name: &str, m: Metrics, p
             say(ui, width, tr!("enter speichert · esc lässt es"), Role::Label, palette.faint, m);
         }
     }
+    response
 }
 
 pub(super) fn device_bar(

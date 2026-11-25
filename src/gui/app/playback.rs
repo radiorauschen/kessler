@@ -474,7 +474,8 @@ impl GuiApp {
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         if !crate::media::hide_application() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            crate::gui::macwindow::shrink_into_dock();
+            ctx.request_repaint();
         }
     }
 

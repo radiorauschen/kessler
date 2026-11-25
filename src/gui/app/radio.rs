@@ -280,13 +280,96 @@ impl GuiApp {
         }
     }
 
+    pub(in crate::gui) fn station_shown(&self) -> Option<crate::radio::Station> {
+        let at = self.radio.as_ref().map_or(0, |r| r.cursor);
+        self.on_air.clone().or_else(|| self.radio_listed().get(at).cloned())
+    }
+
+    pub(in crate::gui) fn start_naming_station(&mut self, station: &crate::radio::Station) {
+        let mut entry = crate::gui::tagedit::Entry::new(station.name.clone());
+        entry.mark_all();
+        self.naming_station = Some((station.url.clone(), entry));
+    }
+
+    pub(in crate::gui) fn rename_station(&mut self) {
+        let Some((url, entry)) = self.naming_station.take() else { return };
+        let name = entry.text().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let Some(radio) = self.radio.as_mut() else { return };
+        if !radio.rename(&url, &name) {
+            return;
+        }
+        if let Some(on) = self.on_air.as_mut().filter(|on| on.url == url) {
+            on.name = name.clone();
+        }
+        self.set_status(tr!("der sender heisst jetzt {}", crate::gui::theme::lower(&name)));
+    }
+
+    pub(in crate::gui) fn handle_station_naming_keys(&mut self, ctx: &egui::Context) {
+        use egui::{Key, Modifiers};
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.naming_station = None;
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            self.rename_station();
+            return;
+        }
+        if let Some((_, entry)) = self.naming_station.as_mut() {
+            super::device::type_into(ctx, entry);
+        }
+    }
+
+    pub(in crate::gui) fn choose_station_picture(&mut self, url: &str) {
+        if self.picking_station_picture.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let prompt = tr!("bild für den sender wählen");
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::gui::folder::ask_image(prompt));
+        });
+        self.picking_station_picture = Some((url.to_string(), rx));
+    }
+
+    pub(in crate::gui) fn poll_station_picture(&mut self) {
+        let Some((url, rx)) = &self.picking_station_picture else { return };
+        let url = url.clone();
+        match rx.try_recv() {
+            Ok(chosen) => {
+                self.picking_station_picture = None;
+                let Some(path) = chosen else { return };
+                match crate::radio::choose_picture(&url, &path) {
+                    Ok(()) => {
+                        crate::gui::library::forget_decoded_pictures();
+                        self.set_status(tr!("bild für den sender gesetzt"));
+                    }
+                    Err(why) => self.set_status(tr!("das bild liess sich nicht nehmen ({})", why)),
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.picking_station_picture = None;
+                self.set_status(tr!("der dateidialog liess sich nicht öffnen"));
+            }
+        }
+    }
+
+    pub(in crate::gui) fn forget_station_picture(&mut self, url: &str) {
+        crate::radio::forget_picture(url);
+        crate::gui::library::forget_decoded_pictures();
+        self.set_status(tr!("eigenes bild entfernt"));
+    }
+
     pub fn play_station(&mut self, station: crate::radio::Station) {
         if self.on_air.as_ref().is_none_or(|on| on.url != station.url) {
             self.aired.clear();
         }
         if self.config.ui.radio_logos {
             crate::radio::fetch_logo(&station);
-            if let (Some(asking), Some(radio)) = (crate::radio::fetch_site_picture(&station.homepage), self.radio.as_mut()) {
+            if let (Some(asking), Some(radio)) = (crate::radio::fetch_site_picture(&station.homepage, &station.name), self.radio.as_mut()) {
                 radio.site_pictures.push((station.name.clone(), asking));
             }
         }
@@ -564,6 +647,11 @@ impl GuiApp {
             let heard = self.radio_heard.get_or_insert_with(|| Box::new(crate::radio::heard::Heard::read()));
             if heard.note(&artist, &station, &day) {
                 heard.save();
+            }
+        }
+        if self.config.ui.radio_song_covers {
+            if let Some(artist) = &aired.artist {
+                crate::radio::cover::fetch(artist, &aired.title);
             }
         }
         self.aired.insert(0, aired);

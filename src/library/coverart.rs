@@ -1,4 +1,4 @@
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::error::{KesslerError, Result};
 use crate::json::Json;
@@ -66,6 +66,8 @@ pub fn fetch(url: &str) -> Result<Vec<u8>> {
     fetch_once(url).map_err(|e| e.into_error(url))
 }
 
+const MOST_BYTES: u64 = 40_000_000;
+
 const BUSY_WAITS: [u64; 2] = [2, 5];
 
 enum Fetched {
@@ -88,18 +90,23 @@ impl Fetched {
 }
 
 fn fetch_once(url: &str) -> std::result::Result<Vec<u8>, Fetched> {
-    let output = Command::new("curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--fail-with-body",
-            "--location",
-            "--max-time",
-            &TIMEOUT_SECS.to_string(),
-            "--user-agent",
-            &agent(),
-            url,
-        ])
+    let mut command = crate::net::curl();
+    command.args([
+        "--silent",
+        "--show-error",
+        "--fail-with-body",
+        "--location",
+        "--max-time",
+        &TIMEOUT_SECS.to_string(),
+        "--max-filesize",
+        &MOST_BYTES.to_string(),
+        "--user-agent",
+        &agent(),
+    ]);
+    if url.starts_with("https://") {
+        command.args(["--proto-redir", "=https"]);
+    }
+    let output = crate::net::address(&mut command, url)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

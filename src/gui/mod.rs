@@ -25,6 +25,8 @@ pub mod measure;
 pub mod menubar;
 #[cfg(target_os = "linux")]
 mod portal;
+#[cfg(target_os = "macos")]
+mod macaccent;
 pub mod reveal;
 pub mod saver;
 pub mod scope;
@@ -458,6 +460,7 @@ pub enum About {
     List(usize),
     Artist(usize),
     Station(usize),
+    StationPicture,
     Episode(usize),
     Podcast(usize),
 }
@@ -629,6 +632,8 @@ pub struct GuiApp {
     prewarmed: Option<(u32, String, bool)>,
     pub backup_said: Option<String>,
     pub naming_device: Option<tagedit::Entry>,
+    pub naming_station: Option<(String, tagedit::Entry)>,
+    pub picking_station_picture: Option<(String, mpsc::Receiver<Option<std::path::PathBuf>>)>,
     pub choosing_model: bool,
     pub forget_asked: Option<usize>,
     pub picture_screen_list_open: bool,
@@ -698,6 +703,8 @@ pub struct GuiApp {
     pub focus: Column,
     pub untouched: bool,
     pub recent_more: usize,
+    recent_albums: Vec<Album>,
+    recent_taken: usize,
 
     pub track_selection: std::collections::BTreeSet<usize>,
     pub track_anchor: usize,
@@ -809,6 +816,8 @@ pub struct GuiApp {
     pub eq_open: bool,
     pub listened: listened::Listened,
     icon_dressed: Option<(egui::Color32, egui::Color32, Option<String>, crate::lang::Lang)>,
+    icon_coming: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    bar_worn: Option<bool>,
     titled: Option<crate::lang::Lang>,
     pub lyrics: lyrics::LyricsPanel,
     pub artist: artist::ArtistPanel,
@@ -922,6 +931,8 @@ impl GuiApp {
             forget_asked: None,
             backup_said: None,
             naming_device: None,
+            naming_station: None,
+            picking_station_picture: None,
             choosing_model: false,
             picture_screen_list_open: false,
             saver_screen_list_open: false,
@@ -998,6 +1009,8 @@ impl GuiApp {
             focus: Column::Artists,
             untouched: true,
             recent_more: 0,
+            recent_albums: Vec::new(),
+            recent_taken: 0,
             lists_index: 0,
             lists_last: None,
             track_selection: std::collections::BTreeSet::new(),
@@ -1086,6 +1099,8 @@ impl GuiApp {
             eq_open: false,
             listened,
             icon_dressed: None,
+            icon_coming: None,
+            bar_worn: None,
             titled: None,
             lyrics: lyrics::LyricsPanel::default(),
             artist: artist::ArtistPanel::default(),
@@ -1249,7 +1264,10 @@ impl GuiApp {
         }
 
         self.albums = match (self.album_sort, recent) {
-            (_, true) => self.db.get_albums_recent(None, query)?,
+            (_, true) => {
+                self.recent_albums = self.db.get_albums_recent(None, query)?;
+                self.recent_albums.clone()
+            }
             (ListSort::Added, _) => self.db.get_albums_recent(artist.as_deref(), query)?,
             (_, false) => self.db.get_albums(artist.as_deref(), query)?,
         };
@@ -1271,7 +1289,12 @@ impl GuiApp {
         let artist = self.selected_album_artist().or(artist);
 
         self.tracks = match (recent, album.is_none()) {
-            (true, true) if self.merged() => self.recent_records(query)?,
+            (true, true) if self.merged() => {
+                self.recent_taken = 0;
+                let mut tracks = Vec::new();
+                self.take_recent_records(&mut tracks, query)?;
+                tracks
+            }
             (true, true) => self
                 .db
                 .get_recent_tracks(query, self.recent_wanted())?,
@@ -1417,13 +1440,10 @@ impl GuiApp {
             && self.tracks.len() < self.matching_tracks as usize
     }
 
-    fn recent_records(&self, query: Option<&str>) -> Result<Vec<Track>> {
+    fn take_recent_records(&mut self, tracks: &mut Vec<Track>, query: Option<&str>) -> Result<()> {
         let wanted = self.recent_wanted();
-        let mut tracks = Vec::new();
-        for album in self.db.get_albums_recent(None, query)? {
-            if tracks.len() >= wanted {
-                break;
-            }
+        while tracks.len() < wanted {
+            let Some(album) = self.recent_albums.get(self.recent_taken) else { break };
             tracks.extend(self.db.get_tracks(
                 Some(&album.artist),
                 Some(&album.name),
@@ -1431,8 +1451,24 @@ impl GuiApp {
                 SortOrder::Ascending,
                 query,
             )?);
+            self.recent_taken += 1;
         }
-        Ok(tracks)
+        Ok(())
+    }
+
+    pub(in crate::gui) fn fetch_more_recent(&mut self) -> Result<()> {
+        self.recent_more += crate::config::RECENT_SHOWN;
+        let query = self.query();
+        let query = query.as_deref();
+        if self.merged() {
+            let mut tracks = std::mem::take(&mut self.tracks);
+            let taken = self.take_recent_records(&mut tracks, query);
+            self.tracks = tracks;
+            taken
+        } else {
+            self.tracks = self.db.get_recent_tracks(query, self.recent_wanted())?;
+            Ok(())
+        }
     }
 
     pub fn save_config(&mut self) {
@@ -1441,6 +1477,9 @@ impl GuiApp {
         }
     }
 }
+
+const FRAME_CEILING: u32 = 125;
+const FRAME_CEILING_BEHIND: u32 = 60;
 
 impl GuiApp {
     fn view_measured(&self) -> String {
@@ -1487,9 +1526,11 @@ impl GuiApp {
         }
     }
 
-    fn hold_the_frame_rate(&mut self) {
-        let cap = self.config.ui.frame_cap;
-        if let (true, Some(last)) = (cap > 0, self.frame_started) {
+    fn hold_the_frame_rate(&mut self, ctx: &egui::Context) {
+        let chosen = self.config.ui.frame_cap;
+        let cap = if chosen > 0 { chosen } else { FRAME_CEILING };
+        let cap = if ctx.input(|i| i.focused) { cap } else { cap.min(FRAME_CEILING_BEHIND) };
+        if let Some(last) = self.frame_started {
             let gap = std::time::Duration::from_secs_f64(1.0 / f64::from(cap))
                 .saturating_sub(std::time::Duration::from_millis(2));
             let since = last.elapsed();
@@ -1607,13 +1648,19 @@ impl eframe::App for GuiApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.hold_the_frame_rate();
+        self.hold_the_frame_rate(ctx);
         keep_the_wheel_where_it_turned(ctx);
         self.say_a_newer_version(ctx);
         crate::media::set_notify(self.config.ui.notify, ctx.input(|i| i.viewport().focused.unwrap_or(true)));
         #[cfg(target_os = "linux")]
         crate::ipod::udisks::AUTO.store(self.config.ipod_mount, std::sync::atomic::Ordering::Relaxed);
-        if let Some(placed) = macwindow::apply(frame) {
+        macwindow::own_buttons(self.config.ui.window_buttons != "system");
+        let placed = macwindow::apply(frame);
+        theme::set_button_marks(placed.map(|p| {
+            let zoom = ctx.zoom_factor().max(0.1);
+            (p.middles.map(|x| x / zoom), p.across / zoom)
+        }));
+        if let Some(placed) = placed {
             let zoom = ctx.zoom_factor().max(0.1);
             theme::set_titlebar(placed.band / zoom);
             theme::set_buttons_end(placed.buttons_end / zoom);
@@ -1641,6 +1688,10 @@ impl eframe::App for GuiApp {
             self.media_started = true;
             crate::media::start();
             crate::media::route_start();
+            #[cfg(target_os = "linux")]
+            portal::follow_accent(ctx.clone());
+            #[cfg(target_os = "macos")]
+            macaccent::follow(ctx.clone());
         }
         self.lap("medien-start");
         let seen = ctx.input(|i| {
@@ -1702,6 +1753,7 @@ impl eframe::App for GuiApp {
         self.poll_transfer();
         self.poll_music_picker();
         self.poll_picker();
+        self.poll_station_picture();
         self.poll_cover_file();
         self.poll_cover_pick();
         self.poll_artist();
@@ -1840,6 +1892,7 @@ impl eframe::App for GuiApp {
         if self.drawn_with.is_empty() {
             self.drawn_with = drawn_with(frame);
         }
+        covers::set_outline(covers::outline_colour(&self.config.ui.picture_outline, &self.palette));
         let full = ui.available_rect_before_wrap();
         ui.painter().rect_filled(full, 0.0, self.palette.ground);
         library::render(self, ui);
@@ -1944,6 +1997,10 @@ pub fn run(config: Config) -> Result<()> {
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        viewport = viewport.with_decorations(config.ui.window_bar != "ohne");
     }
     let icon = if crate::launched_from_a_bundle() {
         egui::IconData::default()

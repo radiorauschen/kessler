@@ -52,7 +52,7 @@ pub(in crate::gui) use meter::MeterDots;
 
 pub(super) use rows::{DeviceMark, DEVICE_MARKS};
 pub(in crate::gui) use rows::cursor_row;
-pub(super) use rows::{lead_arrow, paint_extent, paint_fade, without_a_bar, ARROW_SECS};
+pub(super) use rows::{damp_scrolling, lead_arrow, note_below, paint_extent, paint_fade, without_a_bar, ARROW_SECS};
 pub(super) use masthead::PlayingAt;
 pub(super) use controls::{control_plate, paint_control_hover, PLAY_WORDS};
 pub(super) use switch::paint_underline;
@@ -203,8 +203,10 @@ impl RowState {
             p.mid
         } else if self.playing {
             p.accent
-        } else if self.selected {
+        } else if self.selected && !self.muted {
             p.ink
+        } else if self.selected {
+            p.mid
         } else if self.spent {
             p.faint
         } else if self.muted {
@@ -447,6 +449,197 @@ fn slide_for(ctx: &egui::Context, id: egui::Id, on: bool, snap: bool, secs: f32)
     slide_to(ctx, id, if on { 1.0 } else { 0.0 }, snap, secs, egui::emath::easing::cubic_out)
 }
 
+fn view_fade(app: &GuiApp, ui: &Ui, area: Rect, palette: &Palette) {
+    let view = app.view_shown();
+    let id = egui::Id::unique("view-fade");
+    let now = ui.input(|i| i.time);
+    let before: Option<(crate::gui::View, f64)> = ui.data(|d| d.get_temp(id));
+    let since = match before {
+        Some((was, at)) if was == view => at,
+        None => f64::NEG_INFINITY,
+        Some(_) => now,
+    };
+    ui.data_mut(|d| d.insert_temp(id, (view, since)));
+    if !app.config.ui.view_fade {
+        return;
+    }
+    let secs = f64::from(ui.style().animation_time);
+    let left = 1.0 - ((now - since) / secs).clamp(0.0, 1.0) as f32;
+    if left <= 0.0 {
+        return;
+    }
+    ui.ctx()
+        .layer_painter(egui::LayerId::new(egui::Order::Middle, id))
+        .rect_filled(area, 0.0, palette.ground.gamma_multiply(left));
+    ui.ctx().request_repaint();
+}
+
+fn grow_from_the_edges(ui: &Ui, window: Rect) {
+    use egui::{CursorIcon, ResizeDirection as D};
+    const EDGE: f32 = 5.0;
+    const CORNER: f32 = 14.0;
+    let (l, r, t, b) = (window.left(), window.right(), window.top(), window.bottom());
+    let zones = [
+        (Rect::from_min_max(egui::pos2(l, t), egui::pos2(l + CORNER, t + CORNER)), D::NorthWest, CursorIcon::ResizeNorthWest),
+        (Rect::from_min_max(egui::pos2(r - CORNER, t), egui::pos2(r, t + CORNER)), D::NorthEast, CursorIcon::ResizeNorthEast),
+        (Rect::from_min_max(egui::pos2(l, b - CORNER), egui::pos2(l + CORNER, b)), D::SouthWest, CursorIcon::ResizeSouthWest),
+        (Rect::from_min_max(egui::pos2(r - CORNER, b - CORNER), egui::pos2(r, b)), D::SouthEast, CursorIcon::ResizeSouthEast),
+        (Rect::from_min_max(egui::pos2(l, t), egui::pos2(r, t + EDGE)), D::North, CursorIcon::ResizeVertical),
+        (Rect::from_min_max(egui::pos2(l, b - EDGE), egui::pos2(r, b)), D::South, CursorIcon::ResizeVertical),
+        (Rect::from_min_max(egui::pos2(l, t), egui::pos2(l + EDGE, b)), D::West, CursorIcon::ResizeHorizontal),
+        (Rect::from_min_max(egui::pos2(r - EDGE, t), egui::pos2(r, b)), D::East, CursorIcon::ResizeHorizontal),
+    ];
+    for (i, (rect, direction, cursor)) in zones.into_iter().enumerate() {
+        let edge = ui.interact(rect, egui::Id::unique(("window-edge", i)), Sense::drag());
+        if edge.hovered() || edge.dragged() {
+            ui.ctx().set_cursor_icon(cursor);
+        }
+        if edge.drag_started_by(egui::PointerButton::Primary) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+        }
+    }
+}
+
+fn own_window_buttons(app: &mut GuiApp, ui: &Ui, palette: &Palette, window: Rect) {
+    use crate::gui::glyphs::Mark;
+    let style = app.config.ui.window_buttons.clone();
+    if style == "system" {
+        return;
+    }
+    let Some((middles, across)) = theme::button_marks() else {
+        return;
+    };
+    let radius = across / 2.0;
+    let y = window.top() + theme::band_middle();
+    let at = |i: usize| egui::pos2(window.left() + middles[i], y);
+    let group = Rect::from_min_max(at(0), at(2)).expand(radius + 4.0);
+    let hovered = ui.rect_contains_pointer(group);
+    let focused = ui.input(|i| i.focused);
+    let lit = ui.ctx().animate_bool_with_time(egui::Id::unique("window-buttons-lit"), hovered, BUTTONS_FADE);
+    let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("window-buttons-awake"), focused || hovered, BUTTONS_FADE);
+    let colours = if style == "drei farben" {
+        [palette.accent, palette.heading(), palette.mid].map(|c| palette.faint.lerp_to_gamma(c, shown))
+    } else {
+        [palette.faint.lerp_to_gamma(palette.accent, lit); 3]
+    };
+    let mut pressed = None;
+    for (i, colour) in colours.into_iter().enumerate() {
+        let centre = at(i);
+        let rect = Rect::from_center_size(centre, Vec2::splat(across + 4.0));
+        let response = ui.interact(rect, egui::Id::unique(("window-button", i)), Sense::click());
+        let colour = if response.is_pointer_button_down_on() { colour.lerp_to_gamma(palette.ink, 0.3) } else { colour };
+        ui.painter().circle_filled(centre, radius, colour);
+        if lit > 0.0 {
+            let ink = palette.ground.gamma_multiply(lit);
+            let mark = [Mark::Close, Mark::Shrink, Mark::Grow][i];
+            if !crate::gui::glyphs::paint_sized(ui, mark, centre, ink, across * 1.1) {
+                drawn_button_mark(ui, i, centre, across, ink);
+            }
+        }
+        if response.clicked() {
+            pressed = Some(i);
+        }
+    }
+    let ctx = ui.ctx().clone();
+    match pressed {
+        Some(0) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        Some(1) => {
+            crate::gui::macwindow::shrink_into_dock();
+            ctx.request_repaint();
+        }
+        Some(_) if ctx.input(|i| i.modifiers.alt) => {
+            crate::gui::macwindow::zoom();
+            ctx.request_repaint();
+        }
+        Some(_) => app.toggle_fullscreen(&ctx),
+        None => {}
+    }
+}
+
+const BUTTONS_FADE: f32 = 0.18;
+
+fn drawn_button_mark(ui: &Ui, i: usize, centre: egui::Pos2, across: f32, ink: Color32) {
+    let painter = ui.painter();
+    let stroke = egui::Stroke::new((across / 9.0).max(1.0), ink);
+    let k = across * 0.2;
+    let flat = across * 0.26;
+    let line = |a: Vec2, b: Vec2| painter.line_segment([centre + a, centre + b], stroke);
+    match i {
+        0 => {
+            line(Vec2::new(-k, -k), Vec2::new(k, k));
+            line(Vec2::new(-k, k), Vec2::new(k, -k));
+        }
+        1 => {
+            line(Vec2::new(-flat, 0.0), Vec2::new(flat, 0.0));
+        }
+        _ => {
+            line(Vec2::new(-flat, 0.0), Vec2::new(flat, 0.0));
+            line(Vec2::new(0.0, -flat), Vec2::new(0.0, flat));
+        }
+    }
+}
+
+const FOOT_CLOCK_GAP: f32 = 24.0;
+
+fn foot_clock(app: &GuiApp, ui: &Ui, palette: &Palette, right: f32, top: f32) -> f32 {
+    if app.config.ui.columns_to_edge {
+        return right;
+    }
+    let with_date = match app.config.ui.foot_clock.as_str() {
+        "uhr" => false,
+        "datum" => true,
+        _ => return right,
+    };
+    let now = chrono::Local::now();
+    let words = clock_words(now.naive_local(), false, with_date, crate::lang::current());
+    let g = text::line(ui, &words, Role::Label, palette.faint);
+    let x = right - g.size().x;
+    ui.painter().galley(egui::pos2(x, top), g, palette.faint);
+    let into_minute = f64::from(chrono::Timelike::second(&now)) + f64::from(chrono::Timelike::nanosecond(&now)) / 1e9;
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((60.0 - into_minute).max(0.05)));
+    x
+}
+
+pub(in crate::gui) fn ease_columns_from_now(ctx: &egui::Context) {
+    let now = ctx.input(|i| i.time);
+    ctx.data_mut(|d| d.insert_temp(columns_eased_id(), now));
+}
+
+fn columns_eased_id() -> egui::Id {
+    egui::Id::unique("columns-eased-since")
+}
+
+pub(super) fn eased_widths(ctx: &egui::Context, key: &str, target: Vec<f32>) -> Vec<f32> {
+    let last_id = egui::Id::unique(("columns-last", key));
+    let from_id = egui::Id::unique(("columns-from", key));
+    let now = ctx.input(|i| i.time);
+    let since: Option<f64> = ctx.data(|d| d.get_temp(columns_eased_id()));
+    let last: Option<Vec<f32>> = ctx.data(|d| d.get_temp(last_id));
+    let secs = f64::from(theme::FOURTH_SLIDE) * 1.5;
+    let drawn = match since.filter(|at| now - at < secs) {
+        Some(at) => {
+            let from = match ctx.data(|d| d.get_temp::<(f64, Vec<f32>)>(from_id)).filter(|(a, _)| *a == at) {
+                Some((_, from)) => from,
+                None => {
+                    let from = last.clone().unwrap_or_else(|| target.clone());
+                    ctx.data_mut(|d| d.insert_temp(from_id, (at, from.clone())));
+                    from
+                }
+            };
+            if from.len() == target.len() {
+                let t = egui::emath::easing::cubic_out(((now - at) / secs).clamp(0.0, 1.0) as f32);
+                ctx.request_repaint();
+                from.iter().zip(&target).map(|(a, b)| a + (b - a) * t).collect()
+            } else {
+                target
+            }
+        }
+        None => target,
+    };
+    ctx.data_mut(|d| d.insert_temp(last_id, drawn.clone()));
+    drawn
+}
+
 fn slide_to(ctx: &egui::Context, id: egui::Id, to: f32, snap: bool, secs: f32, ease: fn(f32) -> f32) -> f32 {
     #[derive(Clone, Copy)]
     struct Slide {
@@ -483,8 +676,12 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         app.let_go();
     }
     let mut m = Metrics::for_size(window.width(), window.height()).with_air().with_margins();
+    if let Some((middles, across)) = theme::button_marks() {
+        m = m.on_the_buttons(middles[0] - across / 2.0);
+    }
     set_wheel_step(ui.ctx(), &app.config.ui.scroll_speed, m.row);
-    let super_compact = PlayingAt::of(&app.config.ui) == PlayingAt::SuperCompact;
+    masthead::set_window_width(window.width());
+    let super_compact = PlayingAt::now(&app.config.ui) == PlayingAt::SuperCompact;
     let room = window.width() - (m.margin_x - m.marker_pad_x) * 2.0;
     app.side_fits = window.width() >= theme::SIDE_FROM;
     let split = app.split();
@@ -578,6 +775,10 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         }
         None => (with, side_full, columns),
     };
+    let columns = {
+        let w = eased_widths(ui.ctx(), "library", vec![columns.artists, columns.albums, columns.tracks, columns.queue, columns.side]);
+        theme::Columns { artists: w[0], albums: w[1], tracks: w[2], queue: w[3], side: w[4] }
+    };
     let sliding = |t: f32| t > 0.0 && t < 1.0;
     app.fourth_sliding = sliding(open) || sliding(side_open) || sides.iter().any(|(_, t)| sliding(*t));
     if split {
@@ -594,11 +795,15 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
     m.albums_width = columns.albums;
 
     let on_a_mac = cfg!(target_os = "macos");
-    let compact = PlayingAt::of(&app.config.ui) == PlayingAt::Compact;
+    let compact = PlayingAt::now(&app.config.ui) == PlayingAt::Compact;
     let in_the_band = !narrow && (super_compact || (on_a_mac && !compact));
     let all_off = app.all_off();
     let menu_in_the_band = (on_a_mac && narrow) || (compact && !narrow) || all_off;
-    let library_at_foot = app.config.ui.library_line && !app.showing_podcasts() && !all_off && app.config.ui.music;
+    let library_at_foot = app.config.ui.library_line
+        && !app.config.ui.columns_to_edge
+        && !app.showing_podcasts()
+        && !all_off
+        && app.config.ui.music;
     set_field_height(if in_the_band { FIELD_HEIGHT_FLAT } else { FIELD_HEIGHT });
     let off_the_band = m.margin_x - theme::BAND_INK_TOP;
     let top = if in_the_band && !on_a_mac {
@@ -610,16 +815,28 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
     } else {
         theme::margin_top()
     };
-    if on_a_mac {
+    let barless = cfg!(target_os = "linux") && app.config.ui.window_bar == "ohne";
+    if on_a_mac || barless {
         let band = Rect::from_min_size(window.min, Vec2::new(window.width(), theme::band_middle() * 2.0));
         let held = ui.interact(band, egui::Id::unique("window-band"), Sense::click_and_drag());
         if held.drag_started_by(egui::PointerButton::Primary) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
         if held.double_clicked() {
-            crate::gui::macwindow::zoom();
+            if on_a_mac {
+                crate::gui::macwindow::zoom();
+            } else {
+                let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
             ui.ctx().request_repaint();
         }
+    }
+    if barless {
+        grow_from_the_edges(ui, window);
+    }
+    if on_a_mac {
+        own_window_buttons(app, ui, &palette, window);
     }
     if menu_in_the_band {
         let shift = if on_a_mac { 0.0 } else { off_the_band };
@@ -635,6 +852,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         bottom: bottom as i8,
     });
 
+    let mut below_head = window.top();
     outer.show(ui, |ui| {
         let full_width = ui.available_width();
 
@@ -651,22 +869,26 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             narrow_playing(app, ui, &palette, m, full_width);
             ui.add_space(28.0);
         }
+        below_head = ui.cursor().min.y;
 
         const COMPACT_FOOT: f32 = 44.0;
         let foot = if status_at_foot { COMPACT_FOOT } else { 0.0 };
-        let columns_height = (ui.available_height() - foot).max(120.0);
-        let strip_height = if narrow { columns_height + NARROW_INTO_FOOT.min(foot) } else { columns_height };
+        let into_foot = FOOT_WORDS_NEARER.min(foot);
+        let columns_height = (ui.available_height() - foot + into_foot).max(120.0);
+        let strip_height = if narrow { columns_height - into_foot + NARROW_INTO_FOOT.min(foot) } else { columns_height };
         let ink: FootInk = ui.data(|d| d.get_temp(foot_ink_id())).unwrap_or_default();
-        let deeper = (foot - (m.margin_x - theme::MARGIN_BOTTOM).max(0.0)).max(0.0);
+        let to_edge = app.config.ui.columns_to_edge;
+        let deeper = if to_edge { foot + theme::MARGIN_BOTTOM - into_foot } else { 0.0 };
         let reach = |ui: &Ui, n: usize, width: f32| -> f32 {
             let from = ui.cursor().min.x;
             let under = ink.left_ends.is_some_and(|end| from < end + FOOT_CLEAR)
                 || ink.right_begins.is_some_and(|begin| from + width > begin - FOOT_CLEAR);
             let down = slide_for(ui.ctx(), egui::Id::unique(("column-down", n)), !under, false, theme::FOURTH_SLIDE);
-            ui.ctx().data_mut(|d| d.insert_temp(column_deeper_id(), deeper * down));
-            columns_height + deeper * down
+            let deeper_now = deeper * down;
+            ui.ctx().data_mut(|d| d.insert_temp(column_at_edge_id(), to_edge && down >= 0.99));
+            columns_height + deeper_now
         };
-        ui.data_mut(|d| d.remove_temp::<f32>(column_deeper_id()));
+        ui.data_mut(|d| d.remove_temp::<bool>(column_at_edge_id()));
         let queue_others = if app.merged() {
             m.artists_width + m.column_gap * 2.0
         } else {
@@ -923,7 +1145,10 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             let probe = text::line(ui, "x", Role::Label, palette.faint);
             let top = window.bottom() - m.margin_x - text::baseline(&probe);
             let right = window.right() - m.margin_x;
-            let said_from = header_status(app, ui, &palette, window.left() + m.margin_x, right, top, true, library_at_foot);
+            let clock_from = foot_clock(app, ui, &palette, right, top);
+            let status_right = if clock_from < right { clock_from - FOOT_CLOCK_GAP } else { right };
+            let said_from = header_status(app, ui, &palette, window.left() + m.margin_x, status_right, top, true, library_at_foot);
+            let said_from = if said_from < status_right { said_from } else { clock_from };
             if all_off {
                 let mut x = window.left() + m.margin_x;
                 let commit = env!("KESSLER_COMMIT");
@@ -941,6 +1166,8 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             ui.data_mut(|d| d.get_temp_mut_or_default::<FootInk>(foot_ink_id()).right_begins = right_begins);
         }
     });
+
+    view_fade(app, ui, Rect::from_min_max(egui::pos2(window.left(), below_head), window.max), &palette);
 
     app.drawn_part("fuss");
     carried(app, ui);
@@ -967,6 +1194,8 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
 }
 
 const NARROW_INTO_FOOT: f32 = 24.0;
+
+const FOOT_WORDS_NEARER: f32 = 28.0;
 
 fn sliding_columns(
     app: &mut GuiApp,
@@ -1463,7 +1692,7 @@ mod tests {
         assert_eq!(chosen.primary(&p), p.ink);
         assert_eq!(chosen.role(), Role::ContentBold);
         let view = RowState { muted: true, selected: true, ..Default::default() };
-        assert_eq!(view.primary(&p), p.ink);
+        assert_eq!(view.primary(&p), p.mid);
         assert_eq!(view.role(), Role::ContentBold);
     }
 

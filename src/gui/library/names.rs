@@ -405,6 +405,25 @@ pub(super) fn drop_light(ui: &Ui, rect: Rect, name: &str, m: Metrics, palette: &
 }
 
 pub(super) fn typing_row(app: &GuiApp, ui: &mut Ui, width: f32, m: Metrics, palette: &Palette) -> Rect {
+    match app.prompt.as_ref() {
+        Some(prompt) => typed_line(ui, width, &prompt.entry, app.scroll_to.is_some(), m, palette),
+        None => {
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
+            let state = RowState { selected: true, focused: true, ..Default::default() };
+            paint_marker(ui, rect, response.id, state, m, palette);
+            rect
+        }
+    }
+}
+
+pub(super) fn typed_line(
+    ui: &mut Ui,
+    width: f32,
+    entry: &crate::gui::tagedit::Entry,
+    scrolling: bool,
+    m: Metrics,
+    palette: &Palette,
+) -> Rect {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
     let state = RowState {
         selected: true,
@@ -412,22 +431,19 @@ pub(super) fn typing_row(app: &GuiApp, ui: &mut Ui, width: f32, m: Metrics, pale
         ..Default::default()
     };
     paint_marker(ui, rect, response.id, state, m, palette);
-    let Some(prompt) = app.prompt.as_ref() else {
-        return rect;
-    };
     let content = content_rect(rect, m);
     let line = text::row_line(ui, m.row, Role::Content);
-    let now = prompt.entry.text();
+    let now = entry.text();
     let room = (content.width() - CARET_WIDTH - 2.0).max(1.0);
     let g = text::line_within(ui, now, Role::Content, palette.ink, room);
     let shown = g.size().x;
     let at = egui::pos2(content.left(), text::on_line(&g, rect.top(), line));
-    if prompt.entry.is_marked() {
+    if entry.is_marked() {
         paint_field_mark(ui, at, &g, rect, palette);
     }
     ui.painter().galley(at, g, palette.ink);
-    if !prompt.entry.is_marked() && ui.input(|i| i.time).rem_euclid(1.06) < 0.62 {
-        let before = &now[..prompt.entry.caret()];
+    if !entry.is_marked() && ui.input(|i| i.time).rem_euclid(1.06) < 0.62 {
+        let before = &now[..entry.caret()];
         let run = text::line(ui, before, Role::Content, palette.ink).size().x.min(shown);
         let caret = Rect::from_min_size(
             egui::pos2(
@@ -440,7 +456,7 @@ pub(super) fn typing_row(app: &GuiApp, ui: &mut Ui, width: f32, m: Metrics, pale
     }
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(120));
-    keep_visible(ui, rect, m, app.scroll_to.is_some());
+    keep_visible(ui, rect, m, scrolling);
     let _ = response;
     rect
 }

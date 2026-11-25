@@ -33,7 +33,7 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
                 say(ui, width, tr!("niemand ausgewählt"), Role::Content, palette.faint, m);
                 return;
             };
-            paragraph(ui, width, &name, Role::Content, palette.ink, m);
+            head_paragraph(ui, width, &name, Role::Content, palette.ink, m);
             ui.add_space(BLOCK_AIR);
             if app.artist_form.is_some() {
                 artist_form(app, ui, m, palette, width);
@@ -532,14 +532,35 @@ pub(super) fn artist_picture(app: &mut GuiApp, ui: &Ui, rect: Rect, palette: &Pa
             let under = if dithered { palette.tones_under(tint, method.tones) } else { Vec::new() };
             crate::gui::covers::paint_screened(ui, rect, MARKER_RADIUS, handle.id(), &under, tint);
         }
-        None => crate::gui::covers::blank(ui, rect, name, palette, false),
+        None => match song_cover_for(app, name).filter(|_| !artistinfo::picture_path(&app.config.artists_dir(), key).is_file()) {
+            Some(cover) => super::radio_col::picture_at(app, ui, rect, palette, &cover, name),
+            None => crate::gui::covers::blank(ui, rect, name, palette, false),
+        },
     }
+}
+
+fn song_cover_for(app: &GuiApp, name: &str) -> Option<std::path::PathBuf> {
+    if !app.config.ui.radio_song_covers {
+        return None;
+    }
+    app.on_air.as_ref()?;
+    let aired = app.aired.first()?;
+    let artist = aired.artist.as_deref()?;
+    (crate::db::sort_key(artist) == crate::db::sort_key(name)).then(|| crate::radio::cover::found(artist, &aired.title)).flatten()
 }
 
 pub(super) fn paragraph(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
     let room = (width - m.marker_pad_x * 2.0).max(60.0);
     let g = text::paragraph(ui, words, role, colour, room);
     place_wrapped(ui, width, g, colour, m);
+}
+
+pub(super) fn head_paragraph(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
+    let room = (width - m.marker_pad_x * 2.0).max(60.0);
+    let g = text::paragraph(ui, words, role, colour, room);
+    let down = text::on_line(&g, 0.0, text::row_line(ui, m.row, Role::Content));
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, (down + g.size().y).max(m.row)), Sense::hover());
+    ui.painter().galley(egui::pos2(rect.left() + m.marker_pad_x, rect.top() + down), g, colour);
 }
 
 pub(super) fn prose(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
