@@ -504,8 +504,18 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
         }
     }
 
+    let lastfm = lastfm_key.filter(|k| !k.is_empty()).map(|key| lastfm_info(name, lang, key));
+    let lastfm_mbid = match &lastfm {
+        Some(Ok(Some(info))) if !info.mbid.is_empty() => Some(info.mbid.clone()),
+        _ => None,
+    };
+
     let mut wikidata: Option<String> = None;
-    match musicbrainz_search(name) {
+    let searched = match lastfm_mbid {
+        Some(mbid) => Ok(Some(mbid)),
+        None => musicbrainz_search(name),
+    };
+    match searched {
         Ok(Some(mbid)) => {
             musicbrainz_pause();
             match fetch_text(&format!(
@@ -615,8 +625,8 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
         Err(e) => note(e, &mut trouble),
     }
 
-    if let Some(key) = lastfm_key.filter(|k| !k.is_empty()) {
-        match lastfm_info(name, lang, key) {
+    if let Some(answer) = lastfm {
+        match answer {
             Ok(Some(info)) => {
                 recognised = true;
                 if !info.bio.is_empty() && !found.told.iter().any(|t| t.lang == lang) {
@@ -644,8 +654,10 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
             Ok(None) => {}
             Err(e) => note(e, &mut trouble),
         }
-        if let Ok(kin) = lastfm_similar(name, key) {
-            found.kin = kin;
+        if let Some(key) = lastfm_key.filter(|k| !k.is_empty()) {
+            if let Ok(kin) = lastfm_similar(name, key) {
+                found.kin = kin;
+            }
         }
     }
     found.tags.truncate(8);
@@ -739,19 +751,26 @@ fn musicbrainz_search(name: &str) -> Result<Option<String>> {
 
 fn best_musicbrainz_match(doc: &Json, name: &str) -> Option<String> {
     let wanted = plain(name);
-    doc.list("artists")
+    let score = |a: &Json| a.get("score").and_then(Json::as_number).unwrap_or(0.0);
+    let named: Vec<&Json> = doc
+        .list("artists")
         .iter()
-        .find(|a| {
-            let score = a.get("score").and_then(Json::as_number).unwrap_or(0.0);
+        .filter(|a| {
             let named = a.text("name").is_some_and(|n| plain(n) == wanted)
                 || a.list("aliases")
                     .iter()
                     .any(|alias| alias.text("name").is_some_and(|n| plain(n) == wanted));
-            named && score >= 80.0
+            named && score(a) >= 80.0
         })
-        .and_then(|a| a.text("id"))
-        .map(str::to_string)
+        .collect();
+    let best = named.first()?;
+    if named.get(1).is_some_and(|next| score(best) - score(next) < AMBIGUOUS_WITHIN) {
+        return None;
+    }
+    best.text("id").map(str::to_string)
 }
+
+const AMBIGUOUS_WITHIN: f64 = 5.0;
 
 fn read_musicbrainz(doc: &Json, found: &mut Found) -> Option<String> {
     found.kind = doc.text("type").map(kind_word).unwrap_or_default().to_string();
@@ -1021,6 +1040,7 @@ fn read_deezer(doc: &Json, name: &str) -> Option<(String, String)> {
 }
 
 struct LastfmInfo {
+    mbid: String,
     bio: String,
     tags: Vec<String>,
     similar: Vec<String>,
@@ -1056,6 +1076,7 @@ fn read_lastfm(doc: &Json) -> Option<LastfmInfo> {
         .map(without_markup)
         .unwrap_or_default();
     Some(LastfmInfo {
+        mbid: artist.text("mbid").map(str::trim).unwrap_or_default().to_string(),
         bio,
         tags: names("tags", "tag"),
         similar: names("similar", "artist"),
@@ -1163,6 +1184,25 @@ mod tests {
         assert_eq!(plain("Boards of Canada"), plain("boards of canada"));
         assert_eq!(plain("Sigur Rós"), plain("sigur rós"));
         assert_ne!(plain("Coil"), plain("Coil (band)"));
+    }
+
+    #[test]
+    fn several_of_one_name_alike_are_no_answer() {
+        let doc = json(
+            r#"{"artists":[
+                {"id":"a","name":"Hiromi","score":100,"aliases":[{"name":"加藤博美"}]},
+                {"id":"b","name":"HiroMi","score":99},
+                {"id":"c","name":"HIROMI","score":99}]}"#,
+        );
+        assert_eq!(best_musicbrainz_match(&doc, "hiromi"), None);
+        let doc = json(r#"{"artists":[{"id":"a","name":"Coil","score":100},{"id":"b","name":"Coil","score":60}]}"#);
+        assert_eq!(best_musicbrainz_match(&doc, "coil").as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn lastfm_names_its_musicbrainz_artist() {
+        let doc = json(r#"{"artist":{"name":"Hiromi","mbid":" 0f2a6f8b-uehara ","bio":{"summary":"pianist"}}}"#);
+        assert_eq!(read_lastfm(&doc).unwrap().mbid, "0f2a6f8b-uehara");
     }
 
     #[test]

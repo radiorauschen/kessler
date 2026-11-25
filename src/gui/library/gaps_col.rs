@@ -210,7 +210,7 @@ fn gap_tree(ui: &mut Ui, width: f32, gaps: &[crate::library::gaps::Gap], at: usi
         let colour = if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             let plate = cell.expand2(Vec2::new(m.marker_pad_x / 2.0, -m.marker_inset_y));
-            ui.painter().rect_filled(plate, MARKER_RADIUS, hover_colour(ui, palette));
+            ui.painter().rect_filled(plate, crate::gui::theme::ROW_RADIUS, hover_colour(ui, palette));
             palette.ink
         } else {
             colour

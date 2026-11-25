@@ -86,6 +86,16 @@ impl Metrics {
         self
     }
 
+    pub fn on_the_buttons(mut self, first_left: f32) -> Self {
+        if first_left <= self.marker_pad_x {
+            return self;
+        }
+        self.margin_x = first_left;
+        let twice = 2.0 * self.margin_x - 2.0 * self.marker_pad_x - TIGHT_GAP_LESS;
+        self.column_gap = self.column_gap.min(twice);
+        self
+    }
+
     pub fn with_air(mut self) -> Self {
         self.row += ROW_AIR;
         self
@@ -350,6 +360,16 @@ pub fn set_buttons_end(at: f32) {
     BUTTONS_END.store(at.max(0.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+static BUTTON_MARKS: std::sync::Mutex<Option<([f32; 3], f32)>> = std::sync::Mutex::new(None);
+
+pub fn button_marks() -> Option<([f32; 3], f32)> {
+    *BUTTON_MARKS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn set_button_marks(marks: Option<([f32; 3], f32)>) {
+    *BUTTON_MARKS.lock().unwrap_or_else(|e| e.into_inner()) = marks;
+}
+
 pub fn band_line_top(height: f32) -> f32 {
     if cfg!(target_os = "macos") {
         (band_middle() - height / 2.0).round()
@@ -456,6 +476,8 @@ pub enum Theme {
     MacosDunkel,
     GnomeHell,
     GnomeDunkel,
+    UbuntuHell,
+    UbuntuDunkel,
     SolarisiertHell,
     SolarisiertDunkel,
     Nord,
@@ -507,12 +529,14 @@ pub enum Theme {
 }
 
 impl Theme {
-    pub fn all() -> [Theme; 52] {
+    pub fn all() -> [Theme; 54] {
         [
             Self::MacosHell,
             Self::MacosDunkel,
             Self::GnomeHell,
             Self::GnomeDunkel,
+            Self::UbuntuHell,
+            Self::UbuntuDunkel,
             Self::SolarisiertHell,
             Self::SolarisiertDunkel,
             Self::NordHell,
@@ -569,7 +593,7 @@ impl Theme {
     }
 
     pub const GROUPS: [(&'static str, &'static [Theme]); 5] = [
-        ("system", &[Theme::MacosHell, Theme::GnomeHell]),
+        ("system", &[Theme::MacosHell, Theme::GnomeHell, Theme::UbuntuHell]),
         (
             "klassiker",
             &[
@@ -624,6 +648,8 @@ impl Theme {
             Self::MacosDunkel => "macos dunkel",
             Self::GnomeHell => "gnome hell",
             Self::GnomeDunkel => "gnome dunkel",
+            Self::UbuntuHell => "ubuntu hell",
+            Self::UbuntuDunkel => "ubuntu dunkel",
             Self::SolarisiertHell => "solarisiert hell",
             Self::SolarisiertDunkel => "solarisiert dunkel",
             Self::Nord => "nord",
@@ -719,9 +745,10 @@ impl Theme {
     }
 
     pub fn partner(self) -> Self {
-        const PAIRS: [(Theme, Theme); 26] = [
+        const PAIRS: [(Theme, Theme); 27] = [
             (Theme::MacosHell, Theme::MacosDunkel),
             (Theme::GnomeHell, Theme::GnomeDunkel),
+            (Theme::UbuntuHell, Theme::UbuntuDunkel),
             (Theme::SolarisiertHell, Theme::SolarisiertDunkel),
             (Theme::NordHell, Theme::Nord),
             (Theme::DraculaHell, Theme::Dracula),
@@ -778,6 +805,7 @@ impl Theme {
             | Theme::RgbHell
             | Theme::Zeitvogel => palette.marker,
             Theme::GnomeDunkel => rgb(0x10233A),
+            Theme::UbuntuDunkel => rgb(0x2C001E),
             Theme::Soulseek => rgb(0xC0D1F2),
             Theme::X68000 => rgb(0x30120E),
             Theme::Runebending => rgb(0xE5E2FF),
@@ -1065,6 +1093,10 @@ impl Lab {
     fn at_lightness(self, l: f32) -> Self {
         Self { l, ..self }
     }
+
+    fn clone_clamped(self) -> Self {
+        Self { l: self.l.clamp(0.0, 1.0), ..self }
+    }
 }
 
 const fn rgb(hex: u32) -> Color32 {
@@ -1075,9 +1107,52 @@ const fn rgb(hex: u32) -> Color32 {
     )
 }
 
+static DESKTOP_ACCENT: std::sync::Mutex<Option<Color32>> = std::sync::Mutex::new(None);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn set_desktop_accent(colour: Option<Color32>) {
+    *DESKTOP_ACCENT.lock().unwrap_or_else(|e| e.into_inner()) = colour;
+}
+
+fn desktop_accent_for(theme: Theme) -> Option<Color32> {
+    let after_a_desktop = matches!(
+        theme,
+        Theme::MacosHell | Theme::MacosDunkel | Theme::GnomeHell | Theme::GnomeDunkel | Theme::UbuntuHell | Theme::UbuntuDunkel
+    );
+    if !after_a_desktop {
+        return None;
+    }
+    *DESKTOP_ACCENT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+const DESKTOP_ACCENT_CONTRAST: f32 = 4.5;
+
 impl Palette {
+    fn with_accent(mut self, colour: Color32) -> Self {
+        let dark = self.is_dark();
+        let mut lab = Lab::of(colour);
+        for _ in 0..40 {
+            if contrast(lab.colour(), self.ground) >= DESKTOP_ACCENT_CONTRAST {
+                break;
+            }
+            lab = lab.at_lightness(if dark { lab.l + 0.02 } else { lab.l - 0.02 }).clone_clamped();
+        }
+        self.accent = lab.colour();
+        self.accent_faint = self.ground.lerp_to_gamma(self.accent, if dark { 0.47 } else { 0.55 });
+        if let Some(heading) = self.heading {
+            if Lab::of(heading).hue_apart(&Lab::of(self.accent)) < 30.0 {
+                self.heading = None;
+            }
+        }
+        self
+    }
+
     pub fn for_theme(theme: Theme) -> Self {
         let drawn = Self::as_drawn(theme);
+        let drawn = match desktop_accent_for(theme) {
+            Some(colour) => drawn.with_accent(colour),
+            None => drawn,
+        };
         if matches!(theme, Theme::Rgb | Theme::RgbHell) {
             return drawn;
         }
@@ -1155,6 +1230,34 @@ impl Palette {
                 hover: rgb(0x29292D),
                 lit_dots: None,
                 heading: Some(rgb(0xDC8ADD)),
+            },
+            Theme::UbuntuHell => Self {
+                ground: rgb(0xFAFAFA),
+                ink: rgb(0x3D3D3D),
+                mid: rgb(0x787878),
+                faint: rgb(0xBABABA),
+                accent: rgb(0xC7461A),
+                accent_faint: rgb(0xE8A58B),
+                marker: rgb(0xE5E5E5),
+                field: rgb(0xEDEDED),
+                rule: rgb(0xDEDEDE),
+                hover: rgb(0xF2F2F2),
+                lit_dots: None,
+                heading: Some(rgb(0x77216F)),
+            },
+            Theme::UbuntuDunkel => Self {
+                ground: rgb(0x2C2C2C),
+                ink: rgb(0xF7F7F7),
+                mid: rgb(0xA5A5A5),
+                faint: rgb(0x666666),
+                accent: rgb(0xF27B4A),
+                accent_faint: rgb(0x93492C),
+                marker: rgb(0x444444),
+                field: rgb(0x363636),
+                rule: rgb(0x474747),
+                hover: rgb(0x333333),
+                lit_dots: None,
+                heading: Some(rgb(0xD48BC8)),
             },
             Theme::SolarisiertHell => Self {
                 ground: rgb(0xFDF6E3),
@@ -1657,13 +1760,13 @@ impl Palette {
                 ink: rgb(0xEBDBB2),
                 mid: rgb(0x83A598),
                 faint: rgb(0xA89984),
-                accent: rgb(0xFB4934),
-                accent_faint: rgb(0xA8453A),
+                accent: rgb(0x8EC07C),
+                accent_faint: rgb(0x66855B),
                 marker: rgb(0x504945),
                 field: rgb(0x3C3836),
                 rule: rgb(0x504945),
                 hover: rgb(0x32302F),
-                lit_dots: Some(rgb(0xFE8019)),
+                lit_dots: None,
                 heading: Some(rgb(0xFABD2F)),
             },
             Theme::WilderMannHell => Self {
@@ -1671,13 +1774,13 @@ impl Palette {
                 ink: rgb(0x3C3836),
                 mid: rgb(0x076678),
                 faint: rgb(0x928374),
-                accent: rgb(0x9D0006),
-                accent_faint: rgb(0xC4877F),
+                accent: rgb(0x427B58),
+                accent_faint: rgb(0x8FAC86),
                 marker: rgb(0xEBDBB2),
                 field: rgb(0xF2E5BC),
                 rule: rgb(0xD5C4A1),
                 hover: rgb(0xF4E9C1),
-                lit_dots: Some(rgb(0xAF3A03)),
+                lit_dots: None,
                 heading: Some(rgb(0x8F3F71)),
             },
             Theme::Ochsenblut => Self {
@@ -1783,8 +1886,8 @@ impl Palette {
                 ink: rgb(0xEAE3F6),
                 mid: rgb(0x9DD47E),
                 faint: rgb(0x9488AE),
-                accent: rgb(0xFF7A5C),
-                accent_faint: rgb(0x8C4D47),
+                accent: rgb(0xC3A6FF),
+                accent_faint: rgb(0x705E95),
                 marker: rgb(0x463A63),
                 field: rgb(0x2D2541),
                 rule: rgb(0x3D3354),
@@ -1793,18 +1896,18 @@ impl Palette {
                 heading: Some(rgb(0x5FC4B6)),
             },
             Theme::ZeitvogelHell => Self {
-                ground: rgb(0xD6DF84),
+                ground: rgb(0xD6DCAB),
                 ink: rgb(0x1B2A1C),
                 mid: rgb(0x22594F),
                 faint: rgb(0x58652E),
-                accent: rgb(0xB5321C),
-                accent_faint: rgb(0xA28A55),
+                accent: rgb(0x6A35C2),
+                accent_faint: rgb(0xA591B5),
                 marker: rgb(0xBDAED6),
-                field: rgb(0xCAD475),
-                rule: rgb(0xBAC466),
-                hover: rgb(0xCFD97C),
+                field: rgb(0xCAD19E),
+                rule: rgb(0xBAC18F),
+                hover: rgb(0xCFD6A4),
                 lit_dots: None,
-                heading: Some(rgb(0x3B2E6B)),
+                heading: Some(rgb(0x9A3A26)),
             },
         }
     }
@@ -2434,6 +2537,11 @@ pub fn all_families(folder: Option<&str>, system: bool) -> Vec<Family> {
         .filter(|f| families.iter().all(|own| own.key != f.key))
         .collect();
     families.append(&mut more);
+    if let Some(system_ui) = system_ui_family() {
+        if families.iter().all(|f| f.key != system_ui.key) {
+            families.push(system_ui);
+        }
+    }
     let mono = families.iter().find(|f| f.key == "mutomono").and_then(|f| f.proportional.clone());
     if let Some(muto) = families.iter_mut().find(|f| f.key == "muto" && f.mono.is_none()) {
         muto.mono = mono;
@@ -2445,6 +2553,56 @@ pub fn all_families(folder: Option<&str>, system: bool) -> Vec<Family> {
         }
     }
     families
+}
+
+pub const SYSTEM_UI: &str = "systemschrift";
+
+fn system_ui_family() -> Option<Family> {
+    let usable = |path: &std::path::Path| {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+        path.is_file() && (ext == "ttf" || ext == "otf") && is_single_face(path)
+    };
+    let (regular, bold) = if cfg!(target_os = "macos") {
+        let found = ["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/SFNSText.ttf", "/Library/Fonts/SF-Pro.ttf"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| usable(p))?;
+        (found, None)
+    } else {
+        let gnome = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "font-name"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_matches('\'').to_string())
+            .map(|name| {
+                let mut words: Vec<&str> = name.split_whitespace().collect();
+                if words.last().is_some_and(|w| w.parse::<f32>().is_ok()) {
+                    words.pop();
+                }
+                words.join(" ")
+            })
+            .filter(|name| !name.is_empty());
+        let asked = gnome.unwrap_or_else(|| "sans-serif".to_string());
+        let matched = |pattern: &str| {
+            std::process::Command::new("fc-match")
+                .args(["-f", "%{file}", pattern])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+                .filter(|p| usable(p))
+        };
+        let regular = matched(&asked)?;
+        let bold = matched(&format!("{asked}:bold")).filter(|b| *b != regular);
+        (regular, bold)
+    };
+    Some(Family {
+        name: SYSTEM_UI.into(),
+        key: SYSTEM_UI.into(),
+        proportional: Some(Faces { regular, bold }),
+        mono: None,
+    })
 }
 
 const FAMILIES_OFFERED: [&str; 2] = [TYPEFACE, "muto"];
@@ -2615,7 +2773,7 @@ fn append_fallback(
         let nudge = match (first, own) {
             (Some(first), Some(own)) => baseline_nudge(*first, own),
             _ => 0.0,
-        };
+        } - kanji_raise(data, scale);
         fonts.font_data.insert(
             key.clone(),
             std::sync::Arc::new(egui::FontData::from_static(data).tweak(hinting().on(egui::FontTweak {
@@ -2680,6 +2838,23 @@ fn fallback_scale(first: Option<EmMetrics>, data: &[u8]) -> f32 {
 fn baseline_nudge(first: EmMetrics, own: EmMetrics) -> f32 {
     first.ascent - own.ascent - 0.5 * (first.row - own.row)
 }
+
+fn kanji_raise(data: &[u8], scale: f32) -> f32 {
+    use skrifa::MetadataProvider as _;
+    let Ok(font) = skrifa::FontRef::from_index(data, 0) else { return 0.0 };
+    let Some(glyph) = font.charmap().map('永') else { return 0.0 };
+    let unscaled = skrifa::instance::Size::unscaled();
+    let location = skrifa::instance::LocationRef::default();
+    let em = font.metrics(unscaled, location).units_per_em as f32;
+    let Some(bounds) = font.glyph_metrics(unscaled, location).bounds(glyph) else { return 0.0 };
+    if em <= 0.0 {
+        return 0.0;
+    }
+    let below = -bounds.y_min / em * scale;
+    (below - KANJI_OVERSHOOT).max(0.0)
+}
+
+const KANJI_OVERSHOOT: f32 = 0.012;
 
 fn fallback_bytes(path: &std::path::Path) -> Option<&'static [u8]> {
     use std::collections::HashMap;
@@ -3701,6 +3876,22 @@ mod tests {
     }
 
     #[test]
+    fn a_desktop_accent_reads_on_either_ground() {
+        let accents = [0x3584E4, 0x2190A4, 0x3A944A, 0xC88800, 0xED5B00, 0xE62D42, 0xD56199, 0x9141AC, 0x6F8396];
+        for theme in [Theme::GnomeHell, Theme::GnomeDunkel, Theme::UbuntuHell, Theme::UbuntuDunkel] {
+            for hex in accents {
+                let p = Palette::as_drawn(theme).with_accent(rgb(hex));
+                assert!(contrast(p.accent, p.ground) >= DESKTOP_ACCENT_CONTRAST - 0.2, "{} {hex:06x}", theme.name());
+                assert!(Lab::of(p.accent).hue_apart(&Lab::of(rgb(hex))) < 12.0, "{} {hex:06x}", theme.name());
+                if std::env::var_os("KESSLER_PRINT_ACCENTS").is_some() {
+                    let c = p.accent;
+                    eprintln!("ACCENT {} {hex:06x} {:02x}{:02x}{:02x}", theme.name(), c.r(), c.g(), c.b());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn light_and_dark_are_told_apart() {
         for light in [
             Theme::SolarisiertHell,
@@ -4388,9 +4579,9 @@ mod tests {
         assert!(
             without
                 .iter()
-                .filter(|f| !SYSTEM_OFFERED.contains(&f.key.as_str()))
+                .filter(|f| !SYSTEM_OFFERED.contains(&f.key.as_str()) && f.key != SYSTEM_UI)
                 .all(|f| f.faces(false).unwrap().regular.starts_with("fonts")),
-            "without them, only the folder's (and muto, where installed)"
+            "without them, only the folder's (and muto where installed, and the system's interface face)"
         );
     }
 

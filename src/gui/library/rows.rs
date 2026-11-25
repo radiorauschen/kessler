@@ -197,37 +197,42 @@ const FADE_GROWS_OVER: f32 = 48.0;
 const FADE_STEPS: usize = 8;
 
 pub(in crate::gui) fn paint_fade(ui: &Ui, viewport: Rect, hidden_above: f32, hidden_below: f32, palette: &Palette) {
-    let ground = palette.ground;
     let most = FADE_HEIGHT.min(viewport.height() / 3.0);
     if most <= 0.0 {
         return;
     }
-    let smooth = |t: f32| {
-        let t = t.clamp(0.0, 1.0);
-        t * t * (3.0 - 2.0 * t)
-    };
-    let band = |edge: f32, inwards: f32, grown: f32| {
-        if grown <= 0.01 {
-            return;
+    let grown = |hidden: f32| smooth(hidden / FADE_GROWS_OVER);
+    let depth = |grown: f32| most * (0.35 + 0.65 * grown);
+    let top = grown(hidden_above);
+    fade_band(ui, viewport, viewport.top(), 1.0, depth(top), top, palette);
+    let bottom = grown(hidden_below);
+    fade_band(ui, viewport, viewport.bottom(), -1.0, depth(bottom), bottom, palette);
+}
+
+fn smooth(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn fade_band(ui: &Ui, viewport: Rect, edge: f32, inwards: f32, depth: f32, strength: f32, palette: &Palette) {
+    if strength <= 0.01 || depth <= 0.0 {
+        return;
+    }
+    let ground = palette.ground;
+    let mut mesh = egui::Mesh::default();
+    for step in 0..=FADE_STEPS {
+        let along = step as f32 / FADE_STEPS as f32;
+        let y = edge + inwards * depth * along;
+        let colour = ground.gamma_multiply(strength * (1.0 - smooth(along)));
+        mesh.colored_vertex(egui::pos2(viewport.left(), y), colour);
+        mesh.colored_vertex(egui::pos2(viewport.right(), y), colour);
+        if step > 0 {
+            let at = (step as u32) * 2;
+            mesh.add_triangle(at - 2, at - 1, at);
+            mesh.add_triangle(at - 1, at, at + 1);
         }
-        let depth = most * (0.35 + 0.65 * grown);
-        let mut mesh = egui::Mesh::default();
-        for step in 0..=FADE_STEPS {
-            let along = step as f32 / FADE_STEPS as f32;
-            let y = edge + inwards * depth * along;
-            let colour = ground.gamma_multiply(grown * (1.0 - smooth(along)));
-            mesh.colored_vertex(egui::pos2(viewport.left(), y), colour);
-            mesh.colored_vertex(egui::pos2(viewport.right(), y), colour);
-            if step > 0 {
-                let at = (step as u32) * 2;
-                mesh.add_triangle(at - 2, at - 1, at);
-                mesh.add_triangle(at - 1, at, at + 1);
-            }
-        }
-        ui.painter().add(egui::Shape::mesh(mesh));
-    };
-    band(viewport.top(), 1.0, smooth(hidden_above / FADE_GROWS_OVER));
-    band(viewport.bottom(), -1.0, smooth(hidden_below / FADE_GROWS_OVER));
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
 }
 
 pub(super) fn paint_side_fade(ui: &Ui, slot: Rect, gone: f32, palette: &Palette) {
@@ -284,17 +289,21 @@ pub(in crate::gui) fn without_a_bar(ui: &Ui, id: &str) -> egui::ScrollArea {
     area
 }
 
-const PAST_THE_END: f32 = 0.15;
+const PAST_THE_END: f32 = 0.07;
 
 fn damp_past_the_end(ui: &Ui, id: &str) {
-    if !ui.rect_contains_pointer(ui.available_rect_before_wrap()) {
+    damp_scrolling(ui, area_id(ui, id), below_id(id), ui.available_rect_before_wrap());
+}
+
+pub(in crate::gui) fn damp_scrolling(ui: &Ui, area: egui::Id, below: egui::Id, over: egui::Rect) {
+    if !ui.rect_contains_pointer(over) {
         return;
     }
     let touch = matches!(
         ui.input(|i| i.scroll_source()),
         Some(egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum)
     );
-    let Some(state) = egui::scroll_area::State::load(ui.ctx(), area_id(ui, id)) else { return };
+    let Some(state) = egui::scroll_area::State::load(ui.ctx(), area) else { return };
     let push = ui.input(|i| i.smooth_scroll_delta.y);
     if !touch || push == 0.0 {
         return;
@@ -305,7 +314,7 @@ fn damp_past_the_end(ui: &Ui, id: &str) {
     } else if over > 0.0 {
         0.0
     } else {
-        match ui.data(|d| d.get_temp::<f32>(below_id(id))) {
+        match ui.data(|d| d.get_temp::<f32>(below)) {
             Some(below) => below,
             None => return,
         }
@@ -325,6 +334,11 @@ fn damp(push: f32, room: f32) -> f32 {
     } else {
         push * PAST_THE_END
     }
+}
+
+pub(in crate::gui) fn note_below<R>(ui: &Ui, below: egui::Id, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+    let left = (output.content_size.y - output.state.clamped_offset().y - output.inner_rect.height()).max(0.0);
+    ui.data_mut(|d| d.insert_temp(below, left));
 }
 
 fn below_id(id: &str) -> egui::Id {
@@ -350,22 +364,22 @@ pub(super) fn ground_clicked(ui: &mut Ui, id: &str) -> bool {
     ui.interact(ground, egui::Id::unique(("ground", id)), Sense::click()).clicked()
 }
 
-pub(super) fn column_deeper_id() -> egui::Id {
-    egui::Id::unique("column-deeper")
+pub(super) fn column_at_edge_id() -> egui::Id {
+    egui::Id::unique("column-at-edge")
 }
 
 pub(super) fn scrolled_with(ui: &mut Ui, id: &str, palette: &Palette, end_air: f32, body: impl FnOnce(&mut Ui)) -> f32 {
-    let deeper = ui.data_mut(|d| d.remove_temp::<f32>(column_deeper_id())).unwrap_or(0.0);
+    let at_edge = ui.data_mut(|d| d.remove_temp::<bool>(column_at_edge_id())).unwrap_or(false);
     let output = without_a_bar(ui, id).auto_shrink([false, false]).show(ui, |ui| {
         body(ui);
-        ui.add_space(end_air + deeper);
+        ui.add_space(end_air);
     });
 
     let viewport = output.inner_rect;
     let above = output.state.clamped_offset().y;
     let below = (output.content_size.y - above - viewport.height()).max(0.0);
     ui.data_mut(|d| d.insert_temp(below_id(id), below));
-    paint_fade(ui, viewport, above, below, palette);
+    paint_fade(ui, viewport, above, if at_edge { 0.0 } else { below }, palette);
     paint_extent(ui, id, viewport, above, output.content_size.y, palette);
     below
 }
@@ -665,11 +679,19 @@ pub(super) fn name_row(
 
     let mut name_right = content.right();
     if !figure.is_empty() {
+        let width_at_rest = text::line_within(ui, figure, figure_role, palette.mid, content.width() * FIGURE_SHARE).size().x;
+        let on_word = state.offering
+            && response.hover_pos().is_some_and(|at| at.x >= content.right() - width_at_rest - 6.0);
+        let figure_colour = match on_word {
+            true if state.plated() => Palette::legible_on(palette.ink, palette.marked(), crate::gui::theme::ON_PLATE_LEAST),
+            true => palette.ink,
+            false => state.secondary(palette),
+        };
         let galley = text::line_within(
             ui,
             figure,
             figure_role,
-            state.secondary(palette),
+            figure_colour,
             content.width() * FIGURE_SHARE,
         );
         let width = galley.size().x;
@@ -765,6 +787,12 @@ pub(super) fn columned_row(
     response
 }
 
+fn plate_beyond(ui: &Ui, plate: Rect, palette: &Palette) {
+    let mut painter = ui.painter().clone();
+    painter.set_clip_rect(ui.clip_rect().union(plate));
+    painter.rect_filled(plate, crate::gui::theme::ROW_RADIUS, palette.hover);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn heading(
     ui: &mut Ui,
@@ -856,7 +884,7 @@ fn head_drawn(
     };
     let galley = text::line(ui, &shown, Role::Label, colour);
     if lit {
-        ui.painter().rect_filled(plate, MARKER_RADIUS, palette.hover);
+        plate_beyond(ui, plate, palette);
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     ui.painter().galley(at, galley, colour);
@@ -867,7 +895,7 @@ fn head_drawn(
         let galley = text::line(ui, word, Role::Label, colour);
         let at = egui::pos2(content.right() - galley.size().x, text::on_line(&galley, rect.top(), line));
         if lit {
-            ui.painter().rect_filled(control_plate(ui, at, galley.size().x), MARKER_RADIUS, palette.hover);
+            plate_beyond(ui, control_plate(ui, at, galley.size().x), palette);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         ui.painter().galley(at, galley, colour);

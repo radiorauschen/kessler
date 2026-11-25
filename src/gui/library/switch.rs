@@ -93,7 +93,7 @@ pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, pa
     };
     if offered.len() < 2 {
         if offered.first() == Some(&open_now) {
-            let gives_way = PlayingAt::of(&app.config.ui) == PlayingAt::SuperCompact;
+            let gives_way = PlayingAt::now(&app.config.ui) == PlayingAt::SuperCompact;
             lone_word(ui, right, top, palette, open_now, gives_way);
         } else {
             ui.ctx().data_mut(|d| d.remove::<(Source, f64)>(egui::Id::unique("switch-lone-since")));
@@ -165,7 +165,7 @@ pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, pa
         if drop {
             let tint = if over { DROP_TINT_OVER } else { DROP_TINT };
             let fill = palette.field.lerp_to_gamma(palette.accent, tint);
-            ui.painter().rect_filled(plate, MARKER_RADIUS, fill.gamma_multiply(open));
+            ui.painter().rect_filled(plate, crate::gui::theme::ROW_RADIUS, fill.gamma_multiply(open));
         } else if !is_open {
             paint_control_hover(ui, plate, &response, palette);
         }

@@ -125,6 +125,7 @@ impl GuiApp {
             theme::install_style(ctx, &self.palette);
         }
         self.dress_the_frame(ctx);
+        self.dress_the_bar(ctx);
         self.dress_the_icon(ctx);
         let lang = crate::lang::current();
         if self.titled != Some(lang) {
@@ -135,24 +136,46 @@ impl GuiApp {
     }
 
     pub(in crate::gui) fn dress_the_icon(&mut self, ctx: &egui::Context) {
+        let size = appicon::SIDE;
+        if let Some(coming) = &self.icon_coming {
+            match coming.try_recv() {
+                Ok(rgba) => {
+                    self.icon_coming = None;
+                    if !crate::media::set_dock_icon(&appicon::premultiplied(&rgba), size, size) {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(egui::IconData {
+                            rgba,
+                            width: size as u32,
+                            height: size as u32,
+                        }))));
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.icon_coming = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let (ground, accent) = self.resolved.icon_colours();
         let wanted = (ground, accent, self.typeface.clone(), crate::lang::current());
         if self.icon_dressed.as_ref() == Some(&wanted) {
             return;
         }
-        let size = appicon::SIDE;
-        let Some(letter) = appicon::letter(ctx, size) else {
+        if appicon::small_letter(ctx, 16).is_none() {
             return;
-        };
-        self.icon_dressed = Some(wanted);
-        let rgba = appicon::compose(size, appicon::Shape::here(), ground, accent, Some(&letter));
-        if !crate::media::set_dock_icon(&appicon::premultiplied(&rgba), size, size) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(egui::IconData {
-                rgba,
-                width: size as u32,
-                height: size as u32,
-            }))));
         }
+        self.icon_dressed = Some(wanted);
+        let (send, take) = std::sync::mpsc::channel();
+        self.icon_coming = Some(take);
+        let ctx = ctx.clone();
+        let shape = appicon::Shape::here();
+        std::thread::Builder::new()
+            .name("kessler-icon".into())
+            .spawn(move || {
+                let Some(letter) = appicon::letter(&ctx, size) else { return };
+                let rgba = appicon::compose(size, shape, ground, accent, Some(&letter));
+                if send.send(rgba).is_ok() {
+                    ctx.request_repaint();
+                }
+            })
+            .ok();
     }
 
     pub(in crate::gui) fn listen_to_the_desktop(&mut self, ctx: &egui::Context) {
@@ -206,6 +229,17 @@ impl GuiApp {
             let _ = child.kill();
             let _ = child.wait();
         });
+    }
+
+    pub(in crate::gui) fn dress_the_bar(&mut self, ctx: &egui::Context) {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let wanted = self.config.ui.window_bar != "ohne";
+        if self.bar_worn != Some(wanted) {
+            self.bar_worn = Some(wanted);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(wanted));
+        }
     }
 
     pub(in crate::gui) fn dress_the_frame(&mut self, ctx: &egui::Context) {

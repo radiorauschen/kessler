@@ -142,4 +142,12 @@ pub const PART: &[(&str, &str)] = &[
     ("{} titel vom ipod entfernt · {} frei geworden", "{} 曲を ipod から削除 · {} 空きました"),
     ("{} · {} titel", "{} · {} 曲"),
     ("ipod {} / {}", "ipod {} / {}"),
+    ("bild wählen…", "画像を選ぶ…"),
+    ("eigenes bild entfernen", "自分の画像を外す"),
+    ("der sender heisst jetzt {}", "局の名前を {} にしました"),
+    ("bild für den sender wählen", "局の画像を選ぶ"),
+    ("bild für den sender gesetzt", "局の画像を設定しました"),
+    ("das bild liess sich nicht nehmen ({})", "画像を使えませんでした ({})"),
+    ("der dateidialog liess sich nicht öffnen", "ファイルダイアログを開けませんでした"),
+    ("eigenes bild entfernt", "自分の画像を外しました"),
 ];

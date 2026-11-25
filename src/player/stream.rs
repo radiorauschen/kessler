@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use std::sync::{Arc, Mutex};
 
 pub type Said = Arc<Mutex<Option<String>>>;
@@ -301,13 +301,14 @@ impl Drop for Icy {
 }
 
 fn ask(url: &str) -> Result<(Child, BufReader<ChildStdout>, Head), String> {
-    let mut child = Command::new("curl")
+    let mut command = crate::net::curl();
+    command
         .args(["--silent", "--location", "--fail", "--no-buffer", "--connect-timeout", "10"])
         .args(["--speed-limit", "1", "--speed-time", "15"])
         .args(["--http1.1"])
         .args(["--include", "--suppress-connect-headers", "--header", "Icy-MetaData: 1"])
-        .args(["--user-agent", concat!("kessler/", env!("CARGO_PKG_VERSION"))])
-        .arg(url)
+        .args(["--user-agent", concat!("kessler/", env!("CARGO_PKG_VERSION"))]);
+    let mut child = crate::net::address(&mut command, url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -258,22 +258,24 @@ void kessler_set_dock_icon(const unsigned char *rgba, int width, int height) {
     if (rgba == NULL || width <= 0 || height <= 0) {
         return;
     }
-    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
-        initWithBitmapDataPlanes:NULL
-                      pixelsWide:width
-                      pixelsHigh:height
-                   bitsPerSample:8
-                 samplesPerPixel:4
-                        hasAlpha:YES
-                        isPlanar:NO
-                  colorSpaceName:NSDeviceRGBColorSpace
-                     bytesPerRow:width * 4
-                    bitsPerPixel:32];
-    if (rep == nil) {
-        return;
+    @autoreleasepool {
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+            initWithBitmapDataPlanes:NULL
+                          pixelsWide:width
+                          pixelsHigh:height
+                       bitsPerSample:8
+                     samplesPerPixel:4
+                            hasAlpha:YES
+                            isPlanar:NO
+                      colorSpaceName:NSDeviceRGBColorSpace
+                         bytesPerRow:width * 4
+                        bitsPerPixel:32];
+        if (rep == nil) {
+            return;
+        }
+        memcpy([rep bitmapData], rgba, (size_t)width * (size_t)height * 4);
+        NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+        [image addRepresentation:rep];
+        [NSApp setApplicationIconImage:image];
     }
-    memcpy([rep bitmapData], rgba, (size_t)width * (size_t)height * 4);
-    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
-    [image addRepresentation:rep];
-    [NSApp setApplicationIconImage:image];
 }

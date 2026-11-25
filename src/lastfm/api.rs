@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use super::sign::api_sig;
 use crate::error::{KesslerError, Result};
@@ -94,7 +94,7 @@ pub fn call(params: Vec<(String, String)>, secret: &str) -> Result<String> {
     params.push(("api_sig".to_string(), api_sig(&params, secret)));
     let body = form_body(&params);
 
-    let mut child = Command::new("curl")
+    let mut child = crate::net::curl()
         .args([
             "--silent",
             "--show-error",

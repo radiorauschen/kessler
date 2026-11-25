@@ -85,6 +85,9 @@ pub const PART: &[(&str, &str)] = &[
     ("farben: {} · {}", "カラー: {} · {}"),
     ("farben: {}", "カラー: {}"),
     ("liedtext", "歌詞"),
+    ("release note drawings", "release note drawings"),
+    ("initial release", "最初のリリース"),
+    ("release {}", "リリース {}"),
     ("lade liedtext", "歌詞を読み込み中"),
     ("kein liedtext gefunden", "歌詞が見つかりません"),
     ("ohne worte", "インストゥルメンタル"),
@@ -187,4 +190,5 @@ pub const PART: &[(&str, &str)] = &[
     ("gnome dunkel", "gnome ダーク"),
     ("solarisiert hell", "ソラライズ ライト"),
     ("solarisiert dunkel", "ソラライズ ダーク"),
+    ("alle spalten gleich breit", "すべての列を同じ幅に"),
 ];

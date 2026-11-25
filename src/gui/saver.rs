@@ -46,6 +46,7 @@ pub struct Saver {
     by_hand: bool,
     art: Option<super::library::FieldArt>,
     art_scope: Scope,
+    drawn: Vec<Option<([usize; 2], egui::TextureHandle)>>,
 }
 
 impl Saver {
@@ -133,6 +134,7 @@ pub fn draw(app: &mut GuiApp, ctx: &egui::Context, palette: &Palette) {
         app.saver.picture = None;
         app.saver.scope = None;
         app.saver.art = None;
+        app.saver.drawn.clear();
         app.saver.exposure = 0.0;
         return;
     }
@@ -162,7 +164,9 @@ pub fn draw(app: &mut GuiApp, ctx: &egui::Context, palette: &Palette) {
             let hearing = app.player.state() == crate::player::PlaybackState::Playing && !app.spectrum.silent();
             let playing = app.player.state() == crate::player::PlaybackState::Playing;
             let picture = super::library::FieldPicture::from_name(&app.config.ui.saver_picture);
-            if app.config.ui.saver_picture == WORDS {
+            if app.config.ui.saver_picture == DRAWINGS {
+                wake = Some(drawings(app, ui, window, palette, rise, now - app.saver.since));
+            } else if app.config.ui.saver_picture == WORDS {
                 if playing {
                     wake = lyrics(app, ui, window, palette, rise, size);
                 }
@@ -181,7 +185,9 @@ pub fn draw(app: &mut GuiApp, ctx: &egui::Context, palette: &Palette) {
             } else {
                 super::menu::screened_mark(app, ui, square.shrink(side * 0.12), palette.mid.gamma_multiply(rise * 0.7));
             }
-            playing_line(app, ui, window, palette, rise);
+            if app.config.ui.saver_picture != DRAWINGS {
+                playing_line(app, ui, window, palette, rise);
+            }
         });
 
     if let Some(wake) = wake {
@@ -368,10 +374,12 @@ fn wanted_exposure(scope: &Scope, strength: f32) -> Option<f32> {
     Some((strength / bright.max(1e-4)).clamp(EXPOSURE_LEAST, EXPOSURE_MOST))
 }
 
-pub const PICTURES: [&str; 8] = ["vektorskop", "schlange", "mandelbrot", "leben", "kugel", "zarathustra", "kessler saga", WORDS];
+pub const PICTURES: [&str; 9] = ["vektorskop", "schlange", "mandelbrot", "leben", "kugel", "zarathustra", "kessler saga", WORDS, DRAWINGS];
 
 pub fn said(name: &str) -> &'static str {
-    if name == WORDS {
+    if name == DRAWINGS {
+        tr!("release note drawings")
+    } else if name == WORDS {
         tr!("liedtext")
     } else {
         super::library::FieldPicture::from_name(name).said()
@@ -618,9 +626,120 @@ fn playing_line(app: &GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, ri
     ui.painter().galley(at, g, colour);
 }
 
+pub const DRAWINGS: &str = "release notes drawings";
+
+const RELEASE_DRAWINGS: &[(&str, &[u8])] = &[
+    ("", super::menu::DRAWING),
+    ("1.5.322", include_bytes!("release-1.5.322.png")),
+    ("1.5.354", include_bytes!("release-1.5.354.png")),
+    ("1.5.411", include_bytes!("release-1.5.411.png")),
+];
+
+const DRAWING_HOLDS: f64 = 24.0;
+const DRAWING_CROSSES: f64 = 3.0;
+
+const DRAWING_HEIGHT: f32 = 0.72;
+
+fn drawing_masks() -> &'static Vec<image::GrayImage> {
+    static MASKS: std::sync::OnceLock<Vec<image::GrayImage>> = std::sync::OnceLock::new();
+    MASKS.get_or_init(|| {
+        RELEASE_DRAWINGS
+            .iter()
+            .map(|(_, bytes)| image::load_from_memory(bytes).map(|p| p.to_luma8()).unwrap_or_default())
+            .collect()
+    })
+}
+
+fn drawing_at(elapsed: f64, count: usize) -> (usize, usize, f32) {
+    let each = DRAWING_HOLDS + DRAWING_CROSSES;
+    let step = (elapsed / each).floor().max(0.0) as usize;
+    let into = elapsed - step as f64 * each;
+    let now = (count - 1 + step) % count;
+    let next = (now + 1) % count;
+    let over = ((into - DRAWING_HOLDS) / DRAWING_CROSSES).clamp(0.0, 1.0) as f32;
+    (now, next, over * over * (3.0 - 2.0 * over))
+}
+
+fn drawings(app: &mut GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, rise: f32, elapsed: f64) -> std::time::Duration {
+    let masks = drawing_masks();
+    let count = masks.len();
+    if app.saver.drawn.len() != count {
+        app.saver.drawn = vec![None; count];
+    }
+    let (now, next, over) = drawing_at(elapsed, count);
+    let ppp = ui.ctx().pixels_per_point();
+    let mut paint = |index: usize, strength: f32| {
+        let mask = &masks[index];
+        if strength <= 0.0 || mask.width() == 0 {
+            return;
+        }
+        let aspect = mask.width() as f32 / mask.height() as f32;
+        let height = (window.height() * DRAWING_HEIGHT).min(window.width() * 0.8 / aspect);
+        let pixels = [(height * aspect * ppp).round().max(1.0) as usize, (height * ppp).round().max(1.0) as usize];
+        let size = Vec2::new(pixels[0] as f32, pixels[1] as f32) / ppp;
+        let texture = match &app.saver.drawn[index] {
+            Some((at, texture)) if *at == pixels => texture.clone(),
+            _ => {
+                let small = image::imageops::resize(mask, pixels[0] as u32, pixels[1] as u32, image::imageops::FilterType::Lanczos3);
+                let image = egui::ColorImage {
+                    size: pixels,
+                    pixels: small.pixels().map(|ink| Color32::from_white_alpha(ink.0[0])).collect(),
+                    source_size: size,
+                };
+                let texture = ui.ctx().load_texture(format!("saver-drawing-{index}"), image, egui::TextureOptions::NEAREST);
+                app.saver.drawn[index] = Some((pixels, texture.clone()));
+                texture
+            }
+        };
+        let centre = window.center() - Vec2::new(0.0, window.height() * 0.03);
+        let corner = ((centre - size / 2.0).to_vec2() * ppp).round() / ppp;
+        let rect = Rect::from_min_size(corner.to_pos2(), size);
+        let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        ui.painter().image(texture.id(), rect, uv, palette.accent_faint.gamma_multiply(rise * strength));
+    };
+    paint(now, 1.0 - over);
+    if next != now {
+        paint(next, over);
+    }
+    let corner = |index: usize, strength: f32| {
+        if strength <= 0.0 {
+            return;
+        }
+        let (release, _) = RELEASE_DRAWINGS[index];
+        let said = if index == 0 { tr!("initial release").to_string() } else { tr!("release {}", release) };
+        let colour = palette.faint.gamma_multiply(rise * strength);
+        let g = text::line(ui, &said, Role::Label, colour);
+        let at = egui::pos2(window.right() - FOOT_LINE - g.size().x, window.bottom() - FOOT_LINE - g.size().y);
+        ui.painter().galley(at, g, colour);
+    };
+    corner(now, 1.0 - over);
+    if next != now {
+        corner(next, over);
+    }
+    let each = DRAWING_HOLDS + DRAWING_CROSSES;
+    let into = elapsed % each;
+    if into < DRAWING_HOLDS {
+        std::time::Duration::from_secs_f64(DRAWING_HOLDS - into + 0.01)
+    } else {
+        std::time::Duration::from_millis(33)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_release_drawings_go_round() {
+        for (i, mask) in drawing_masks().iter().enumerate() {
+            assert!(mask.width() > 100 && mask.height() > 100, "drawing {i}");
+        }
+        let n = RELEASE_DRAWINGS.len();
+        assert_eq!(drawing_at(0.0, n), (n - 1, 0, 0.0));
+        let (_, _, over) = drawing_at(DRAWING_HOLDS + DRAWING_CROSSES / 2.0, n);
+        assert!((over - 0.5).abs() < 0.01);
+        assert_eq!(drawing_at(DRAWING_HOLDS + DRAWING_CROSSES + 1.0, n).0, 0);
+    }
 
     #[test]
     fn the_colour_wanders_round_the_scheme() {

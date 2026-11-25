@@ -76,6 +76,15 @@ pub(super) fn radio_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pal
     } else {
         (stations, page, heard_width)
     };
+    let (stations, page, heard_width) = {
+        let mut target = vec![stations, page, heard_width];
+        target.extend(sides.iter().map(|(_, _, w)| *w));
+        let w = super::eased_widths(ui.ctx(), "radio", target);
+        for (side, width) in sides.iter_mut().zip(&w[3..]) {
+            side.2 = *width;
+        }
+        (w[0], w[1], w[2])
+    };
     let mut taken: Vec<Rect> = Vec::new();
     let column = |ui: &mut Ui, n: usize, width: f32, body: &mut dyn FnMut(&mut Ui) -> Rect| -> Rect {
         let height = reach(ui, n, width);
@@ -378,7 +387,16 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
     let mut drop_at: Option<(usize, f32)> = None;
     let mut menu: Option<(usize, egui::Pos2)> = None;
     let found = found_layout(app, ui, width, m);
+    let naming = app.naming_station.as_ref().map(|(url, entry)| (url.clone(), entry.clone()));
+    let pressed_at = ui.input(|i| if i.pointer.any_pressed() { i.pointer.press_origin() } else { None });
+    let mut typed_in: Option<Rect> = None;
     for (at, station) in shown.iter().enumerate() {
+        if let Some((_, entry)) = naming.as_ref().filter(|(url, _)| *url == station.url) {
+            let rect = super::names::typed_line(ui, width, entry, false, m, palette);
+            note_cursor_row(ui, "station", rect, at == cursor);
+            typed_in = Some(rect);
+            continue;
+        }
         let ahead = row_ahead(ui, width, m);
         let over = super::pointer_rests_on(ui, ahead) && carried.is_none();
         let id = egui::Id::unique(("radio-station", &station.url));
@@ -446,6 +464,11 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
             } else {
                 play = Some(at);
             }
+        }
+    }
+    if let (Some(rect), Some(at)) = (typed_in, pressed_at) {
+        if !rect.contains(at) {
+            app.naming_station = None;
         }
     }
     if let Some(from) = carried {
@@ -783,13 +806,19 @@ fn station_page(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                 let facts = text::prose(ui, &known.facts(), Role::Label, palette.faint, beside);
                 let to_facts = head_to_facts(&name, &facts, m);
                 let block = to_facts + facts.size().y;
-                let inset = m.marker_inset_y;
+                let inset = m.marker_pad_x;
                 let height = side.max(block) + inset;
                 let (area, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
                 let area = Rect::from_min_max(egui::pos2(area.left(), area.top() + inset), area.max);
                 let left = content_rect(area, m).left();
                 let rect = Rect::from_min_size(egui::pos2(left, area.top()), Vec2::splat(side));
                 station_picture(app, ui, rect, palette, &station);
+                let on_picture = ui.interact(rect, egui::Id::unique(("station-page-picture", &station.url)), Sense::click());
+                if on_picture.secondary_clicked() && app.radio.as_ref().is_some_and(|r| r.keeps(&station)) {
+                    if let Some(at) = on_picture.interact_pointer_pos() {
+                        app.row_menu = Some(crate::gui::RowMenu { at, about: crate::gui::About::StationPicture });
+                    }
+                }
                 let x_top = text::baseline(&name) - text::x_rise(ui, Role::ContentBold);
                 let last = to_facts + text::last_baseline(&facts);
                 let words_top = if block < side {
@@ -872,7 +901,7 @@ fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
                 }
                 return;
             };
-            paragraph(ui, width, &show, Role::Content, palette.ink, m);
+            super::artist_col::head_paragraph(ui, width, &show, Role::Content, palette.ink, m);
             if let Some(path) = picture {
                 ui.add_space(BLOCK_AIR);
                 let inner = (width - m.marker_pad_x * 2.0).max(40.0);
@@ -1147,6 +1176,7 @@ const PICTURE_LEAST: f32 = 32.0;
 const PICTURE_KEPT: u32 = 512;
 
 const PICTURE_AGAIN_SECS: u64 = 2;
+const PICTURE_AGAIN_MOST_SECS: u64 = 64;
 
 const PICTURE_UNUSED_SECS: u64 = 30;
 
@@ -1190,7 +1220,30 @@ fn prune_pictures() {
 enum Decoding {
     Under,
     Done(std::sync::Arc<image::DynamicImage>, std::time::Instant),
-    Missing(std::time::Instant),
+    Missing(Missed),
+}
+
+#[derive(Clone, Copy)]
+struct Missed {
+    at: std::time::Instant,
+    wait: u64,
+    file: Option<FileStamp>,
+}
+
+type FileStamp = (u64, Option<std::time::SystemTime>);
+
+fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
+    std::fs::metadata(path).ok().map(|m| (m.len(), m.modified().ok()))
+}
+
+impl Missed {
+    fn now(path: &std::path::Path) -> Self {
+        Missed { at: std::time::Instant::now(), wait: PICTURE_AGAIN_SECS, file: file_stamp(path) }
+    }
+
+    fn again(self) -> Self {
+        Missed { at: std::time::Instant::now(), wait: (self.wait * 2).min(PICTURE_AGAIN_MOST_SECS), file: self.file }
+    }
 }
 
 static DECODED: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Decoding>>> = std::sync::Mutex::new(None);
@@ -1204,11 +1257,19 @@ pub(super) fn decoded_picture(ctx: &egui::Context, path: &std::path::Path) -> Op
             return Some(image.clone());
         }
         Some(Decoding::Under) => return None,
-        Some(Decoding::Missing(at)) if at.elapsed().as_secs() < PICTURE_AGAIN_SECS => {
-            ctx.request_repaint_after(std::time::Duration::from_secs(PICTURE_AGAIN_SECS));
-            return None;
+        Some(Decoding::Missing(missed)) => {
+            let due = missed.at.elapsed().as_secs() >= missed.wait;
+            let changed = due && file_stamp(path) != missed.file;
+            if !changed {
+                if due {
+                    *missed = missed.again();
+                }
+                let left = missed.wait.saturating_sub(missed.at.elapsed().as_secs()).max(1);
+                ctx.request_repaint_after(std::time::Duration::from_secs(left));
+                return None;
+            }
         }
-        _ => {}
+        None => {}
     }
     known.insert(path.to_path_buf(), Decoding::Under);
     drop(decoded);
@@ -1260,7 +1321,7 @@ fn decode_now(path: std::path::PathBuf, ctx: &egui::Context) {
     });
     let said = match image {
         Some(image) => Decoding::Done(std::sync::Arc::new(image), std::time::Instant::now()),
-        None => Decoding::Missing(std::time::Instant::now()),
+        None => Decoding::Missing(Missed::now(&path)),
     };
     DECODED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(path, said);
     ctx.request_repaint();

@@ -142,4 +142,12 @@ pub const PART: &[(&str, &str)] = &[
     ("{} titel vom ipod entfernt · {} frei geworden", "{} tracks removed from the ipod · {} freed"),
     ("{} · {} titel", "{} · {} tracks"),
     ("ipod {} / {}", "ipod {} / {}"),
+    ("bild wählen…", "choose picture…"),
+    ("eigenes bild entfernen", "remove own picture"),
+    ("der sender heisst jetzt {}", "the station is now called {}"),
+    ("bild für den sender wählen", "choose a picture for the station"),
+    ("bild für den sender gesetzt", "picture set for the station"),
+    ("das bild liess sich nicht nehmen ({})", "the picture could not be used ({})"),
+    ("der dateidialog liess sich nicht öffnen", "the file dialog could not be opened"),
+    ("eigenes bild entfernt", "own picture removed"),
 ];

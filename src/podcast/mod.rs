@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
@@ -582,12 +582,14 @@ pub fn fetch_feed_since(url: &str, since: Option<&Validators>) -> Result<Reading
 
 fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, String> {
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let heads = std::env::temp_dir().join(format!(
+    let heads_dir = crate::config::Config::data_dir().join("feed-headers");
+    let _ = std::fs::create_dir_all(&heads_dir);
+    let heads = heads_dir.join(format!(
         "kessler-feed-{}-{}.headers",
         std::process::id(),
         COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let mut command = std::process::Command::new("curl");
+    let mut command = crate::net::curl();
     command.args(["--silent", "--show-error", "--fail-with-body", "--location", "--compressed"]);
     command.args(["--connect-timeout", FEED_CONNECT, "--speed-limit", "1", "--speed-time", FEED_STALLED, "--max-time", FEED_AT_MOST]);
     command.arg("--user-agent").arg(crate::library::coverart::agent());
@@ -600,7 +602,7 @@ fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, St
             command.arg("--header").arg(format!("If-Modified-Since: {}", since.modified));
         }
     }
-    command.arg(url);
+    crate::net::address(&mut command, url);
     let output = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -852,14 +854,15 @@ pub fn fetch_episode(url: &str, bytes: u64) -> mpsc::Receiver<Fetching> {
             return;
         }
         let start = |go_on: bool| {
-            let mut command = Command::new("curl");
+            let mut command = crate::net::curl();
             command
                 .args(["--connect-timeout", "15", "--speed-limit", "1", "--speed-time", "60"])
                 .args(["--silent", "--show-error", "--fail", "--location"]);
             if go_on {
                 command.args(["--continue-at", "-"]);
             }
-            command.arg("--output").arg(&part).arg(&url).stdout(Stdio::null()).stderr(Stdio::piped()).spawn()
+            command.arg("--output").arg(&part);
+            crate::net::address(&mut command, &url).stdout(Stdio::null()).stderr(Stdio::piped()).spawn()
         };
         let mut going_on = part.is_file();
         let mut child = match start(going_on) {

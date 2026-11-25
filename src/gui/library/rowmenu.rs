@@ -142,11 +142,23 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
         About::Station(at) => {
             let station = app.radio_listed().get(at).cloned();
             let kept = station.as_ref().is_some_and(|s| app.radio.as_ref().is_some_and(|r| r.keeps(s)));
-            vec![
+            let mut entries = vec![
                 (tr!("abspielen"), true),
                 (tr!("ähnliche stationen"), true),
                 (if kept { tr!("entfernen") } else { tr!("hinzufügen") }, true),
-            ]
+            ];
+            if kept {
+                entries.push((tr!("umbenennen"), true));
+            }
+            entries
+        }
+        About::StationPicture => {
+            let own = app.station_shown().is_some_and(|s| crate::radio::own_picture(&s.url).is_some());
+            let mut entries = vec![(tr!("bild wählen…"), true)];
+            if own {
+                entries.push((tr!("eigenes bild entfernen"), true));
+            }
+            entries
         }
         About::Episode(at) => app.episode_menu(at),
         About::Podcast(at) => {
@@ -458,14 +470,29 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
                     app.set_status(format!("{e}"));
                 }
             }
-            if let (Some(station), Some(radio)) = (station, app.radio.as_mut()) {
-                match n {
-                    0 => {
-                        radio.cursor = at;
-                        app.play_station(station);
+            if let Some(station) = station {
+                if n == 3 {
+                    app.start_naming_station(&station);
+                } else if let Some(radio) = app.radio.as_mut() {
+                    match n {
+                        0 => {
+                            radio.cursor = at;
+                            app.play_station(station);
+                        }
+                        1 => radio.find_similar(&station),
+                        _ => radio.toggle_kept(&station),
                     }
-                    1 => radio.find_similar(&station),
-                    _ => radio.toggle_kept(&station),
+                }
+            }
+            Ok(())
+        }
+        (About::StationPicture, Some(n)) => {
+            app.row_menu = None;
+            if let Some(station) = app.station_shown() {
+                if n == 0 {
+                    app.choose_station_picture(&station.url);
+                } else {
+                    app.forget_station_picture(&station.url);
                 }
             }
             Ok(())
@@ -515,7 +542,7 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
                 About::Queued(index) => app.player.queued().get(index).map(sung_by),
                 About::Listed(index) => app.editing_tracks.get(index).map(sung_by),
                 About::Artist(at) => app.artists.get(at).map(|a| a.name.clone()),
-                About::List(_) | About::Station(_) | About::Episode(_) | About::Podcast(_) => None,
+                About::List(_) | About::Station(_) | About::StationPicture | About::Episode(_) | About::Podcast(_) => None,
             };
             if let Some(name) = name {
                 app.about_artist(&name);

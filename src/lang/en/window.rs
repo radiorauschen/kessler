@@ -84,6 +84,9 @@ pub const PART: &[(&str, &str)] = &[
     ("farben: {} · {}", "colors: {} · {}"),
     ("farben: {}", "colors: {}"),
     ("liedtext", "lyrics"),
+    ("release note drawings", "release note drawings"),
+    ("initial release", "initial release"),
+    ("release {}", "release {}"),
     ("equalizer: tiefen, mitten und höhen einstellen", "equalizer: set the lows, mids and highs"),
     ("lade liedtext", "loading lyrics"),
     ("kein liedtext gefunden", "no lyrics found"),
@@ -187,4 +190,5 @@ pub const PART: &[(&str, &str)] = &[
     ("gnome dunkel", "gnome dark"),
     ("solarisiert hell", "solarized light"),
     ("solarisiert dunkel", "solarized dark"),
+    ("alle spalten gleich breit", "every column as wide as the others"),
 ];

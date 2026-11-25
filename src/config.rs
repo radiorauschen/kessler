@@ -77,6 +77,7 @@ pub struct UiConfig {
     pub scroll_speed: String,
     pub eq_gains: String,
     pub radio_logos: bool,
+    pub radio_song_covers: bool,
     pub radio_found: String,
     pub show_recent: bool,
     pub show_all_artists: bool,
@@ -136,6 +137,13 @@ pub struct UiConfig {
     pub field_rate: u32,
     pub meter_rate: u32,
     pub cover_dither: bool,
+    pub picture_outline: String,
+    pub window_buttons: String,
+    pub window_bar: String,
+    pub keymap: String,
+    pub view_fade: bool,
+    pub columns_to_edge: bool,
+    pub foot_clock: String,
     pub dither_method: String,
     pub dither_fineness: f32,
     pub dither_tones: u8,
@@ -249,6 +257,7 @@ impl Default for UiConfig {
             scroll_speed: "normal".into(),
             eq_gains: String::new(),
             radio_logos: true,
+            radio_song_covers: true,
             radio_found: "rechts".to_string(),
             show_recent: true,
             show_all_artists: true,
@@ -308,6 +317,13 @@ impl Default for UiConfig {
             field_rate: 4,
             meter_rate: 12,
             cover_dither: true,
+            picture_outline: "aus".into(),
+            window_buttons: "einfarbig".into(),
+            window_bar: "system".into(),
+            keymap: "vim".into(),
+            view_fade: true,
+            columns_to_edge: true,
+            foot_clock: "aus".into(),
             dither_method: "blaues rauschen".into(),
             dither_fineness: 0.6,
             dither_tones: 4,
@@ -516,6 +532,11 @@ impl Config {
         let contents = toml::to_string_pretty(self)
             .map_err(|e| KesslerError::Config(format!("Failed to serialize config: {}", e)))?;
         std::fs::write(&config_path, contents)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(())
     }
 }

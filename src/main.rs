@@ -20,6 +20,7 @@ mod lastfm;
 mod library;
 mod media;
 mod misaki;
+mod net;
 mod player;
 mod podcast;
 mod radio;

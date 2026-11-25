@@ -324,6 +324,35 @@ pub(super) fn screened_wide(source: &image::DynamicImage, width: u32, height: u3
     egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
 }
 
+static OUTLINE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn outline_colour(name: &str, palette: &Palette) -> Color32 {
+    match name {
+        "zart" => palette.faint,
+        "tinte" => palette.ink,
+        "akzent" => palette.accent_faint,
+        _ => Color32::TRANSPARENT,
+    }
+}
+
+pub fn set_outline(colour: Color32) {
+    OUTLINE.store(u32::from_le_bytes(colour.to_array()), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn outline(ui: &Ui, rect: Rect, corner: u8) {
+    let [r, g, b, a] = OUTLINE.load(std::sync::atomic::Ordering::Relaxed).to_le_bytes();
+    if a == 0 {
+        return;
+    }
+    let width = 1.0 / ui.ctx().pixels_per_point();
+    ui.painter().rect_stroke(
+        rect,
+        corner,
+        egui::Stroke::new(width, Color32::from_rgba_premultiplied(r, g, b, a)),
+        egui::StrokeKind::Inside,
+    );
+}
+
 pub(super) fn paint_screened(
     ui: &Ui,
     rect: Rect,
@@ -342,6 +371,7 @@ pub(super) fn paint_screened(
     for (i, colour) in under.iter().chain(std::iter::once(&ink)).enumerate() {
         layer(*colour, uv(i as f32 * share, (i + 1) as f32 * share));
     }
+    outline(ui, rect, corner);
 }
 
 fn sized(grey: &image::GrayImage, side: u32) -> image::GrayImage {
@@ -427,6 +457,7 @@ pub fn heading_cover(
 pub(super) fn blank(ui: &Ui, rect: Rect, name: &str, palette: &Palette, lit: bool) {
     let (fill, letter) = blank_colours(palette, lit);
     ui.painter().rect_filled(rect, MARKER_RADIUS, fill);
+    outline(ui, rect, MARKER_RADIUS);
     let Some(initial) = name.chars().find(|c| c.is_alphanumeric()) else {
         return;
     };

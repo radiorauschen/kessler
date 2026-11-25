@@ -118,13 +118,17 @@ that has it:
   wikidata, wikipedia and last.fm for the artist, lrclib for the words.
 - **radio and podcasts:** only once switched on. the stations and feeds you
   chose, radio browser when you search for a station, apple's podcast
-  directory when you search for a podcast.
+  directory when you search for a podcast. while a station plays, its logo,
+  its programme where the station publishes one, and (if switched on) the
+  playing song's artist and title to the itunes store for its cover.
 - **last.fm:** only once you have signed in.
-- **updates:** only when you click the row under `über`, one question to
-  github.
+- **updates:** only when you click the row under `über`, or at each start
+  once switched on. one question to github.
 
 every request only says `kessler` and its version; nothing that tells you,
-your computer or your installation apart goes with it.
+your computer or your installation apart goes with it. connections go through
+`curl` with certificates checked, only over http and https, and the settings
+file holding the last.fm key is readable by your account alone.
 
 ## get it running
 
@@ -225,6 +229,21 @@ are in `fonts/` with their licences (see the
 | `h` `l`, `j` `k`, `enter` | in the menu: tabs ↔ rows, move, change (like the columns) |
 | `?` | all keys |
 | `q` `q` | quit |
+
+**emacs**
+
+menu → general → keys → keyboard: `emacs` adds emacs's keys on top of
+vim's — `ctrl` + `n` `p` rows, `ctrl` + `f` `b` columns, `ctrl` + `v` /
+`alt` + `v` a page, `alt` + `<` `>` top and end, `ctrl` + `s` search,
+`ctrl` + `g` cancel. on a mac `ctrl` is the control key, as in emacs.
+
+and from emacs (linux), with `extras/kessler.el` in your config:
+
+```elisp
+(load "/path/to/kessler/extras/kessler.el")
+(kessler-keys-mode 1)        ; C-c k SPC play/pause, n next, p previous, s stop, i what plays
+(kessler-mode-line-mode 1)   ; what plays, in the mode line
+```
 
 ## ipod
 

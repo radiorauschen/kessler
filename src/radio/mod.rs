@@ -1,9 +1,9 @@
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 
+pub mod cover;
 pub mod heard;
 pub mod platform;
 pub mod programme;
@@ -302,13 +302,41 @@ fn about_picture_path(site: &str) -> PathBuf {
 }
 
 pub fn picture_path(station: &Station) -> Option<PathBuf> {
+    if let Some(own) = own_picture(&station.url) {
+        return Some(own);
+    }
     let logo = logo_path(station).filter(|p| shown_size(p).is_some());
     let site = (!station.homepage.is_empty()).then_some(station.homepage.as_str());
     logo.clone()
         .filter(|p| shown_size(p).is_some_and(|size| size >= LARGE_ENOUGH))
+        .or_else(|| site.map(|site| named_picture_path(site, &station.name)).filter(|p| shown_size(p).is_some()))
         .or_else(|| site.map(site_picture_path).filter(|p| shown_size(p).is_some()))
         .or_else(|| site.map(about_picture_path).filter(|p| shown_size(p).is_some()))
         .or(logo)
+}
+
+fn own_picture_path(url: &str) -> PathBuf {
+    let name = crate::lastfm::sign::md5_hex(url.as_bytes());
+    crate::config::Config::config_dir().join("radio-logos").join(format!("own-{name}"))
+}
+
+pub fn own_picture(url: &str) -> Option<PathBuf> {
+    let path = own_picture_path(url);
+    shown_size(&path).map(|_| path)
+}
+
+pub fn choose_picture(url: &str, from: &std::path::Path) -> Result<(), String> {
+    let bytes = std::fs::read(from).map_err(|e| e.to_string())?;
+    image::load_from_memory(&bytes).map_err(|_| "kein bild, das kessler zeigen kann".to_string())?;
+    let path = own_picture_path(url);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())
+}
+
+pub fn forget_picture(url: &str) {
+    let _ = std::fs::remove_file(own_picture_path(url));
 }
 
 fn shown_size(path: &std::path::Path) -> Option<u32> {
@@ -323,28 +351,98 @@ fn site_picture_path(site: &str) -> PathBuf {
     crate::config::Config::config_dir().join("radio-logos").join(format!("site-{name}"))
 }
 
-pub fn fetch_site_picture(site: &str) -> Option<mpsc::Receiver<Result<(), String>>> {
+fn named_picture_path(site: &str, name: &str) -> PathBuf {
+    let key = format!("{site}\n{}", crate::db::sort_key(name));
+    let name = crate::lastfm::sign::md5_hex(key.as_bytes());
+    crate::config::Config::config_dir().join("radio-logos").join(format!("named-{name}"))
+}
+
+fn filed_as(name: &str) -> Option<String> {
+    let name = name.split(['(', '[']).next().unwrap_or(name);
+    let squashed: String = name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
+    (squashed.chars().count() >= 4).then_some(squashed)
+}
+
+fn pictures_named_for(page: &str, site: &str, name: &str) -> Vec<String> {
+    let Some(filed) = filed_as(name) else { return Vec::new() };
+    let mut found: Vec<String> = Vec::new();
+    for quote in ['"', '\''] {
+        for part in page.split(quote).skip(1).step_by(2) {
+            let address = part.trim().replace("&amp;", "&");
+            let bare = address.split(['?', '#']).next().unwrap_or(&address);
+            let lower = bare.to_ascii_lowercase();
+            if address.len() > 500 || ![".png", ".jpg", ".jpeg", ".webp", ".gif"].iter().any(|e| lower.ends_with(e)) {
+                continue;
+            }
+            let file = lower.rsplit('/').next().unwrap_or(&lower);
+            let file: String = file.chars().filter(|c| c.is_alphanumeric()).collect();
+            if !file.contains(&filed) {
+                continue;
+            }
+            let url = resolved(site, &address);
+            if !found.contains(&url) {
+                found.push(url);
+            }
+        }
+    }
+    found
+}
+
+fn resolved(page: &str, address: &str) -> String {
+    if address.starts_with("http://") || address.starts_with("https://") {
+        return address.to_string();
+    }
+    if let Some(rest) = address.strip_prefix("//") {
+        return format!("https://{rest}");
+    }
+    let (scheme, rest) = page.split_once("://").unwrap_or(("https", page));
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let host = rest.split('/').next().unwrap_or(rest);
+    if address.starts_with('/') {
+        return format!("{scheme}://{host}{address}");
+    }
+    let folder = match rest.rfind('/') {
+        Some(at) if at > host.len() || rest[host.len()..].starts_with('/') => &rest[..at],
+        _ => host,
+    };
+    format!("{scheme}://{folder}/{address}")
+}
+
+pub fn fetch_site_picture(site: &str, name: &str) -> Option<mpsc::Receiver<Result<(), String>>> {
     let path = site_picture_path(site);
-    if site.is_empty() || path.exists() {
+    let named = named_picture_path(site, name);
+    if site.is_empty() || (path.exists() && named.exists()) {
         return None;
     }
     let (tell, answer) = mpsc::channel();
-    let site = site.to_string();
+    let (site, name) = (site.to_string(), name.to_string());
     std::thread::Builder::new()
         .name("kessler-radio-site-picture".into())
         .spawn(move || {
             let page = crate::library::coverart::fetch_text(&site).map_err(|e| e.to_string());
             let told = page.map(|page| {
-                for url in icons_named(&page, &site) {
-                    let Ok(bytes) = crate::library::coverart::fetch(&url) else { continue };
-                    let large = image::load_from_memory(&bytes).ok().is_some_and(|i| i.width().min(i.height()) >= 32);
-                    if large {
-                        keep(&path, &bytes);
-                        return Ok(());
+                let mut any = false;
+                if !named.exists() {
+                    let mut best: Option<(u32, Vec<u8>)> = None;
+                    for url in pictures_named_for(&page, &site, &name).into_iter().take(6) {
+                        let Ok(bytes) = crate::library::coverart::fetch(&url) else { continue };
+                        let Some(side) = image::load_from_memory(&bytes).ok().map(|i| i.width().min(i.height())) else { continue };
+                        if side >= LARGE_ENOUGH && best.as_ref().is_none_or(|(b, _)| side > *b) {
+                            best = Some((side, bytes));
+                        }
                     }
+                    any |= best.is_some();
+                    keep(&named, best.as_ref().map_or(&[][..], |(_, b)| b));
                 }
-                keep(&path, &[]);
-                Err("die seite nennt kein bild".to_string())
+                if !path.exists() {
+                    let icon = icons_named(&page, &site).into_iter().find_map(|url| {
+                        let bytes = crate::library::coverart::fetch(&url).ok()?;
+                        image::load_from_memory(&bytes).ok().filter(|i| i.width().min(i.height()) >= 32).map(|_| bytes)
+                    });
+                    any |= icon.is_some();
+                    keep(&path, icon.as_deref().unwrap_or(&[]));
+                }
+                if any { Ok(()) } else { Err("die seite nennt kein bild".to_string()) }
             });
             let _ = tell.send(told.and_then(|t| t));
         })
@@ -530,12 +628,13 @@ pub fn fetch_logo(station: &Station) {
             let Some(dir) = path.parent() else { return };
             let _ = std::fs::create_dir_all(dir);
             let part = path.with_extension("part");
-            let fetched = Command::new("curl")
+            let mut command = crate::net::curl();
+            command
                 .args(["--silent", "--fail", "--location", "--max-time", "12", "--max-filesize", "2000000"])
                 .args(["--user-agent", concat!("kessler/", env!("CARGO_PKG_VERSION"))])
                 .arg("--output")
-                .arg(&part)
-                .arg(&url)
+                .arg(&part);
+            let fetched = crate::net::address(&mut command, &url)
                 .status()
                 .is_ok_and(|s| s.success());
             if fetched {
@@ -628,6 +727,21 @@ impl Radio {
             self.cursor = at;
             self.save();
         }
+    }
+
+    pub fn rename(&mut self, url: &str, name: &str) -> bool {
+        let mut renamed = false;
+        for station in self.kept.iter_mut().filter(|s| s.url == url) {
+            station.name = name.to_string();
+            renamed = true;
+        }
+        for station in self.found.iter_mut().filter(|s| s.url == url) {
+            station.name = name.to_string();
+        }
+        if renamed {
+            self.save();
+        }
+        renamed
     }
 
     pub fn named(&mut self, url: &str, name: &str) {
@@ -921,7 +1035,7 @@ fn ask_directory(query: &str, reading: Reading) -> Result<Vec<Station>, String> 
 }
 
 fn ask_by(asked: &[(&str, String)]) -> Result<String, String> {
-    let mut command = Command::new("curl");
+    let mut command = crate::net::curl();
     command
         .args(["--silent", "--show-error", "--fail", "--max-time", "12", "--get"])
         .args(["--user-agent", concat!("kessler/", env!("CARGO_PKG_VERSION"))]);

@@ -714,8 +714,6 @@ impl GuiApp {
     pub(in crate::gui) fn handle_naming_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;
-        let taken =
-            |m: Modifiers, k: Key| -> usize { ctx.input_mut(|i| i.count_and_consume_key(m, k)) };
         let pressed = |m: Modifiers, k: Key| -> bool { ctx.input_mut(|i| i.consume_key(m, k)) };
         if pressed(NONE, Key::Escape) {
             self.naming_device = None;
@@ -725,36 +723,8 @@ impl GuiApp {
             self.rename_device();
             return;
         }
-        let all = pressed(Modifiers::COMMAND, Key::A);
-        let cleared = pressed(Modifiers::COMMAND, Key::Backspace);
-        let typed = crate::gui::typed(ctx, false);
-        let Some(entry) = self.naming_device.as_mut() else { return };
-        if all {
-            entry.mark_all();
-        }
-        if cleared {
-            entry.clear();
-        }
-        for _ in 0..taken(NONE, Key::ArrowLeft) {
-            entry.left();
-        }
-        for _ in 0..taken(NONE, Key::ArrowRight) {
-            entry.right();
-        }
-        if pressed(NONE, Key::Home) || pressed(NONE, Key::ArrowUp) {
-            entry.home();
-        }
-        if pressed(NONE, Key::End) || pressed(NONE, Key::ArrowDown) {
-            entry.end();
-        }
-        for _ in 0..taken(NONE, Key::Backspace) {
-            entry.backspace();
-        }
-        for _ in 0..taken(NONE, Key::Delete) {
-            entry.delete();
-        }
-        if !typed.is_empty() {
-            entry.insert(&typed);
+        if let Some(entry) = self.naming_device.as_mut() {
+            type_into(ctx, entry);
         }
     }
 
@@ -1101,5 +1071,42 @@ impl GuiApp {
             }
             Err(e) => self.set_status(format!("{e}")),
         }
+    }
+}
+
+pub(in crate::gui) fn type_into(ctx: &egui::Context, entry: &mut crate::gui::tagedit::Entry) {
+    use egui::{Key, Modifiers};
+    const NONE: Modifiers = Modifiers::NONE;
+    let taken = |m: Modifiers, k: Key| -> usize { ctx.input_mut(|i| i.count_and_consume_key(m, k)) };
+    let pressed = |m: Modifiers, k: Key| -> bool { ctx.input_mut(|i| i.consume_key(m, k)) };
+    let all = pressed(Modifiers::COMMAND, Key::A);
+    let cleared = pressed(Modifiers::COMMAND, Key::Backspace);
+    let typed = crate::gui::typed(ctx, false);
+    if all {
+        entry.mark_all();
+    }
+    if cleared {
+        entry.clear();
+    }
+    for _ in 0..taken(NONE, Key::ArrowLeft) {
+        entry.left();
+    }
+    for _ in 0..taken(NONE, Key::ArrowRight) {
+        entry.right();
+    }
+    if pressed(NONE, Key::Home) || pressed(NONE, Key::ArrowUp) {
+        entry.home();
+    }
+    if pressed(NONE, Key::End) || pressed(NONE, Key::ArrowDown) {
+        entry.end();
+    }
+    for _ in 0..taken(NONE, Key::Backspace) {
+        entry.backspace();
+    }
+    for _ in 0..taken(NONE, Key::Delete) {
+        entry.delete();
+    }
+    if !typed.is_empty() {
+        entry.insert(&typed);
     }
 }

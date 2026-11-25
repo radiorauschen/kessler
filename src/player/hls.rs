@@ -1,5 +1,5 @@
 use std::io::{Read, Seek, SeekFrom};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
@@ -64,10 +64,11 @@ pub fn is_hls(url: &str, kind: &str) -> bool {
 }
 
 fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    let out = Command::new("curl")
+    let mut command = crate::net::curl();
+    command
         .args(["--silent", "--location", "--fail", "--connect-timeout", "10", "--max-time", "30"])
-        .args(["--user-agent", concat!("kessler/", env!("CARGO_PKG_VERSION"))])
-        .arg(url)
+        .args(["--user-agent", concat!("kessler/", env!("CARGO_PKG_VERSION"))]);
+    let out = crate::net::address(&mut command, url)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
