@@ -1,5 +1,14 @@
+//! The artist's column — see [`crate::gui::artist`] for its state.
+
 use super::*;
 
+/// What is known about the artist being looked at — see [`crate::gui::artist`].
+///
+/// From the top: their picture, the few facts that place them, a paragraph
+/// about them, what the person wrote themselves, who they are like — those
+/// in the library a click away — and where to read further. At the foot, the
+/// three things to do about it: write in what is missing, search again, and
+/// choose a picture.
 pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     app.follow_the_artist();
     let top = ui.cursor().min;
@@ -364,14 +373,25 @@ pub(super) fn artist_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     Rect::from_min_size(top, Vec2::new(width, height))
 }
 
+/// How big the artist's picture is at most, and how many similar artists
+/// are listed.
 pub(super) const ARTIST_PICTURE: f32 = 176.0;
 
+/// How big the artist's or station's square picture is in a column whose room
+/// is `inner`: [`ARTIST_PICTURE`] at most.
 pub(super) fn picture_side(inner: f32) -> f32 {
     inner.min(ARTIST_PICTURE)
 }
 
+/// How tall a picture in its own shape is at most, against the column's
+/// width: a portrait narrower than the column rather than taller than this.
+/// Lower than the column is wide — a tall portrait as high as the column
+/// was broad stood over everything under it.
 pub(super) const INFO_PICTURE_MOST_TALL: f32 = 0.8;
 
+/// The artist's picture uncut, where „bildformat" asks for the original and
+/// it is there. A picture found anew is read again: the decoded ones are let
+/// go of when the artist's picture changes.
 fn artist_full_picture(app: &GuiApp) -> Option<std::path::PathBuf> {
     static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
     if !app.config.ui.info_picture_wide {
@@ -385,6 +405,13 @@ fn artist_full_picture(app: &GuiApp) -> Option<std::path::PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// The facts of an artist as a sentence and their style: where they come
+/// from and their years, as one would say them — „geboren 1962 in
+/// jacksonville.", „gruppe aus manchester, 1976–1993.", „seit 1986" for one
+/// still going — and MusicBrainz's short note after it, „us soul singer.". A
+/// person's first year is their birth and the second their death, a group's
+/// its beginning and end, as MusicBrainz counts them. „person" says nothing a
+/// name does not; a group, an orchestra, a choir says what it is.
 fn facts_lines(info: &crate::library::artistinfo::ArtistInfo, with_note: bool) -> (String, String) {
     let kind = info.found.kind.as_str();
     let person = kind == "person";
@@ -439,6 +466,8 @@ fn facts_lines(info: &crate::library::artistinfo::ArtistInfo, with_note: bool) -
     (sentence, info.style())
 }
 
+/// The sources of what the column shows, each as it is said and where it
+/// goes (empty for nowhere): the picture shown, the text, the facts.
 fn sources(info: &crate::library::artistinfo::ArtistInfo, picture: bool, full: bool, text: bool, facts: bool) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if picture {
@@ -466,7 +495,7 @@ fn sources(info: &crate::library::artistinfo::ArtistInfo, picture: bool, full: b
         out.push((format!("{}: {}", tr!("text|quelle"), info.found.about_from), page));
     }
     if facts && !info.found.mbid.is_empty() {
-        out.push((format!("{}: musicbrainz", tr!("steckbrief")), format!("https://musicbrainz.org/artist/{}", info.found.mbid)));
+        out.push((format!("{}: musicbrainz", tr!("eckdaten")), format!("https://musicbrainz.org/artist/{}", info.found.mbid)));
     }
     out
 }
@@ -475,6 +504,8 @@ pub(super) const ARTIST_SIMILAR: usize = 8;
 
 pub(super) const ARTIST_TIES: usize = 12;
 
+/// The artist's picture, screened the way the covers are — or, while there
+/// is none, the blank a cover without a picture gets, with their initial.
 pub(super) fn artist_picture(app: &mut GuiApp, ui: &Ui, rect: Rect, palette: &Palette, name: &str) {
     use crate::library::artistinfo;
     let key = app.artist.key;
@@ -539,6 +570,9 @@ pub(super) fn artist_picture(app: &mut GuiApp, ui: &Ui, rect: Rect, palette: &Pa
     }
 }
 
+/// The cover of the song the station on the air plays now, where it names
+/// `name` as its artist and a cover was found for it — see
+/// `crate::radio::cover`.
 fn song_cover_for(app: &GuiApp, name: &str) -> Option<std::path::PathBuf> {
     if !app.config.ui.radio_song_covers {
         return None;
@@ -549,12 +583,18 @@ fn song_cover_for(app: &GuiApp, name: &str) -> Option<std::path::PathBuf> {
     (crate::db::sort_key(artist) == crate::db::sort_key(name)).then(|| crate::radio::cover::found(artist, &aired.title)).flatten()
 }
 
+/// Words wrapped to the column, on as many rows as they take.
 pub(super) fn paragraph(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
     let room = (width - m.marker_pad_x * 2.0).max(60.0);
     let g = text::paragraph(ui, words, role, colour, room);
     place_wrapped(ui, width, g, colour, m);
 }
 
+/// [`paragraph`] for the first words under a column's head — the artist's
+/// name, the show on now: its first line on a row's line, as every other
+/// column's first row stands, and the rest under it. Set from its own top,
+/// as a paragraph is, the name stood a few points above the first row
+/// beside it.
 pub(super) fn head_paragraph(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
     let room = (width - m.marker_pad_x * 2.0).max(60.0);
     let g = text::paragraph(ui, words, role, colour, room);
@@ -563,12 +603,15 @@ pub(super) fn head_paragraph(ui: &mut Ui, width: f32, words: &str, role: Role, c
     ui.painter().galley(egui::pos2(rect.left() + m.marker_pad_x, rect.top() + down), g, colour);
 }
 
+/// Prose wrapped to the column, its lines a little further apart — see
+/// [`text::prose`].
 pub(super) fn prose(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
     let room = (width - m.marker_pad_x * 2.0).max(60.0);
     let g = text::prose(ui, words, role, colour, room);
     place_wrapped(ui, width, g, colour, m);
 }
 
+/// How far down its own room a paragraph is set.
 const PROSE_TOP: f32 = 2.0;
 
 fn place_wrapped(ui: &mut Ui, width: f32, g: std::sync::Arc<egui::Galley>, colour: Color32, m: Metrics) {
@@ -577,6 +620,9 @@ fn place_wrapped(ui: &mut Ui, width: f32, g: std::sync::Arc<egui::Galley>, colou
         .galley(egui::pos2(rect.left() + m.marker_pad_x, rect.top() + PROSE_TOP), g, colour);
 }
 
+/// The form for what the person writes about an artist themselves: a row a
+/// field, the note on as many rows as it has lines, and the keys said at the
+/// foot. Drawn like the tag editor, and typed into the same way.
 pub(super) fn artist_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
     use crate::gui::artist::{LABELS, NOTE};
     let blink = ui.input(|i| i.time).rem_euclid(1.06) < 0.62;
@@ -685,11 +731,21 @@ pub(super) fn artist_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
     }
 }
 
+/// What a click on a name from outside the library asks for.
 enum Other {
+    /// Its own page, here in the column.
     Visit,
+    /// The name, to search for elsewhere.
     Copy,
 }
 
+/// A name that is not in the library — a similar artist, a member, a group.
+///
+/// A click opens what is known about them here, in this column, looked up the
+/// way anyone in the library is, with the way back at the top. Under the
+/// pointer „kopieren" stands at the right, and a click there copies the name
+/// instead, for a search elsewhere. Set as it was, not in the accent: the
+/// accent says „in your library".
 fn other_row(ui: &mut Ui, width: f32, name: &str, colour: Color32, m: Metrics, palette: &Palette) -> Option<Other> {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
     paint_hover(ui, rect, &response, RowState::default(), m, palette);
@@ -734,6 +790,7 @@ mod facts_sentence {
         super::facts_lines(&info, true).0
     }
 
+    /// A person's years are their life, a group's its time; the note after.
     #[test]
     fn the_facts_read_as_a_sentence() {
         assert_eq!(said("person", "Jacksonville", "1962–", "US soul singer"), "geboren 1962 in Jacksonville. us soul singer.");

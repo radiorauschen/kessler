@@ -1,3 +1,5 @@
+//! The artist's column. See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("nichts gefunden über {}", "nothing found about {}"),
     ("das bild liess sich nicht lesen", "the picture could not be read"),

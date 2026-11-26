@@ -1,33 +1,76 @@
+//! What the columns read, chosen in the masthead: `musik   radio   ipod`, words
+//! in a row as the menu's tabs are. „radio" only once it is asked for in the
+//! menu, „ipod" only while one is plugged in; with neither, there is nothing to
+//! choose and nothing is drawn.
+//!
+//! All the words alike, in the second tone and the regular cut, each in its
+//! place; the one open is underlined by a line as heavy as the face's own
+//! strokes, sitting a little lower than an underline usually does, its ends
+//! only just rounded, and the line wanders to the word chosen. Under the
+//! pointer a word is in the ink, on the plate every control wears. A word newly
+//! offered — an iPod plugged in — stands in the accent for a moment.
+//!
+//! until then `[ui] source_switch` also offered square brackets around the one
+//! open, the others folding away behind it or showing only their first letters,
+//! and before that a slash, a bar, round brackets, plates and a segmented
+//! control.
+//!
+//! „ipod" opens as a place to put tracks down while they are carried from the
+//! library.
+
 use super::*;
 
+/// Which the columns read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Source {
     Music,
     Radio,
     Device,
+    /// The podcasts, while they are on under „allgemein".
     Podcasts,
 }
 
+/// What became of the switch this frame.
 pub(super) enum Switched {
     Still,
+    /// Another was chosen.
     To(Source),
+    /// Tracks carried from the library were let go of over „ipod".
     Dropped,
 }
 
+/// How wide „ipod" opens while tracks are carried, as a place to put them
+/// down: about as wide as a short title, so it reads as somewhere to aim at
+/// rather than as a word that got bigger.
 const DROP_WIDTH: f32 = 160.0;
+/// The air either side of the words in the open place.
 const DROP_AIR: f32 = 12.0;
+/// How long it takes to open and to close again.
 const DROP_SECS: f32 = 0.18;
+/// The air between one word and the next: with only a line to tell the one
+/// open, a little more than the brackets needed.
 const WORD_AIR: f32 = 18.0;
+/// How long a word newly offered — an iPod plugged in — stands in the
+/// accent, fading back over the last part.
 const NEWCOMER_SECS: f64 = 2.5;
 
+/// How much of the accent tints the place to put tracks down, and how much
+/// more while they are over it: one of the scheme's own colours, so it reads
+/// as somewhere to aim at.
 const DROP_TINT: f32 = 0.3;
 const DROP_TINT_OVER: f32 = 0.55;
 
+/// The line under the open word: as heavy as the face's own
+/// strokes, a little lower than an underline usually sits, its ends only
+/// just rounded — as fractions of how tall the ink stands.
 const UNDERLINE_WEIGHT: f32 = 0.11;
 const UNDERLINE_DROP: f32 = 0.3;
 const UNDERLINE_ROUND: f32 = 0.35;
+/// In Muto, whose labels are its medium, heavier to go with it and a point and
+/// a half lower, its ends square as its rules'.
 const UNDERLINE_WEIGHT_MEDIUM: f32 = 0.15;
 const UNDERLINE_LOWER_MEDIUM: f32 = 1.5;
+/// How long it takes to wander to another word.
 const UNDERLINE_SECS: f32 = 0.26;
 
 pub(in crate::gui) fn paint_underline(ui: &Ui, left: f32, width: f32, baseline: f32, ink: f32, tone: Color32) {
@@ -38,6 +81,8 @@ pub(in crate::gui) fn paint_underline(ui: &Ui, left: f32, width: f32, baseline: 
     ui.painter().rect_filled(line, if medium { 0.0 } else { weight * UNDERLINE_ROUND }, tone);
 }
 
+/// A value gliding by the clock to wherever it is asked to be, eased out,
+/// over `secs` whatever the distance: the line under the open word.
 fn glide(ctx: &egui::Context, id: egui::Id, to: f32, secs: f32) -> f32 {
     #[derive(Clone, Copy)]
     struct Glide {
@@ -64,6 +109,9 @@ fn glide(ctx: &egui::Context, id: egui::Id, to: f32, secs: f32) -> f32 {
     value
 }
 
+/// The switch, laid out leftwards from `right`. The views the switch offers, in
+/// the order of their keys, `1` to `4` (the podcasts before the ipod) — the
+/// same list `1` `2` `3` go by.
 pub(super) fn views_offered(app: &GuiApp) -> Vec<Source> {
     [
         app.config.ui.music.then_some(Source::Music),
@@ -76,8 +124,13 @@ pub(super) fn views_offered(app: &GuiApp) -> Vec<Source> {
     .collect()
 }
 
+/// How long the word of a view on its own stands after arriving in it,
+/// before it fades, and how long the fading takes.
 const LONE_SECS: f64 = 2.5;
 const LONE_FADE_SECS: f64 = 0.6;
+/// Under „super kompakt", once the lone word has faded, how long its room
+/// takes to close: the line is short there, and a gap left for a word nobody
+/// sees is room the rest of it can use.
 const LONE_CLOSE_SECS: f64 = 0.4;
 
 pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, palette: &Palette) -> Switched {
@@ -215,6 +268,11 @@ pub(super) fn source_switch(app: &GuiApp, ui: &Ui, right: &mut f32, top: f32, pa
     switched
 }
 
+/// Only one view switched on, there is nothing to choose — but where the window
+/// is should still be said. Its word, underlined as in the switch, for a moment
+/// after arriving there — the window opening, a view switched off, `c` and a
+/// digit — and then fading; under the pointer it comes back. Under „super
+/// kompakt" its room closes after it instead, and it stays away.
 fn lone_word(ui: &Ui, right: &mut f32, top: f32, palette: &Palette, view: Source, gives_way: bool) {
     let word = match view {
         Source::Music => tr!("musik"),
@@ -264,6 +322,7 @@ fn lone_word(ui: &Ui, right: &mut f32, top: f32, palette: &Palette, view: Source
     paint_underline(ui, start, width, baseline, ink, tone);
 }
 
+/// How far a plate reaches past its word on each side.
 fn control_pad(ui: &Ui, plate: Rect) -> f32 {
     let probe = control_plate(ui, egui::pos2(0.0, plate.top()), 0.0);
     probe.width() / 2.0

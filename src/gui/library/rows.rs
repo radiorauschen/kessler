@@ -1,14 +1,28 @@
+//! Rows: the pieces every column is drawn from — a name, a track, a queued
+//! track, a heading — and text too long for its cell.
+
 use super::*;
 
+/// Where a line of text has crept to, and how long it has been there.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Marquee {
     pub(super) offset: f32,
     pub(super) dwelt: f32,
 }
 
+/// How far to shift an over-long line this frame.
+///
+/// It waits a moment before setting off, so that sweeping the pointer down a
+/// list does not set every row in motion; it stops at the end rather than
+/// looping, because a line that keeps circling is harder to read than one that
+/// simply finished; and it returns faster than it left, so letting go feels
+/// like release rather than another wait.
 pub(super) fn marquee(ui: &Ui, id: egui::Id, overflow: f32, active: bool) -> f32 {
+    /// Seconds before an active line starts moving.
     const DWELL: f32 = 0.65;
+    /// Reading pace, pixels per second.
     const AWAY: f32 = 34.0;
+    /// Coming back, pixels per second.
     const HOME: f32 = 260.0;
 
     if overflow <= 0.5 {
@@ -45,6 +59,11 @@ pub(super) fn marquee(ui: &Ui, id: egui::Id, overflow: f32, active: bool) -> f32
     state.offset
 }
 
+/// A horizontal gradient, for the edge a scrolling line disappears behind.
+///
+/// Solid for the last stretch before the edge, and only then fading: a gradient
+/// that was still half clear a few pixels from the cut left the letters there
+/// showing through, and the line seemed to stop a little before the fade began.
 pub(super) fn edge_band(painter: &egui::Painter, rect: Rect, ground: Color32, solid_at_left: bool) {
     const SOLID: f32 = 0.35;
     let clear = Color32::TRANSPARENT;
@@ -73,8 +92,15 @@ pub(super) fn edge_band(painter: &egui::Painter, rect: Rect, ground: Color32, so
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// How long a name takes to turn bold, or back, in seconds.
 const WEIGHT_SECS: f32 = 0.12;
 
+/// Draw one line of text inside a cell, scrolling it when it does not fit
+/// and `active` (under the pointer).
+///
+/// Text that fits is simply drawn. Text that does not is clipped to the cell
+/// and fades into the row's own background at whichever end still has more to
+/// come, so a title never ends on a cut-off letter.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cell_text(
     ui: &Ui,
@@ -90,14 +116,22 @@ pub(super) fn cell_text(
     chosen_cell_text(ui, cell, id, label, role, colour, active, false, ground, m);
 }
 
+/// Which of a column's chosen lines may run this frame, see [`may_run`].
 #[derive(Clone, Copy, Default)]
 struct MarqueeTurn {
     frame: u64,
     taken: Option<egui::Id>,
+    /// A line under the pointer was too long last frame, or this one.
     pointed_before: bool,
     pointed_now: bool,
 }
 
+/// Whether a chosen line that is too long may run.
+///
+/// One line at a time in a column: with a whole album picked every title set
+/// off at once, and a column of moving lines is no longer read but watched.
+/// The one under the pointer goes first; without it, the first chosen line
+/// drawn — the topmost — runs and the others wait at their start.
 fn may_run(ui: &Ui, id: egui::Id, pointed: bool) -> bool {
     let clip = ui.clip_rect();
     let key = egui::Id::unique(("marquee-turn", clip.left().to_bits(), clip.right().to_bits()));
@@ -124,6 +158,8 @@ fn may_run(ui: &Ui, id: egui::Id, pointed: bool) -> bool {
     runs
 }
 
+/// [`cell_text`] for a line that also runs while it is chosen — though only
+/// one chosen line a column at a time, see [`may_run`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn chosen_cell_text(
     ui: &Ui,
@@ -192,10 +228,22 @@ pub(super) fn chosen_cell_text(
     }
 }
 
+/// How much of a list has gone under an edge before its fade is all there, in
+/// points: the fade grows in, deeper and stronger, as the rows go under it,
+/// rather than standing there whole at the first point scrolled.
 const FADE_GROWS_OVER: f32 = 48.0;
 
+/// How many steps the fade is drawn in: an eased curve from the ground to
+/// nothing, so it has no edge of its own where it ends, as a straight one had.
 const FADE_STEPS: usize = 8;
 
+/// A soft edge where a list runs out, instead of a cut.
+///
+/// Each edge only appears when there is something hidden past it. A fade
+/// drawn unconditionally would wash out the top row of a list that has not
+/// been scrolled at all — the reader would think the first entry was somehow
+/// disabled. It grows in over the first [`FADE_GROWS_OVER`] points that go
+/// under the edge, deeper and stronger together, eased at both ends.
 pub(in crate::gui) fn paint_fade(ui: &Ui, viewport: Rect, hidden_above: f32, hidden_below: f32, palette: &Palette) {
     let most = FADE_HEIGHT.min(viewport.height() / 3.0);
     if most <= 0.0 {
@@ -209,11 +257,15 @@ pub(in crate::gui) fn paint_fade(ui: &Ui, viewport: Rect, hidden_above: f32, hid
     fade_band(ui, viewport, viewport.bottom(), -1.0, depth(bottom), bottom, palette);
 }
 
+/// Eased at both ends, 0 … 1.
 fn smooth(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
+/// One fade across `viewport`, from `edge` `inwards` (1 down, −1 up),
+/// `depth` deep: the ground at the edge, as strong as `strength`, thinning
+/// along an eased curve to nothing.
 fn fade_band(ui: &Ui, viewport: Rect, edge: f32, inwards: f32, depth: f32, strength: f32, palette: &Palette) {
     if strength <= 0.01 || depth <= 0.0 {
         return;
@@ -235,6 +287,15 @@ fn fade_band(ui: &Ui, viewport: Rect, edge: f32, inwards: f32, depth: f32, stren
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
+/// The same fade as at the top and foot of a list, stood on its side at the
+/// right edge of `slot` — what the fourth column slides in from behind and
+/// out behind, so it comes and goes the way rows scroll in and out rather
+/// than being cut off at the margin.
+///
+/// `gone` is how much of the column is still out of sight, 0 … 1. The fade
+/// is full while most of it is, and eases away over the last quarter of the
+/// way in: a fade left standing on a column that has arrived would sit over
+/// the right-hand figures, and one that vanished in a frame would be a jump.
 pub(super) fn paint_side_fade(ui: &Ui, slot: Rect, gone: f32, palette: &Palette) {
     let width = FADE_HEIGHT.min(slot.width());
     let strength = (gone * 4.0).clamp(0.0, 1.0);
@@ -254,12 +315,15 @@ pub(super) fn paint_side_fade(ui: &Ui, slot: Rect, gone: f32, palette: &Palette)
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
+/// Where the row the keyboard stands on was drawn this frame, in `key`'s column
+/// — for the right-click menu opened by a key, which opens beside it.
 pub(in crate::gui) fn note_cursor_row(ui: &Ui, key: &'static str, rect: Rect, here: bool) {
     if here {
         ui.ctx().data_mut(|d| d.insert_temp(cursor_row_id(key), rect));
     }
 }
 
+/// Where it was last drawn, if it was.
 pub(in crate::gui) fn cursor_row(ctx: &egui::Context, key: &'static str) -> Option<Rect> {
     ctx.data(|d| d.get_temp::<Rect>(cursor_row_id(key)))
 }
@@ -268,6 +332,13 @@ fn cursor_row_id(key: &'static str) -> egui::Id {
     egui::Id::unique(("kessler-cursor-row", key))
 }
 
+/// Keep the selected row inside the viewport, with room to spare.
+///
+/// The rectangle handed to egui is the row grown by a few rows' worth of margin
+/// top and bottom. egui then scrolls the least it can to bring that whole
+/// rectangle into view — which means the list starts moving while the selection
+/// is still well clear of the edge, instead of chasing it once it has already
+/// left.
 pub(super) fn keep_visible(ui: &Ui, rect: Rect, m: Metrics, wanted: bool) {
     if !wanted {
         return;
@@ -278,6 +349,22 @@ pub(super) fn keep_visible(ui: &Ui, rect: Rect, m: Metrics, wanted: bool) {
     );
 }
 
+/// A scrolling area with no bar — and, just as importantly, no room kept for
+/// one.
+///
+/// This window says how long a list is with [`paint_extent`], a mark outside
+/// the column that appears under the pointer; there has never been a bar to
+/// see. But egui was still *reserving* its width — ten points, a six-point bar
+/// and its four-point margin — the moment a list grew long enough to scroll.
+/// The rows are drawn at the column's full width regardless, so the column
+/// ended up ten points wider than it asked to be, the gap to its right looked
+/// ten points too wide, and those ten points came off the track list.
+///
+/// The menu had already run into exactly this and says so at its own scroll
+/// area; what was missing was applying the same finding to the columns. It
+/// only shows on a list long enough to scroll, which is why a test library of
+/// five artists never caught it and a column of several thousand did, at a
+/// glance.
 pub(in crate::gui) fn without_a_bar(ui: &Ui, id: &str) -> egui::ScrollArea {
     let area = egui::ScrollArea::vertical()
         .id_salt(id)
@@ -289,12 +376,28 @@ pub(in crate::gui) fn without_a_bar(ui: &Ui, id: &str) -> egui::ScrollArea {
     area
 }
 
+/// How much of a push past a list's end gets through, on a trackpad or a
+/// touch mouse. egui lets a list run a third of the column out and springs
+/// it back from there; the system's own lists give a little and come back.
+/// Rather than holding the list at some line — which stopped it dead there
+/// and only then let it slide back — the push itself is made smaller before
+/// egui sees it, so its own spring, eased, does all the moving.
 const PAST_THE_END: f32 = 0.07;
 
+/// Takes the push past the end down to [`PAST_THE_END`] of itself: all of it
+/// once the list stands at an end, and the part of it that would carry the
+/// list over one. Only for the list under the pointer, which is the one the
+/// wheel moves.
 fn damp_past_the_end(ui: &Ui, id: &str) {
     damp_scrolling(ui, area_id(ui, id), below_id(id), ui.available_rect_before_wrap());
 }
 
+/// The same for any scroll area: `area` the id egui keeps its state under,
+/// `below` where the caller keeps how much was left under it last frame (see
+/// [`note_below`]), `over` where the area will stand — the menu and the key
+/// sheet take it so. Said rather than taken from the `Ui`: in a row laid out
+/// side by side, as the menu's tabs and body are, what is left of the row is a
+/// line tall until something fills it, and the pointer was never in it.
 pub(in crate::gui) fn damp_scrolling(ui: &Ui, area: egui::Id, below: egui::Id, over: egui::Rect) {
     if !ui.rect_contains_pointer(over) {
         return;
@@ -325,6 +428,9 @@ pub(in crate::gui) fn damp_scrolling(ui: &Ui, area: egui::Id, below: egui::Id, o
     }
 }
 
+/// `push` with what goes past `room` cut to [`PAST_THE_END`]; a push that
+/// would cross the end only reaches it this frame, so that the bounce comes
+/// from the small push of the next and not the whole of this one.
 fn damp(push: f32, room: f32) -> f32 {
     let room = room.max(0.0);
     if push.abs() <= room {
@@ -336,40 +442,74 @@ fn damp(push: f32, room: f32) -> f32 {
     }
 }
 
+/// Keep how much of a scroll area was left under it this frame, for
+/// [`damp_scrolling`] the next.
 pub(in crate::gui) fn note_below<R>(ui: &Ui, below: egui::Id, output: &egui::scroll_area::ScrollAreaOutput<R>) {
     let left = (output.content_size.y - output.state.clamped_offset().y - output.inner_rect.height()).max(0.0);
     ui.data_mut(|d| d.insert_temp(below, left));
 }
 
+/// Where a list keeps how much was left under it last frame.
 fn below_id(id: &str) -> egui::Id {
     egui::Id::unique(("below", id))
 }
 
+/// The id a list's scroll area keeps its state under, as egui makes it.
 fn area_id(ui: &Ui, id: &str) -> egui::Id {
     ui.make_persistent_id(egui::IdSalt::new(id))
 }
 
+/// Where a pull on a list's extent mark puts the list, for the scroll area
+/// to take up the next frame: since egui 0.37 its offset is no longer set
+/// from outside it.
 fn pull_id(id: &str) -> egui::Id {
     egui::Id::unique(("extent-pull", id))
 }
 
+/// Wrap a column's scrolling area so its edges fade rather than cut.
+/// Returns how far below the view the list goes on, in points.
 pub(super) fn scrolled(ui: &mut Ui, id: &str, palette: &Palette, body: impl FnOnce(&mut Ui)) -> f32 {
     scrolled_with(ui, id, palette, LIST_END_AIR, body)
 }
 
+/// Air under the last row of a list, inside the scrolling.
+///
+/// Scrolled all the way down, a list used to end with its last row standing on
+/// the very edge of the column, where every other column has its fade — so the
+/// one at its end looked like the one whose fade was missing. With this much
+/// under it the end reads as an end: the row is clear of the edge, and until it
+/// is, the fade is over it like everywhere else.
 pub(super) const LIST_END_AIR: f32 = FADE_HEIGHT;
 
+/// What a list running down to the window's edge keeps under its last row
+/// besides: room for the words the status puts in the corner.
+const EDGE_END_AIR: f32 = 28.0;
+
+/// The ground of a list, under its rows: a click on it, beside or below them,
+/// lets everything marked go, as a click beside the files does in the Finder.
+/// Laid before the rows, so each row over it keeps its own clicks; call it
+/// first thing in a `scrolled` body.
+///
+/// Held to the column: a scroll area that only scrolls down clips its body to
+/// the parent's width, so the clip alone ran across the whole window, and the
+/// queue's ground, laid after the other columns, took every click meant for
+/// their rows.
 pub(super) fn ground_clicked(ui: &mut Ui, id: &str) -> bool {
     let ground = ui.max_rect().intersect(ui.clip_rect());
     ui.interact(ground, egui::Id::unique(("ground", id)), Sense::click()).clicked()
 }
 
+/// Whether the column being drawn runs down to the window's edge, where its
+/// list needs no fade at the foot — see `render`'s `reach`.
 pub(super) fn column_at_edge_id() -> egui::Id {
     egui::Id::unique("column-at-edge")
 }
 
+/// `scrolled`, with a say in the air under the last row — none, for a block
+/// that is sized to what it holds.
 pub(super) fn scrolled_with(ui: &mut Ui, id: &str, palette: &Palette, end_air: f32, body: impl FnOnce(&mut Ui)) -> f32 {
     let at_edge = ui.data_mut(|d| d.remove_temp::<bool>(column_at_edge_id())).unwrap_or(false);
+    let end_air = if at_edge { end_air + EDGE_END_AIR } else { end_air };
     let output = without_a_bar(ui, id).auto_shrink([false, false]).show(ui, |ui| {
         body(ui);
         ui.add_space(end_air);
@@ -384,6 +524,40 @@ pub(super) fn scrolled_with(ui: &mut Ui, id: &str, palette: &Palette, end_air: f
     below
 }
 
+/// How much of a column there is, and where in it you are — but only while the
+/// pointer is over that column.
+///
+/// The fade says "there is more", which is not the same as "there is four
+/// times as much". This is the figure the fade cannot give, and it is drawn as
+/// a mark rather than a control: it appears under the pointer and carries no
+/// arrows or trough, so a list still has nothing in it but names.
+///
+/// But it can be taken hold of, the way a Mac's own scroller can: pulled, it
+/// moves the list; pressed beside it, the list jumps so the mark stands under
+/// the hand. Under the pointer it widens a little and darkens — the only sign
+/// it is there to be held. A pull is taken up by the list's scroll area the
+/// next frame — see [`without_a_bar`].
+/// The extent mark's width under the hand.
+const WIDE: f32 = 5.0;
+
+/// How far past the column's own edge the extent mark sits. Outside rather
+/// than over: every row runs to the edge of its column, and a mark laid on top
+/// of the last figure of a row would be the one place in the window where two
+/// things overlap. Five and a half is half way between a marked row's plate and
+/// the divider; at three it stood close enough to the marked row's plate to
+/// read as part of it.
+pub(super) const EXTENT_OUTSIDE: f32 = 5.5;
+
+/// What answers the pointer: the strip the mark runs in, a little wider than
+/// the mark at its widest, and stopping short of the divider in the middle of
+/// the gap. The artists' letter bar takes the same strip.
+pub(super) const EXTENT_REACH: f32 = EXTENT_OUTSIDE + WIDE + 1.0;
+
+/// Set for a list whose letter bar stands where its extent mark would.
+pub(super) fn extent_yields_id(id: &str) -> egui::Id {
+    egui::Id::unique(("extent-yields", id))
+}
+
 pub(in crate::gui) fn paint_extent(
     ui: &Ui,
     id: &str,
@@ -393,10 +567,13 @@ pub(in crate::gui) fn paint_extent(
     palette: &Palette,
 ) {
     const WIDTH: f32 = 3.0;
-    const WIDE: f32 = 5.0;
-    const OUTSIDE: f32 = 5.5;
-    const REACH: f32 = OUTSIDE + WIDE + 1.0;
+    const OUTSIDE: f32 = EXTENT_OUTSIDE;
+    const REACH: f32 = EXTENT_REACH;
     const FADE_SECS: f32 = 0.12;
+
+    if ui.data(|d| d.get_temp::<bool>(extent_yields_id(id))).unwrap_or(false) {
+        return;
+    }
 
     let visible = viewport.height();
     let Some((top, length)) = extent_mark(visible, content, offset) else {
@@ -468,8 +645,16 @@ pub(in crate::gui) fn paint_extent(
     }
 }
 
+/// Below this the mark stops reading as a mark and starts reading as dirt.
 pub(super) const EXTENT_MIN_LENGTH: f32 = 18.0;
 
+/// Where the extent mark sits and how long it is, as offsets from the top of
+/// the viewport. `None` when there is nothing to say.
+///
+/// Length says how much of the list is in front of you, position says where
+/// that piece sits — both as proportions of the same track, so a long library
+/// gives a short mark that starts at the top and ends at the bottom, and that
+/// reads correctly without a single number.
 pub(super) fn extent_mark(visible: f32, content: f32, offset: f32) -> Option<(f32, f32)> {
     if content <= visible + 1.0 || visible <= EXTENT_MIN_LENGTH {
         return None;
@@ -480,12 +665,44 @@ pub(super) fn extent_mark(visible: f32, content: f32, offset: f32) -> Option<(f3
     Some((travel * progress, length))
 }
 
+/// Reserve one row and report what the mouse did with it.
 pub(super) fn allocate_row(ui: &mut Ui, width: f32, m: Metrics) -> (Rect, Response) {
     ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click_and_drag())
 }
 
+/// How much air a column head keeps between its name and the word on the
+/// right, below which the right-hand word is left off entirely.
 pub(super) const HEADING_GAP: f32 = 14.0;
 
+/// What the hand is holding, at the end of it.
+///
+/// Small, and beside the pointer rather than under it: what you need to see
+/// while carrying something is where it will land, and a picture of the thing
+/// itself would sit exactly on top of that. So it is a count and nothing else
+/// — enough to know a whole record came with you and not only the row you
+/// pressed on.
+///
+/// It also ends a drag that was let go of nowhere in particular. The queue
+/// ends the ones that land on it; everything else ends here, having done
+/// nothing, which is what abandoning a drag should cost.
+/// A word on a plate at the pointer.
+///
+/// The thing that hangs off the cursor while something is being dragged, made
+/// into the one way this window says something *at the pointer* rather than in
+/// its own place: the count while records are carried, the volume while the
+/// rule is pushed, the second the timeline is about to jump to. All three are
+/// answers to "what am I doing right now", all three are gone the moment the
+/// hand lets go, and none of them belongs anywhere on the page.
+///
+/// Above the pointer for a rule, below-right for a drag: a hand pushing a
+/// rule sideways covers what is under it, and a hand carrying records is
+/// looking at where they will land.
+///
+/// A rule up in the band — „super kompakt", and the volume in „eigene zeile"
+/// and „mit cover" — has no room above it: the plate ran into the window's top
+/// edge, and under or beside the rule the pointer was in the way. Those rules
+/// say it in their own words instead — see `badge_fits_above`. It keeps clear
+/// of the sides, and is laid over everything.
 pub(super) fn badge(ui: &Ui, at: egui::Pos2, said: &str, above: bool, palette: &Palette) {
     let galley = text::line(ui, said, Role::Label, palette.ground);
     let plate = text::ink_size(&galley) + BADGE_PAD * 2.0;
@@ -502,6 +719,8 @@ pub(super) fn badge(ui: &Ui, at: egui::Pos2, said: &str, above: bool, palette: &
     painter.galley(text::ink_centred(&galley, plate), galley, palette.ground);
 }
 
+/// [`badge`], always centred over `at` or under it — for a mark that belongs to
+/// a place on a rule rather than to the pointer.
 pub(super) fn badge_centred(ui: &Ui, at: egui::Pos2, said: &str, above: bool, palette: &Palette) {
     if above {
         badge(ui, at, said, true, palette);
@@ -518,12 +737,18 @@ pub(super) fn badge_centred(ui: &Ui, at: egui::Pos2, said: &str, above: bool, pa
     painter.galley(text::ink_centred(&galley, plate), galley, palette.ground);
 }
 
+/// The air the badge's plate keeps around the ink, sideways and up and down.
 const BADGE_PAD: Vec2 = Vec2::new(7.0, 5.0);
 
+/// How far the badge stands from the pointer, or from the rule.
 const BADGE_AWAY: f32 = 10.0;
 
+/// How near the badge may come to the window's edges.
 const BADGE_EDGE: f32 = 16.0;
 
+/// Whether `said`, on its plate over a rule whose middle is at `y`, stays clear
+/// of the window's top edge. Where it would not, the rule says it in its own
+/// words: the volume where „vol" stands, the timeline in the time before it.
 pub(super) fn badge_fits_above(ui: &Ui, y: f32, said: &str) -> bool {
     let galley = text::line(ui, said, Role::Label, Color32::WHITE);
     let tall = text::ink_size(&galley).y + BADGE_PAD.y * 2.0;
@@ -552,6 +777,18 @@ pub(super) fn carried(app: &mut GuiApp, ui: &Ui) {
     ui.ctx().request_repaint();
 }
 
+/// One row of the queue: the title, and whose it is if there is room left.
+///
+/// The other columns lay the figure on the right out first and give the name
+/// what is left, because a year has to line up down the column. Here it is the
+/// other way round. The title is what the row is *about* and takes the room it
+/// needs; the artist gets the remainder, and is left off entirely when the
+/// remainder is too small to say anything — a name cut down to "acid m…" is
+/// four characters of noise standing where nothing would have read better.
+///
+/// So a queue of one record shows title after title with the space beside them
+/// empty, and a queue you have mixed together shows whose each one is, without
+/// either case having to be asked for.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn queue_row(
     ui: &mut Ui,
@@ -564,7 +801,9 @@ pub(super) fn queue_row(
     m: Metrics,
     palette: &Palette,
 ) -> Response {
+    /// The air between the two.
     const GAP: f32 = 12.0;
+    /// The most the artist is given, so a long name cannot crowd a long title.
     const ARTIST_SHARE: f32 = 0.4;
 
     let (rect, response) = allocate_row(ui, width, m);
@@ -625,14 +864,25 @@ pub(super) fn queue_row(
     response
 }
 
+/// How much of a row the figure on its right may take before it is cut.
+///
+/// Under half: the name is what the row is about and has to keep the larger
+/// share even when what stands beside it is long.
 pub(super) const FIGURE_SHARE: f32 = 0.45;
 
+/// How long the arrow takes to push in, or to go again, in seconds.
 pub(in crate::gui) const ARROW_SECS: f32 = 0.16;
 
+/// The arrow before an active row's name, pushing in from the left edge of
+/// `cell` over [`ARROW_SECS`] and taking the name along — see
+/// `UiConfig::arrows`. Returns how far the name stands in from where it
+/// would without one: nothing while there is none, and the arrow and its gap
+/// once it is in.
 pub(in crate::gui) fn lead_arrow(ui: &Ui, id: egui::Id, cell: Rect, line: f32, on: bool, colour: Color32) -> f32 {
     push_arrow(ui, id, cell, line, on, colour)
 }
 
+/// The same arrow, whether arrows are asked for or not.
 fn push_arrow(ui: &Ui, id: egui::Id, cell: Rect, line: f32, on: bool, colour: Color32) -> f32 {
     let ctx = ui.ctx();
     let pass = ctx.cumulative_pass_nr();
@@ -654,6 +904,7 @@ fn push_arrow(ui: &Ui, id: egui::Id, cell: Rect, line: f32, on: bool, colour: Co
     room * shown
 }
 
+/// A row with a name on the left and, optionally, a figure on the right.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn name_row(
     ui: &mut Ui,
@@ -725,6 +976,9 @@ pub(super) fn name_row(
     response
 }
 
+/// One small column beside a name in [`columned_row`]: its words, how wide
+/// it is, the face it is set in, and whether it stands flush right, as
+/// figures do.
 pub(super) struct Cell<'a> {
     pub text: &'a str,
     pub width: f32,
@@ -732,8 +986,14 @@ pub(super) struct Cell<'a> {
     pub right: bool,
 }
 
+/// Between a name and the columns beside it, and between two of them.
 pub(super) const FOUND_GAP: f32 = 12.0;
 
+/// A row with a name on the left and small columns at its end, each as wide
+/// as `cells` says, so the rows of a list stand in columns as the track
+/// list's do. Under the pointer an action word, when there is one, takes the
+/// columns' place, as it does in [`name_row`]. `bold` sets the name bold, as
+/// a chosen row's is, unless the keyboard's plate is under it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn columned_row(
     ui: &mut Ui,
@@ -787,12 +1047,22 @@ pub(super) fn columned_row(
     response
 }
 
+/// The light plate behind a head's word under the pointer, let out past the
+/// column's edge: it stands a little wider than the word, and the word at a
+/// column's left or right end is nearer the edge than that — cut there, its
+/// corner on that side was square.
 fn plate_beyond(ui: &Ui, plate: Rect, palette: &Palette) {
     let mut painter = ui.painter().clone();
     painter.set_clip_rect(ui.clip_rect().union(plate));
     painter.rect_filled(plate, crate::gui::theme::ROW_RADIUS, palette.hover);
 }
 
+/// A column heading: a label on the left, optionally one on the right.
+///
+/// It is also the sort control: clicking steps the column on to its next order.
+/// The only mark of that is the sign after the label — an arrow for a
+/// direction, a word where no arrow would do ("zuletzt"). Nothing that would
+/// read as a button.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn heading(
     ui: &mut Ui,
@@ -806,14 +1076,24 @@ pub(super) fn heading(
     heading_with(ui, label, trailing, mark, instead, None, m, palette)
 }
 
+/// A head that does nothing: no plate under the pointer, neither on its name
+/// nor on the count after it.
 pub(super) fn still_heading(ui: &mut Ui, label: &str, trailing: &str, m: Metrics, palette: &Palette) {
     head_drawn(ui, label, trailing, None, None, None, true, false, m, palette);
 }
 
+/// [`still_heading`], with a word at its far end that does something — the head
+/// itself does nothing and wears no plate, the word does.
 pub(super) fn still_heading_with(ui: &mut Ui, label: &str, trailing: &str, at_end: Option<&str>, m: Metrics, palette: &Palette) -> Head {
     head_drawn(ui, label, trailing, None, None, at_end, true, false, m, palette)
 }
 
+/// [`heading`], with a second offer at the far end: a word of its own there, in
+/// place of `trailing` while the pointer is anywhere on the head. The queue's
+/// „leeren" stands there, beside the „schliessen" its name turns into, the way
+/// every other column's does. Until then the count turned into „leeren" and the
+/// name stayed, and the queue was the one column a click on its name did not
+/// close.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn heading_with(
     ui: &mut Ui,
@@ -828,10 +1108,14 @@ pub(super) fn heading_with(
     head_drawn(ui, label, trailing, mark, instead, at_end, false, false, m, palette)
 }
 
+/// [`heading`], with a figure at its far end that only says something —
+/// how many there are — and so neither lights under the pointer nor takes
+/// a click of its own; the head itself still does what it does.
 pub(super) fn heading_counted(ui: &mut Ui, label: &str, figure: &str, mark: Option<&str>, m: Metrics, palette: &Palette) -> Head {
     head_drawn(ui, label, figure, mark, None, None, false, true, m, palette)
 }
 
+/// Any head; a `still` one answers no pointer.
 #[allow(clippy::too_many_arguments)]
 fn head_drawn(
     ui: &mut Ui,
@@ -929,13 +1213,18 @@ fn head_drawn(
     }
 }
 
+/// A column head: the whole line, and the word at its right end when that word
+/// is a control of its own.
 pub(super) struct Head {
     pub(super) row: Response,
     pub(super) beside: Option<Response>,
+    /// The word a head offers in place of its name, where it offers one:
+    /// then only it is clicked, not the rest of the head.
     word: Option<Response>,
 }
 
 impl Head {
+    /// A click on the head itself — not on the word at its far end.
     pub(super) fn clicked(&self) -> bool {
         match &self.word {
             Some(word) => word.clicked(),
@@ -943,26 +1232,39 @@ impl Head {
         }
     }
 
+    /// A click on that word.
     pub(super) fn beside_clicked(&self) -> bool {
         self.beside.as_ref().is_some_and(Response::clicked)
     }
 
 }
 
+/// One track row: the title, plus whichever fields are switched on.
 #[allow(clippy::too_many_arguments)]
+/// The air between a title and the mark that follows it.
+///
+/// Wider than a word space: the mark is not part of the title, and set any
+/// closer it reads as the last syllable of one.
 pub(super) const MARK_GAP: f32 = 10.0;
 
+/// The air between an arrow and the name it stands before.
 pub(super) const PLAYING_ARROW_GAP: f32 = 5.0;
 
+/// How the library marks a track that is on the plugged-in iPod already,
+/// `[ui] device_mark`. Two to try, and none.
 pub const DEVICE_MARKS: [&str; 3] = ["wort", "punkt", "aus"];
 
+/// The mark a row carries for being on the device, see [`DEVICE_MARKS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceMark {
+    /// „ipod" beside the title, a label like „flac".
     Word,
+    /// A dot there instead.
     Dot,
 }
 
 impl DeviceMark {
+    /// The mark the config asks for, `None` for none.
     pub fn of(said: &str) -> Option<Self> {
         match said {
             "punkt" => Some(Self::Dot),
@@ -972,6 +1274,7 @@ impl DeviceMark {
     }
 }
 
+/// How big the dot is, across.
 const DEVICE_DOT: f32 = 5.0;
 
 pub(super) fn track_row(
@@ -1134,6 +1437,12 @@ pub(super) fn track_row(
     response
 }
 
+/// The mark behind a field's value while cmd+a has all of it, so is something
+/// you see rather than something you remember having pressed. Not the rows'
+/// marker, which the search field uses: the field being typed in already stands
+/// on that, and the mark vanished into it. The ink, thinned, over whatever is
+/// behind — the words stay in their own colour on it. `at` is where the value's
+/// galley is drawn.
 pub(super) fn paint_field_mark(ui: &Ui, at: egui::Pos2, value: &egui::Galley, rect: Rect, palette: &Palette) {
     let mark = Rect::from_min_max(
         egui::pos2(at.x - 3.0, rect.top() + 4.0),
@@ -1143,8 +1452,11 @@ pub(super) fn paint_field_mark(ui: &Ui, at: egui::Pos2, value: &egui::Galley, re
         .rect_filled(mark, MARKER_RADIUS, palette.ink.gamma_multiply(0.18));
 }
 
+/// How many characters of the artist a compilation's track shows beside its
+/// title.
 const BY_CHARS: usize = 28;
 
+/// `name`, cut to `most` characters with an ellipsis.
 fn short_name(name: &str, most: usize) -> String {
     if name.chars().count() <= most {
         name.to_string()
@@ -1158,6 +1470,8 @@ fn short_name(name: &str, most: usize) -> String {
 #[cfg(test)]
 mod stretch_tests {
     use eframe::egui;
+    /// The state the stretch is read from is the list's own: were the id
+    /// made differently, nothing would ever be held.
     #[test]
     fn the_stretch_reads_the_lists_own_state() {
         let ctx = egui::Context::default();
@@ -1172,6 +1486,8 @@ mod stretch_tests {
         assert!(found);
     }
 
+    /// A push inside the list goes through whole; one that would cross the
+    /// end stops on it; at the end only a little of it is left.
     #[test]
     fn a_push_past_the_end_is_made_small() {
         assert_eq!(super::damp(40.0, 100.0), 40.0);

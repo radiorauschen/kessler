@@ -1,20 +1,58 @@
+//! The iPod as a place music is.
+//!
+//! The first column asks one question — where does what I am looking at come
+//! from — and until now it had two answers: the whole library, and whatever
+//! arrived last. A plugged-in iPod is a third, and the columns beside it work
+//! exactly as they always do.
+//!
+//! What is different is where the rows come from. The library is a database
+//! and answers in SQL; a device is a file that has been read into memory, and
+//! answers here. So this builds the same `Artist`, `Album` and `Track` values
+//! out of the device's own table, grouped and sorted the same way, and
+//! everything downstream is none the wiser.
+//!
+//! Nothing in here writes to the device or to the library. It is a second,
+//! read-only shelf standing next to the first.
+
 use std::path::{Path, PathBuf};
 
 use crate::db::models::{Album, Artist, SortField, SortOrder, Track};
 use crate::ipod::itunesdb::ItunesDb;
 
+/// A device that is plugged in and has been read.
 pub struct Attached {
+    /// The device's name: its own, as it says under settings → about, or
+    /// the volume's, as the file manager shows it, where it has none.
     pub name: String,
+    /// Where it is mounted — kept so the window can hand it back to the system
+    /// to be unmounted, and so nothing has to go looking for it a second time.
     pub mount: PathBuf,
+    /// Every track on it, in the shape the rest of the window understands.
     pub tracks: Vec<Track>,
+    /// Total and free bytes, when the volume would say.
     pub capacity: Option<(u64, u64)>,
+    /// How many playlists it carries. Shown, not yet opened.
     pub playlists: usize,
+    /// What the device says it is — generation, and its model number when it
+    /// still has a SysInfo to say so.
     pub model: String,
+    /// Which one it is: a shuffle is drawn and offered otherwise.
     pub generation: crate::ipod::device_info::Generation,
+    /// Why nothing may be written to it, when nothing may.
+    ///
+    /// Short, and in the window's own words: the device's own sentence is a
+    /// paragraph of English, which is right for a terminal and wrong for a row
+    /// in a menu. The long one is still what the status line says when a
+    /// transfer is refused.
     pub refusal: Option<String>,
 }
 
 impl Attached {
+    /// Read a device's database into library-shaped values.
+    ///
+    /// `info` is what the device says about itself, read once here rather than
+    /// every frame: the menu shows the model and whether this one can be
+    /// written to, and both of those are files on the device.
     pub fn read(
         name: String,
         mount: PathBuf,
@@ -64,18 +102,27 @@ impl Attached {
         }
     }
 
+    /// How many of its tracks a typed query leaves standing.
+    ///
+    /// Kept beside the other counts rather than worked out while drawing: the
+    /// row is drawn every frame, and a walk over eight thousand titles every
+    /// frame is a walk too many.
     pub fn matching(&self, query: Option<&str>) -> usize {
         self.left_after(query).count()
     }
 
+    /// Every artist on the device — see [`super::shelf`], which does the work
+    /// for this shelf and for a list alike.
     pub fn artists(&self, query: Option<&str>) -> Vec<Artist> {
         super::shelf::artists(&self.tracks, query)
     }
 
+    /// The albums on the device, narrowed to one artist when one is chosen.
     pub fn albums(&self, artist: Option<&str>, query: Option<&str>) -> Vec<Album> {
         super::shelf::albums(&self.tracks, artist, query)
     }
 
+    /// The tracks, narrowed and sorted the way the track column asks for.
     pub fn tracks(
         &self,
         artist: Option<&str>,
@@ -87,11 +134,17 @@ impl Attached {
         super::shelf::tracks(&self.tracks, artist, album, sort, order, query)
     }
 
+    /// The tracks a typed query leaves standing.
     fn left_after<'a>(&'a self, query: Option<&'a str>) -> impl Iterator<Item = &'a Track> + 'a {
         super::shelf::left_after(&self.tracks, query)
     }
 }
 
+/// One device track in the shape the rest of the window understands.
+///
+/// The id is the device's own, which is not a library id and must never be
+/// mistaken for one — nothing here is written back, so it only has to be
+/// unique among these tracks, which it is.
 fn as_track(track: &crate::ipod::itunesdb::IpodTrack, mount: &Path) -> Track {
     let path = track
         .path
@@ -125,11 +178,14 @@ fn as_track(track: &crate::ipod::itunesdb::IpodTrack, mount: &Path) -> Track {
     }
 }
 
+/// The device stores `:Music:F00:ABCD.mp3`; the file manager wants
+/// `/Volumes/iPod/Music/F00/ABCD.mp3`.
 fn resolve(mount: &Path, relative: &Path) -> PathBuf {
     let text = relative.to_string_lossy().replace(':', "/");
     mount.join(text.trim_start_matches('/'))
 }
 
+/// A word for the format, from the phrase the device stores.
 fn format_of(filetype: &str) -> String {
     let lower = filetype.to_lowercase();
     if lower.contains("aac") || lower.contains("mpeg-4") || lower.contains("m4a") {
@@ -262,6 +318,9 @@ mod tests {
         assert_eq!(first, last);
     }
 
+    /// The device writes its paths with colons and no leading slash; the file
+    /// manager wants slashes under the mount point. Without this every track
+    /// on the device points at nothing.
     #[test]
     fn a_device_path_becomes_a_real_one() {
         assert_eq!(

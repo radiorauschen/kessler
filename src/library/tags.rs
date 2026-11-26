@@ -1,3 +1,19 @@
+//! Writing tags back into the files.
+//!
+//! The counterpart to [`super::metadata`], which only ever reads. Everything
+//! here goes through one door — [`write`] — so there is a single place where a
+//! file of the user's is opened for writing, and a single place to look when
+//! something comes back wrong.
+//!
+//! Two rules the rest of the program leans on:
+//!
+//! * an [`Edit`] only ever touches the fields it actually carries. Editing
+//!   several tracks at once means most fields are left alone, and "left alone"
+//!   has to mean the file is not rewritten in that respect at all.
+//! * an empty value removes the tag rather than writing an empty string. A
+//!   track whose genre is the empty string and a track with no genre are the
+//!   same thing to a reader, and only one of them is tidy.
+
 use std::path::Path;
 
 use lofty::config::WriteOptions;
@@ -11,6 +27,13 @@ use crate::db::models::Track;
 use crate::library::metadata::Extras;
 use crate::error::{KesslerError, Result};
 
+/// One field of a track's tag, as the interface offers it.
+///
+/// The fields that decide where a track files itself in the library, and after
+/// them the four iTunes shows under „info" besides: composer, grouping, bpm and
+/// the comment. Those four are not in the database; the editor reads them from
+/// the file ([`Extras`]). The rest of what a tag can hold is the business of
+/// whatever wrote it, and an edit keeps it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Title,
@@ -28,6 +51,8 @@ pub enum Field {
 }
 
 impl Field {
+    /// In the order the editor lists them: what the track is, then what record
+    /// it belongs to, then where in that record it sits.
     pub const ALL: [Field; 12] = [
         Field::Title,
         Field::Artist,
@@ -60,10 +85,16 @@ impl Field {
         }
     }
 
+    /// Whether the field holds a number. The editor refuses everything else
+    /// while it is being typed, which is why [`write`] never has to explain a
+    /// bad one to the person — only to a caller that skipped the interface.
     pub fn numeric(self) -> bool {
         matches!(self, Field::Year | Field::TrackNumber | Field::DiscNumber | Field::Bpm)
     }
 
+    /// What this field currently reads as: from the database for the fields
+    /// it keeps, from the file's own [`Extras`] for the rest. Empty for
+    /// everything absent, numbers and text alike.
     pub fn read(self, track: &Track, extras: &Extras) -> String {
         match self {
             Field::Composer => extras.composer.clone(),
@@ -85,6 +116,10 @@ impl Field {
     }
 }
 
+/// The fields to change, and what to change them to.
+///
+/// A field that is not in here is not written. A field in here with an empty
+/// value is removed from the tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Edit {
     changes: Vec<(Field, String)>,
@@ -95,6 +130,8 @@ impl Edit {
         Self::default()
     }
 
+    /// Set a field. Setting the same one twice keeps the later value, so a
+    /// caller collecting an edit out of a form need not check first.
     pub fn set(&mut self, field: Field, value: impl Into<String>) {
         let value = value.into().trim().to_string();
         match self.changes.iter_mut().find(|(f, _)| *f == field) {
@@ -107,6 +144,7 @@ impl Edit {
         self.changes.is_empty()
     }
 
+    /// What the edit changes, in words, for the log. A field emptied says so.
     pub fn summary(&self) -> String {
         self.changes
             .iter()
@@ -126,6 +164,7 @@ impl Edit {
         &self.changes
     }
 
+    /// What the person typed, so an editor can show it back.
     #[cfg(test)]
     pub fn get(&self, field: Field) -> Option<&str> {
         self.changes
@@ -135,6 +174,10 @@ impl Edit {
     }
 }
 
+/// Whether every value in the edit can be written as it stands.
+///
+/// Checked before the file is opened, so a bad number cannot leave half an
+/// edit in a file.
 pub fn check(edit: &Edit) -> Result<()> {
     for (field, value) in &edit.changes {
         if field.numeric() && !value.is_empty() && number(value).is_none() {
@@ -147,6 +190,11 @@ pub fn check(edit: &Edit) -> Result<()> {
     Ok(())
 }
 
+/// A tag number: a plain positive integer, or nothing.
+///
+/// "3/12" is a perfectly common way to write a track number in a file, but it
+/// is not what anyone types into a field labelled `nr`, and accepting it here
+/// would mean deciding silently which half to keep.
 fn number(text: &str) -> Option<u32> {
     let text = text.trim();
     if text.is_empty() || !text.chars().all(|c| c.is_ascii_digit()) {
@@ -155,6 +203,12 @@ fn number(text: &str) -> Option<u32> {
     text.parse().ok()
 }
 
+/// Write an edit into a file.
+///
+/// Every tag the file carries is updated, not only the primary one: a file
+/// with both an ID3v2 and an ID3v1 tag would otherwise be saved with one of
+/// them still holding the old words, and which of the two a reader believes is
+/// the reader's business, not ours.
 pub fn write(path: &Path, edit: &Edit) -> Result<()> {
     if edit.is_empty() {
         return Ok(());
@@ -164,6 +218,8 @@ pub fn write(path: &Path, edit: &Edit) -> Result<()> {
     safely(path, Keep { edited: &edited, wrote: &edit.changes, cover: false }, |path| write_in_place(path, edit))
 }
 
+/// [`write`], on the file itself: see [`safely`] for why never on the
+/// person's own.
 fn write_in_place(path: &Path, edit: &Edit) -> Result<()> {
     let mut file = open_for_writing(path)?;
 
@@ -183,6 +239,9 @@ fn write_in_place(path: &Path, edit: &Edit) -> Result<()> {
     save(file, path)
 }
 
+/// Give a file its format's main tag, holding what its other tags hold,
+/// where it has none: an mp3 with nothing but an ID3v1 has no room for a
+/// composer or a comment, and what was typed there went nowhere.
 fn add_main_tag(file: &mut lofty::file::TaggedFile) {
     let primary = file.primary_tag_type();
     if file.tag(primary).is_none() {
@@ -192,6 +251,14 @@ fn add_main_tag(file: &mut lofty::file::TaggedFile) {
     }
 }
 
+/// Save a file's tags — with the ID3v1 at the end of an mp3 written by hand.
+///
+/// The tag library writes an ID3v1's words as UTF-8 and cuts them at their
+/// thirtieth byte, character or not. A title with an „ü" across that byte took
+/// the whole program down, and every other „ü" came out as „Ã¼" in the tag,
+/// which is Latin-1 (both found by the weird-file smoke test). So it is handed
+/// something harmless to write, and the four text fields are then put in
+/// properly.
 fn save(mut file: lofty::file::TaggedFile, path: &Path) -> Result<()> {
     let id3v1 = file.tag_mut(TagType::Id3v1).map(|tag| {
         let words = [
@@ -227,6 +294,8 @@ fn save(mut file: lofty::file::TaggedFile, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Title, artist, album and comment into the ID3v1 at the end of the file,
+/// as Latin-1.
 fn id3v1_words(path: &Path, words: &[String; 4]) -> std::io::Result<()> {
     use std::io::{Read, Seek, SeekFrom, Write};
     let mut file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
@@ -249,6 +318,8 @@ fn id3v1_words(path: &Path, words: &[String; 4]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A text as Latin-1, at most `size` bytes. Dashes and quotes Latin-1 lacks
+/// become their plain kin; anything else it lacks, a question mark.
 fn latin1(text: &str, size: usize) -> Vec<u8> {
     text.chars()
         .map(|c| match c {
@@ -262,6 +333,15 @@ fn latin1(text: &str, size: usize) -> Vec<u8> {
         .collect()
 }
 
+/// A file opened to have its tag written.
+///
+/// Strictly first; and where one malformed frame makes the strict reading
+/// refuse the whole tag — older taggers leave such frames behind, a `TXXX` too
+/// short for its own header — the tag is mended first: the broken frames are
+/// left out and every other one is kept as it was (see `id3::mend`). Nothing a
+/// reader could make sense of is lost. The library reads such files the same
+/// forgiving way (see `metadata::salvaged`), so a file that could be listed
+/// could not be edited.
 fn open_for_writing(path: &Path) -> Result<lofty::file::TaggedFile> {
     let open = || {
         Probe::open(path)
@@ -288,22 +368,50 @@ fn open_for_writing(path: &Path) -> Result<lofty::file::TaggedFile> {
     open()?.read().map_err(|_| unreadable())
 }
 
+/// The longest side of a cover written into a file.
+///
+/// Bigger than the cache tile, because this one is the copy that leaves with
+/// the music — onto an iPod, into another player — and 1000 px is what a
+/// well-tagged file carries. Much bigger than that and every track of the
+/// album gains a megabyte for a picture nothing will draw at that size.
 const PICTURE_SIZE: u32 = 1000;
 const PICTURE_QUALITY: u8 = 90;
 
+/// Make a picture fit to go into a tag: decoded, shrunk if need be, JPEG.
+///
+/// Everything is re-encoded rather than embedded as it arrived, and that is
+/// the point: decoding is also the check. A reply that turned out to be an
+/// error page, a truncated download, a file the person picked that is not
+/// really a picture — none of them get as far as a tag.
 pub fn picture_for_tag(raw: &[u8]) -> Result<Vec<u8>> {
     super::artwork::shrink_to_jpeg(raw, PICTURE_SIZE, PICTURE_QUALITY)
         .ok_or_else(|| KesslerError::Metadata(tr!("das ist kein lesbares bild").into()))
 }
 
+/// Put one picture into a file as its front cover, replacing whatever front
+/// cover was there.
+///
+/// Other pictures — a back, a booklet page — are left alone: they were put
+/// there on purpose and this is not the place to tidy them away.
 pub fn write_picture(path: &Path, jpeg: &[u8]) -> Result<()> {
     safely(path, Keep { edited: &[], wrote: &[], cover: true }, |path| write_picture_in_place(path, jpeg))
 }
 
+/// What a write must leave as it was, besides the file being readable and
+/// playing as long as before.
 #[derive(Clone, Copy)]
 struct Keep<'a> {
+    /// The fields the write is meant to change. Every other one must read the
+    /// same afterwards: an mp3 whose only tag was an APE tag came back from a
+    /// new genre with a title of „EXÐ" — the rewritten tag happened to be 131
+    /// bytes long, so the „TAG" inside its „APETAGEX" fell exactly where an
+    /// ID3v1 tag starts, and that was believed instead (the weird-file smoke
+    /// test).
     edited: &'a [Field],
+    /// What the edited fields must read as afterwards.
     wrote: &'a [(Field, String)],
+    /// A cover is being written, and must be there afterwards: a format that
+    /// took none is said so, not „cover gesetzt".
     cover: bool,
 }
 
@@ -372,6 +480,7 @@ fn safely(path: &Path, keep: Keep, change: impl FnOnce(&Path) -> Result<()>) -> 
     }
 }
 
+/// [`write_picture`], on the file itself.
 fn write_picture_in_place(path: &Path, jpeg: &[u8]) -> Result<()> {
     let mut file = open_for_writing(path)?;
 
@@ -472,6 +581,7 @@ fn apply(tag: &mut Tag, field: Field, value: &str) {
     }
 }
 
+/// A plain text item: set, or removed when empty.
 fn text(tag: &mut Tag, key: ItemKey, value: &str) {
     if value.is_empty() {
         tag.remove_key(&key);
@@ -486,6 +596,8 @@ mod tests {
 
     use super::super::fixtures::{bytes, FLAC, MP3};
 
+    /// A change that leaves the file unreadable never reaches the person's own
+    /// copy: the original is as it was, and nothing is left beside it.
     #[test]
     fn a_write_that_would_break_the_file_leaves_it_alone() {
         let path = scratch("safely", MP3, "mp3");
@@ -509,6 +621,12 @@ mod tests {
         assert_eq!(crate::library::metadata::read_metadata(&path).unwrap().album, "The Harvest");
     }
 
+    /// An mp3 with an ID3v1 tag at its end: a long title with an „ü" across the
+    /// thirtieth byte used to take the program down, and an „ü" anywhere came
+    /// out as „Ã¼" in that tag (the weird-file smoke test). The ID3v1 is
+    /// Latin-1 and cut at a character; the full words are in the ID3v2 an edit
+    /// adds beside it, with the composer and the comment the ID3v1 has no room
+    /// for.
     #[test]
     fn an_id3v1_tag_is_written_in_latin1() {
         let mut raw = bytes(MP3);
@@ -545,6 +663,9 @@ mod tests {
         assert_eq!(&v1[97..104], b"f\xfcr Kim");
     }
 
+    /// An mp3 whose tag holds a frame too short for its own header — the
+    /// strict reading refuses the whole tag — is still written, keeps what
+    /// was good around the broken frame, and reads strictly afterwards.
     #[test]
     fn a_tag_with_a_broken_frame_can_still_be_written() {
         fn synchsafe(n: usize) -> [u8; 4] {
@@ -584,6 +705,7 @@ mod tests {
         assert_eq!(tag.album().as_deref(), Some("Virus West"));
     }
 
+    /// A copy of one of the fixtures, somewhere it can be written to.
     fn scratch(name: &str, hex: &str, ext: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("kessler-tags-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -605,6 +727,8 @@ mod tests {
         edit
     }
 
+    /// The whole feature in one test: what is typed is what the file says
+    /// afterwards, and what the library reads back.
     #[test]
     fn what_was_typed_is_what_the_file_says() {
         for (name, bytes, ext) in [("mp3", MP3, "mp3"), ("flac", FLAC, "flac")] {
@@ -636,6 +760,8 @@ mod tests {
         }
     }
 
+    /// The fixtures carry no tag at all. An editor that can only change tags
+    /// that already exist is no use on exactly the files that need it most.
     #[test]
     fn a_file_without_a_tag_gets_one() {
         let path = scratch("untagged", MP3, "mp3");
@@ -644,6 +770,8 @@ mod tests {
         assert_eq!(read(&path).title, "sixtyten");
     }
 
+    /// Editing several tracks at once means writing one or two fields into
+    /// files whose other fields must survive untouched.
     #[test]
     fn the_fields_left_out_are_left_alone() {
         let path = scratch("partial", FLAC, "flac");
@@ -660,6 +788,8 @@ mod tests {
         assert_eq!(track.album, "geogaddi");
     }
 
+    /// Clearing a field has to take the tag out, not leave an empty string in
+    /// it — an empty genre would otherwise sort as its own genre.
     #[test]
     fn an_emptied_field_is_removed() {
         let path = scratch("empty", MP3, "mp3");
@@ -676,6 +806,8 @@ mod tests {
         assert_eq!(track.year, None);
     }
 
+    /// A number field that is not a number is refused *before* the file is
+    /// opened, so nothing is half-written.
     #[test]
     fn a_year_that_is_not_a_number_writes_nothing() {
         let path = scratch("badyear", MP3, "mp3");
@@ -688,6 +820,9 @@ mod tests {
         assert_eq!(read(&path).title, "dayvan cowboy");
     }
 
+    /// "3/12" is a real thing to find in a file but not a thing to type into a
+    /// field called `nr`, and guessing which half is meant would be worse than
+    /// saying no.
     #[test]
     fn a_number_is_a_number_and_nothing_else() {
         assert_eq!(number("9"), Some(9));
@@ -698,6 +833,7 @@ mod tests {
         assert_eq!(number("١٩٩٨"), None);
     }
 
+    /// A picture, as `image` will encode one.
     fn picture(size: u32) -> Vec<u8> {
         let square = image::RgbImage::from_fn(size, size, |x, y| {
             image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
@@ -709,6 +845,8 @@ mod tests {
         out.into_inner()
     }
 
+    /// A cover goes in, and the library reads it back out of the file the same
+    /// way a scan would.
     #[test]
     fn a_cover_goes_into_the_file_and_comes_back() {
         for (name, hex, ext) in [("mp3cover", MP3, "mp3"), ("flaccover", FLAC, "flac")] {
@@ -722,6 +860,7 @@ mod tests {
         }
     }
 
+    /// Replacing a cover has to leave one cover, not two.
     #[test]
     fn a_second_cover_replaces_the_first() {
         let path = scratch("recover", MP3, "mp3");
@@ -735,6 +874,8 @@ mod tests {
         assert_eq!(tag.pictures()[0].data(), second.as_slice());
     }
 
+    /// Words and a picture are two different writes, and the first must
+    /// survive the second.
     #[test]
     fn a_cover_does_not_disturb_the_words() {
         let path = scratch("bothways", FLAC, "flac");
@@ -746,12 +887,16 @@ mod tests {
         assert!(read(&path).has_artwork);
     }
 
+    /// The decode *is* the check. An error page that came back instead of a
+    /// picture must not reach a file.
     #[test]
     fn something_that_is_not_a_picture_is_refused() {
         assert!(picture_for_tag(b"<html>404 not found</html>").is_err());
         assert!(picture_for_tag(&[]).is_err());
     }
 
+    /// A two-thousand-pixel scan in every track of an album is how a library
+    /// doubles in size.
     #[test]
     fn a_large_picture_is_brought_down_to_size() {
         let jpeg = picture_for_tag(&picture(1600)).unwrap();
@@ -761,6 +906,8 @@ mod tests {
         assert_eq!(image::load_from_memory(&small).unwrap().width(), 250);
     }
 
+    /// Whitespace around a value is never what was meant, and a trailing space
+    /// in an album name makes a second album.
     #[test]
     fn values_are_trimmed_on_the_way_in() {
         let mut e = Edit::new();
@@ -768,6 +915,7 @@ mod tests {
         assert_eq!(e.get(Field::Album), Some("geogaddi"));
     }
 
+    /// Setting the same field twice is what a form does on every keystroke.
     #[test]
     fn the_last_value_of_a_field_wins() {
         let mut e = Edit::new();
@@ -777,6 +925,9 @@ mod tests {
         assert_eq!(e.get(Field::Title), Some("1969"));
     }
 
+    /// A file that says its year twice — a YEAR and a DATE, as many Vorbis
+    /// taggers write it — takes a new year in both, and reads back the new
+    /// one. The month and day of the date are kept.
     #[test]
     fn a_year_written_twice_is_changed_in_both_places() {
         let path = scratch("year-twice", FLAC, "flac");
@@ -802,6 +953,10 @@ mod tests {
         assert_eq!(tag.get_string(&ItemKey::RecordingDate), Some("1998-05-01"));
     }
 
+    /// A field of somebody's own — one the tag library has no word for —
+    /// is still in the file after an edit. (The tag library's 0.25 drops
+    /// such fields from FLAC and Ogg files as it saves; this is what says
+    /// so before it is taken up.)
     #[test]
     fn a_field_of_ones_own_is_kept() {
         let path = scratch("own-field", FLAC, "flac");

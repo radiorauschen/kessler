@@ -1,14 +1,32 @@
+//! A small JSON reader.
+//!
+//! Written by hand for the same reason the MD5 in [`crate::lastfm::sign`] was:
+//! this build cannot reach the crate registry, and the alternative — picking
+//! the fields out of the text with string searches — is the kind of thing that
+//! works on the reply you tested against and quietly mis-parses the one with a
+//! bracket in an album title.
+//!
+//! It reads, it does not write, and it keeps object keys in the order they
+//! arrived. Nothing here is fast; the replies it is asked to read are a few
+//! kilobytes at most.
+
+/// A JSON value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
     Null,
     Bool(bool),
+    /// Every number, integer or not. JSON has only the one kind.
     Number(f64),
     String(String),
     Array(Vec<Json>),
+    /// Kept as pairs rather than a map: order is sometimes the only thing
+    /// distinguishing two entries, and these documents are small.
     Object(Vec<(String, Json)>),
 }
 
 impl Json {
+    /// Read a whole document. `None` for anything malformed — there is no
+    /// useful half of a broken reply.
     pub fn parse(text: &str) -> Option<Json> {
         let mut reader = Reader {
             bytes: text.as_bytes(),
@@ -24,6 +42,7 @@ impl Json {
         }
     }
 
+    /// The value under a key, for an object.
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Json::Object(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
@@ -52,10 +71,13 @@ impl Json {
         }
     }
 
+    /// A string field of an object, in one step — by far the commonest thing
+    /// asked of a reply.
     pub fn text(&self, key: &str) -> Option<&str> {
         self.get(key).and_then(|v| v.as_str())
     }
 
+    /// An array field of an object, or an empty slice.
     pub fn list(&self, key: &str) -> &[Json] {
         self.get(key).and_then(|v| v.as_array()).unwrap_or(&[])
     }
@@ -197,6 +219,11 @@ impl Reader<'_> {
         }
     }
 
+    /// A `\uXXXX` escape, and its partner if it is half of a surrogate pair.
+    ///
+    /// Anything outside the basic plane — every emoji, and plenty of CJK — is
+    /// written as two escapes that mean one character. Reading them separately
+    /// produces two unassigned code points and a name nobody can search for.
     fn escaped_char(&mut self) -> Option<char> {
         let first = self.hex4()?;
         if (0xD800..0xDC00).contains(&first) {
@@ -217,6 +244,7 @@ impl Reader<'_> {
         char::from_u32(first as u32)
     }
 
+    /// Four hex digits. Leaves `at` on the last of them.
     fn hex4(&mut self) -> Option<u16> {
         let text = std::str::from_utf8(self.bytes.get(self.at + 1..self.at + 5)?).ok()?;
         let value = u16::from_str_radix(text, 16).ok()?;
@@ -262,6 +290,8 @@ mod tests {
         assert_eq!(results[0].get("explicit"), Some(&Json::Bool(false)));
     }
 
+    /// A title with a quotation mark or a slash in it is not exotic, and it is
+    /// exactly what breaks a parser written out of string searches.
     #[test]
     fn escapes_come_out_as_the_characters_they_stand_for() {
         let doc = Json::parse(r#"{"a": "say \"hello\"", "b": "one\/two", "c": "line\nbreak"}"#)
@@ -271,6 +301,7 @@ mod tests {
         assert_eq!(doc.text("c"), Some("line\nbreak"));
     }
 
+    /// Both halves of what a JSON escape can say about a character.
     #[test]
     fn unicode_escapes_and_their_pairs() {
         let doc = Json::parse(
@@ -283,6 +314,7 @@ mod tests {
         assert_eq!(doc.text("d"), Some("abc"));
     }
 
+    /// Text that is already UTF-8 passes through untouched.
     #[test]
     fn characters_that_were_never_escaped_survive() {
         let doc = Json::parse(r#"{"a": "坂本龍一", "b": "Café"}"#).unwrap();
@@ -307,6 +339,8 @@ mod tests {
         assert_eq!(Json::parse(r#"{"a": [], "b": {}}"#).unwrap().list("a").len(), 0);
     }
 
+    /// Half a document is not a document: better nothing than a reply read
+    /// down to where it was cut off.
     #[test]
     fn broken_input_reads_as_nothing() {
         for bad in [

@@ -1,3 +1,17 @@
+//! Podcasts, built as the radio is: asleep until the window opens them, nothing
+//! read, held or fetched before, and all of it in this folder and its one
+//! column, so that it can go again as easily as it came.
+//!
+//! A search asks Apple's podcast directory (the iTunes Search API: free, no
+//! key), a feed is read from its RSS (see [`feed`]), and an episode is fetched
+//! whole into a cache before it plays — then it is a file like any other, which
+//! can be skipped through and taken up again where it was left. Everything goes
+//! through curl, as everything else in kessler reaches the network.
+//!
+//! What is kept: the podcasts followed and where each episode was left, in
+//! `podcasts.toml` beside the settings; the episodes fetched, in a folder of
+//! their own beside the library, until they are listened to or let go of.
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
@@ -10,48 +24,76 @@ pub mod query;
 
 pub use feed::{Chapter, Episode, Feed};
 
+/// A podcast: what it is called, who makes it, where its feed is.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Show {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub author: String,
+    /// Its RSS feed: what tells one from another.
     pub feed: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub artwork: String,
 }
 
+/// Where an episode was left: how far in, and whether it was heard to the
+/// end.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Left {
+    /// The episode's [`Episode::id`].
     pub id: String,
     pub at: f64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
 }
 
+/// What `podcasts.toml` holds.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Kept {
     #[serde(default)]
     pub show: Vec<Show>,
     #[serde(default)]
     pub left: Vec<Left>,
+    /// The episodes fetched, so that „geladen" can list them whether their
+    /// podcast is still followed or not.
     #[serde(default)]
     pub fetched: Vec<Fetched>,
+    /// The episodes fetched by hand to have them („herunterladen"), by their sound's
+    /// address: heard, or older than „heruntergeladene löschen nach" says, their
+    /// files stay; only deleting or archiving them lets them go.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held: Vec<String>,
+    /// The episodes archived, by [`Episode::id`]: greyed in the lists, or not
+    /// shown there.
     #[serde(default)]
     pub archived: Vec<String>,
+    /// The podcasts' own queue: what plays once the episode playing is heard to
+    /// its end, in order.
     #[serde(default)]
     pub queue: Vec<Fetched>,
+    /// What the queue has played, oldest first: shown faint above the
+    /// episode playing, as the music's queue keeps its played rows — an
+    /// episode heard to its end, or only begun before another was put on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spent: Vec<Fetched>,
+    /// When the podcasts were last looked at, in seconds since 1970: episodes
+    /// out since then are new.
     #[serde(default)]
     pub seen_at: i64,
+    /// When each podcast was followed, by its feed, in seconds since 1970:
+    /// „offen" reaches back to then. One followed before this was kept reaches
+    /// back [`OPEN_UNKNOWN_DAYS`].
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub followed_at: std::collections::BTreeMap<String, i64>,
+    /// The episodes kept on purpose — „merken": listed under „gemerkt", whether
+    /// their podcast is followed or not, and never archived or let go of by
+    /// themselves.
     #[serde(default)]
     pub starred: Vec<Fetched>,
 }
 
+/// An episode fetched into the cache: enough of it to list and play it
+/// again without its feed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fetched {
     pub id: String,
@@ -63,12 +105,14 @@ pub struct Fetched {
     pub seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub chapters_url: String,
+    /// Its own picture's address, where it has one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub artwork: String,
     pub show: Show,
 }
 
 impl Fetched {
+    /// `episode` of `show`, as it is written down.
     pub fn of(episode: &Episode, show: &Show) -> Fetched {
         Fetched {
             id: episode.id.clone(),
@@ -82,6 +126,7 @@ impl Fetched {
         }
     }
 
+    /// The episode written down, and its podcast.
     pub fn episode(&self) -> (Episode, Show) {
         let episode = Episode {
             id: self.id.clone(),
@@ -98,15 +143,31 @@ impl Fetched {
     }
 }
 
+/// How far back „offen" reaches for a podcast followed before kessler
+/// noted when.
 pub const OPEN_UNKNOWN_DAYS: i64 = 30;
 
+/// How many played episodes the queue keeps above the one playing.
 const SPENT_KEPT: usize = 50;
 
+/// How many places left are kept: the newest, the oldest let go of.
 const LEFT_KEPT: usize = 500;
 
+/// Within this much of its end an episode counts as heard.
 const DONE_WITHIN_SECS: f64 = 30.0;
 
 impl Kept {
+    /// What `podcasts.toml` holds. A file that is there but cannot be read is
+    /// put aside first, as `podcasts.toml.unlesbar-<time>`: until then it was
+    /// taken for an empty one, and the next write put an empty one in its
+    /// place — the podcasts followed, the places left, the episodes fetched,
+    /// all gone.
+    ///
+    /// Read once and then held: as long as the file is the one last read or
+    /// written here (by its time and length), the copy held is handed out
+    /// instead of reading and parsing it again — the place of the episode
+    /// playing is noted every few seconds, and a file of thousands of
+    /// archived episodes took a good part of a frame each time.
     pub fn read() -> Kept {
         let path = path();
         if let Some(kept) = held::get(&path) {
@@ -129,14 +190,21 @@ impl Kept {
         }
     }
 
+    /// Written whole beside it first, then put in its place, so no read ever
+    /// finds it half written. Waits until it is on disk.
     pub fn write(&self) {
         held::write(path(), self.clone(), true);
     }
 
+    /// Written as [`Self::write`] does, but on the writing thread, without
+    /// waiting: for the place of the episode playing, noted every few
+    /// seconds. What is read meanwhile is this, and later writes come after
+    /// it.
     pub fn write_soon(&self) {
         held::write(path(), self.clone(), false);
     }
 
+    /// Every write handed over is on disk once this returns: on the way out.
     pub fn flush() {
         held::flush();
     }
@@ -145,6 +213,8 @@ impl Kept {
         self.show.iter().any(|s| s.feed == feed)
     }
 
+    /// Follow `show`, or let it go when it is followed already. Whether it is
+    /// followed now.
     pub fn toggle(&mut self, show: &Show) -> bool {
         if let Some(at) = self.show.iter().position(|s| s.feed == show.feed) {
             self.show.remove(at);
@@ -156,15 +226,20 @@ impl Kept {
         }
     }
 
+    /// Follow `show`, noting since when.
     pub fn follow(&mut self, show: &Show) {
         self.show.push(show.clone());
         self.followed_at.insert(show.feed.clone(), chrono::Utc::now().timestamp());
     }
 
+    /// Since when „offen" counts a podcast's episodes not begun.
     pub fn open_since(&self, feed: &str) -> i64 {
         self.followed_at.get(feed).copied().unwrap_or_else(|| chrono::Utc::now().timestamp() - OPEN_UNKNOWN_DAYS * 86_400)
     }
 
+    /// Whether `episode` of the podcast at `feed` is „offen": begun and not
+    /// heard to the end, or not begun and out since the podcast was followed;
+    /// never one archived. `left` is the places left, by id.
     pub fn is_open(&self, episode: &Episode, feed: &str, left: &std::collections::HashMap<&str, &Left>, archived: &std::collections::HashSet<&str>) -> bool {
         if archived.contains(episode.id.as_str()) {
             return false;
@@ -176,14 +251,17 @@ impl Kept {
         }
     }
 
+    /// Whether `id` was begun and not heard to the end.
     pub fn is_begun(&self, id: &str) -> bool {
         self.left(id).is_some_and(|l| !l.done && l.at > 0.0)
     }
 
+    /// Whether the episode at `url` was fetched by hand to have it.
     pub fn is_held(&self, url: &str) -> bool {
         self.held.iter().any(|h| h == url)
     }
 
+    /// Whether `file` is the file of an episode fetched by hand.
     pub fn holds_file(&self, file: &Path) -> bool {
         self.held.iter().any(|h| cached(h) == file)
     }
@@ -198,6 +276,7 @@ impl Kept {
         self.held.retain(|h| h != url);
     }
 
+    /// Note that `episode` of `show` was fetched.
     pub fn fetched_now(&mut self, episode: &Episode, show: &Show) {
         self.fetched.retain(|f| f.url != episode.url);
         self.fetched.push(Fetched::of(episode, show));
@@ -207,6 +286,8 @@ impl Kept {
         self.archived.iter().any(|a| a == id)
     }
 
+    /// Archive episode `id`, or take it out of the archive. Whether it is
+    /// archived now; archived, it leaves the queue.
     pub fn toggle_archived(&mut self, id: &str) -> bool {
         if self.is_archived(id) {
             self.archived.retain(|a| a != id);
@@ -222,6 +303,7 @@ impl Kept {
         self.starred.iter().any(|s| s.id == id)
     }
 
+    /// Keep `episode`, or let it go of being kept. Whether it is kept now.
     pub fn toggle_starred(&mut self, episode: &Episode, show: &Show) -> bool {
         if self.is_starred(&episode.id) {
             self.starred.retain(|s| s.id != episode.id);
@@ -232,6 +314,7 @@ impl Kept {
         }
     }
 
+    /// Episode `id` not heard after all: where it was left let go of.
     pub fn unheard(&mut self, id: &str) {
         self.left.retain(|l| l.id != id);
     }
@@ -240,6 +323,8 @@ impl Kept {
         self.queue.iter().any(|q| q.id == id)
     }
 
+    /// Put `episode` at the end of the podcasts' queue, or take it out.
+    /// Whether it is queued now.
     pub fn toggle_queued(&mut self, episode: &Episode, show: &Show) -> bool {
         if self.is_queued(&episode.id) {
             self.queue.retain(|q| q.id != episode.id);
@@ -251,6 +336,10 @@ impl Kept {
         }
     }
 
+    /// Each episode once in the queue and its played rows: an episode has
+    /// one place it was left at, and two rows of it would share it. The
+    /// first of each in the queue stays; a played row of one still to come
+    /// goes.
     fn once_each(&mut self) {
         let mut seen = std::collections::HashSet::new();
         self.queue.retain(|q| seen.insert(q.id.clone()));
@@ -259,11 +348,13 @@ impl Kept {
         self.spent.retain(|s| spent_seen.insert(s.id.clone()));
     }
 
+    /// Episode `id` heard to its end.
     pub fn heard(&mut self, id: &str) {
         self.left.retain(|l| l.id != id);
         self.left.push(Left { id: id.to_string(), at: 0.0, done: true });
     }
 
+    /// The episodes fetched whose files are still there, the newest first.
     pub fn fetched_episodes(&self) -> Vec<(Episode, Show)> {
         let mut all: Vec<(Episode, Show)> = self
             .fetched
@@ -279,6 +370,9 @@ impl Kept {
         self.left.iter().find(|l| l.id == id)
     }
 
+    /// Remember that episode `id` of `length` seconds was left at `at`.
+    /// `episode` of `show` played, put after the others; one already there
+    /// moves to the end. The oldest go past [`SPENT_KEPT`].
     fn spend_row(&mut self, row: Fetched) {
         self.spent.retain(|s| s.id != row.id);
         self.queue.retain(|q| q.id != row.id);
@@ -289,6 +383,11 @@ impl Kept {
         }
     }
 
+    /// `episode` starts playing, `before` having played until now: the
+    /// queue moves to it as the music's moves its needle. Played before, the
+    /// rows after it and `before` come back as what is to come, in their
+    /// order; still to come, the rows skipped on the way become played after
+    /// `before`; from anywhere else, `before` becomes played.
     pub fn go_to(&mut self, episode: &Episode, before: Option<Fetched>) {
         if let Some(at) = self.spent.iter().position(|s| s.id == episode.id) {
             let mut back = self.spent.split_off(at + 1);
@@ -326,6 +425,8 @@ impl Kept {
     }
 }
 
+/// The copy of `podcasts.toml` held between reads, and the one thread that
+/// writes it, so that writes land in the order they were made.
 mod held {
     use super::Kept;
     use std::path::{Path, PathBuf};
@@ -333,12 +434,16 @@ mod held {
     use std::sync::{Mutex, OnceLock};
     use std::time::SystemTime;
 
+    /// The file as last seen: its time and length.
     type Stamp = (SystemTime, u64);
 
     struct Held {
         path: PathBuf,
         kept: Kept,
+        /// `None` while it is still to be written.
         stamp: Option<Stamp>,
+        /// Counted up with each write handed over, so that a write done
+        /// late does not stamp a newer copy.
         generation: u64,
     }
 
@@ -357,6 +462,8 @@ mod held {
         Some((meta.modified().ok()?, meta.len()))
     }
 
+    /// The copy held, if the file is still the one it came from or is
+    /// still to be written.
     pub fn get(path: &Path) -> Option<Kept> {
         let held = held().lock().ok()?;
         let held = held.as_ref().filter(|h| h.path == path)?;
@@ -366,6 +473,7 @@ mod held {
         }
     }
 
+    /// Just read from the file.
     pub fn read(path: &Path, kept: &Kept) {
         if let (Ok(mut held), Some(stamp)) = (held().lock(), stamp_of(path)) {
             let generation = held.as_ref().map_or(0, |h| h.generation);
@@ -401,6 +509,7 @@ mod held {
         })
     }
 
+    /// Written whole beside it first, then put in its place.
     fn put(path: &Path, kept: &Kept) {
         let Ok(text) = toml::to_string(kept) else { return };
         if let Some(dir) = path.parent() {
@@ -412,6 +521,7 @@ mod held {
         }
     }
 
+    /// Hand `kept` over to be written; with `wait`, until it is.
     pub fn write(path: PathBuf, kept: Kept, wait: bool) {
         let generation = {
             let Ok(mut held) = held().lock() else {
@@ -449,6 +559,8 @@ mod held {
     mod tests {
         use super::*;
 
+        /// A write not waited for is what is read at once, and on disk after
+        /// the flush; a file changed behind its back is read afresh.
         #[test]
         fn a_write_soon_is_read_at_once_and_on_disk_after_the_flush() {
             let dir = std::env::temp_dir().join(format!("kessler-held-{}", std::process::id()));
@@ -469,14 +581,19 @@ mod held {
     }
 }
 
+/// Where the podcasts followed and the places left are written.
 fn path() -> PathBuf {
     crate::config::Config::config_dir().join("podcasts.toml")
 }
 
+/// Where fetched episodes are kept: beside the library's database, as the
+/// artists' files are.
 pub fn cache_dir() -> PathBuf {
     crate::config::Config::data_dir().join("podcasts")
 }
 
+/// The file an episode at `url` is fetched into: named by its address, with
+/// the extension the address has, so the decoder knows what it is.
 pub fn cached(url: &str) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -491,6 +608,7 @@ pub fn cached(url: &str) -> PathBuf {
     cache_dir().join(format!("{:016x}.{ext}", hasher.finish()))
 }
 
+/// The podcasts Apple's directory finds for `term`, the likeliest first.
 pub fn search(term: &str) -> Result<Vec<Show>, String> {
     let url = format!(
         "https://itunes.apple.com/search?media=podcast&entity=podcast&limit=40&term={}",
@@ -500,6 +618,7 @@ pub fn search(term: &str) -> Result<Vec<Show>, String> {
     Ok(shows_in(&text))
 }
 
+/// The shows in a reply of the search: those with a feed.
 pub fn shows_in(text: &str) -> Vec<Show> {
     let Some(json) = crate::json::Json::parse(text) else { return Vec::new() };
     json.list("results")
@@ -516,6 +635,7 @@ pub fn shows_in(text: &str) -> Vec<Show> {
         .collect()
 }
 
+/// Read the feed at `url`.
 pub fn fetch_feed(url: &str) -> Result<Feed, String> {
     match fetch_feed_since(url, None)? {
         Reading::Fresh { feed, .. } | Reading::Cached { feed, .. } => Ok(feed),
@@ -523,6 +643,11 @@ pub fn fetch_feed(url: &str) -> Result<Feed, String> {
     }
 }
 
+/// What a feed's server said it last was, to ask it next time whether it
+/// changed since (as AntennaPod and gPodder do): its `ETag` and its
+/// `Last-Modified`, each empty where it gave none — and a print of what came,
+/// for the servers that give neither or ignore them: the same print again,
+/// and the feed is not read again.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Validators {
@@ -537,6 +662,9 @@ impl Validators {
     }
 }
 
+/// The print of a feed's text, for [`Validators::digest`]: all of it but its
+/// `lastBuildDate`, which some servers set anew at every asking whether
+/// anything changed or not.
 fn feed_digest(text: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -552,17 +680,29 @@ fn feed_digest(text: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// What reading a feed came to.
 #[derive(Debug)]
 pub enum Reading {
+    /// What was kept of it on the disk, at once, before the network is
+    /// asked.
     Cached { feed: Feed, validators: Validators },
+    /// Read from its server; `moved` where it has moved for good — a
+    /// permanent redirect, or the feed's own `itunes:new-feed-url`.
     Fresh { feed: Feed, validators: Validators, moved: Option<String> },
+    /// Not changed since it was last read: nothing came, nothing read.
     Unchanged,
 }
 
+/// How long a feed's server may take to answer at all, how long the feed
+/// may stand still on its way, and how long the whole of it may take, in
+/// seconds, as curl is told them.
 const FEED_CONNECT: &str = "15";
 const FEED_STALLED: &str = "20";
 const FEED_AT_MOST: &str = "180";
 
+/// Read `url`, asking its server only for something newer than `since`
+/// where that is given. Asked for compressed, so a long feed comes as a
+/// fifth of itself.
 pub fn fetch_feed_since(url: &str, since: Option<&Validators>) -> Result<Reading, String> {
     let waited = std::time::Instant::now();
     let _turn = FeedSlot::take();
@@ -642,6 +782,8 @@ fn fetch_feed_taken(url: &str, since: Option<&Validators>) -> Result<Reading, St
     Ok(Reading::Fresh { feed, validators, moved })
 }
 
+/// The answers in what curl wrote of the headers, one for each address it
+/// went to: the status and the headers, their names in lower case.
 fn answers_in(said: &str) -> Vec<(u16, Vec<(String, String)>)> {
     let mut answers: Vec<(u16, Vec<(String, String)>)> = Vec::new();
     for line in said.lines() {
@@ -656,6 +798,8 @@ fn answers_in(said: &str) -> Vec<(u16, Vec<(String, String)>)> {
     answers
 }
 
+/// Where a feed has moved for good: as far as its server's redirects are
+/// permanent (301, 308) from the start, the last address they lead to.
 fn moved_for_good(url: &str, answers: &[(u16, Vec<(String, String)>)]) -> Option<String> {
     let mut at = url.to_string();
     let mut moved = None;
@@ -678,6 +822,8 @@ fn moved_for_good(url: &str, answers: &[(u16, Vec<(String, String)>)]) -> Option
     moved
 }
 
+/// Where what is kept of a feed lies: by its address, beside the
+/// podcasts' pictures.
 pub fn cached_feed_path(url: &str) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -685,16 +831,23 @@ pub fn cached_feed_path(url: &str) -> PathBuf {
     crate::config::Config::data_dir().join("podcast-feeds").join(format!("{:016x}.toml", hasher.finish()))
 }
 
+/// What is kept of a feed on the disk.
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct KeptFeed {
     validators: Validators,
     feed: Feed,
+    /// How the feed was read when it was kept: see [`FEED_READ`].
     read: u32,
 }
 
+/// How feeds are read, counted up when what is read out of them changes —
+/// the notes' entities, a picture taken from another tag. A feed kept before
+/// is still shown at once, but its server is asked for all of it again, not
+/// only whether it changed, so what it says is read the new way.
 const FEED_READ: u32 = 1;
 
+/// What was kept of `url`, where anything was.
 pub fn read_cached_feed(url: &str) -> Option<(Feed, Validators)> {
     let text = std::fs::read_to_string(cached_feed_path(url)).ok()?;
     let kept: KeptFeed = toml::from_str(&text).ok()?;
@@ -702,6 +855,8 @@ pub fn read_cached_feed(url: &str) -> Option<(Feed, Validators)> {
     Some((kept.feed, validators))
 }
 
+/// Keep `feed` of `url` on the disk, with what its server said of it, on
+/// a thread of its own.
 pub fn write_cached_feed(url: &str, feed: Feed, validators: Validators) {
     let path = cached_feed_path(url);
     std::thread::spawn(move || {
@@ -716,8 +871,13 @@ pub fn write_cached_feed(url: &str, feed: Feed, validators: Validators) {
     });
 }
 
+/// How many feeds are read at once. Sixty podcasts followed were sixty
+/// feeds read side by side as kessler started, each whole in memory with
+/// everything worked out of it, several megabytes for a long one.
 const FEEDS_AT_ONCE: usize = 4;
 
+/// One of the [`FEEDS_AT_ONCE`] turns at reading a feed, given back when
+/// dropped.
 struct FeedSlot;
 
 static FEED_SLOTS: (std::sync::Mutex<usize>, std::sync::Condvar) = (std::sync::Mutex::new(0), std::sync::Condvar::new());
@@ -742,6 +902,10 @@ impl Drop for FeedSlot {
     }
 }
 
+/// Read a feed on a thread of its own, the answers to be taken up as they
+/// come. With `from_disk`, what was kept of it comes first, at once, and
+/// its server is then asked only for something newer; `since` asks that of
+/// a feed already in memory.
 pub fn fetch_feed_later(url: &str, since: Option<Validators>, from_disk: bool) -> mpsc::Receiver<Result<Reading, String>> {
     let (tx, rx) = mpsc::channel();
     let url = url.to_string();
@@ -772,6 +936,7 @@ pub fn fetch_feed_later(url: &str, since: Option<Validators>, from_disk: bool) -
     rx
 }
 
+/// An episode's chapters from the file its feed points at, on a thread.
 pub fn chapters_later(url: &str) -> mpsc::Receiver<Vec<Chapter>> {
     let (tx, rx) = mpsc::channel();
     let url = url.to_string();
@@ -782,6 +947,9 @@ pub fn chapters_later(url: &str) -> mpsc::Receiver<Vec<Chapter>> {
     rx
 }
 
+/// When an episode came out, as its feed writes it (RFC 822) — read without
+/// the day of the week, which feeds get wrong often enough that the strict
+/// reading gave up on whole feeds.
 pub fn date_of(published: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     let text = published.trim();
     let text = match text.split_once(',') {
@@ -794,6 +962,8 @@ pub fn date_of(published: &str) -> Option<chrono::DateTime<chrono::FixedOffset>>
         .ok()
 }
 
+/// When an episode came out, for putting episodes of several podcasts in
+/// one order: seconds since 1970, 0 where the feed's date cannot be read.
 pub fn when(episode: &Episode) -> i64 {
     if episode.at != 0 {
         return episode.at;
@@ -801,6 +971,8 @@ pub fn when(episode: &Episode) -> i64 {
     date_of(&episode.published).map_or(0, |at| at.timestamp())
 }
 
+/// The same for a search. The podcast at a feed's address, as a search would
+/// have found it, on a thread of its own.
 pub fn show_at_later(url: &str) -> mpsc::Receiver<Result<Vec<Show>, String>> {
     let (tx, rx) = mpsc::channel();
     let url = url.trim().to_string();
@@ -814,6 +986,8 @@ pub fn show_at_later(url: &str) -> mpsc::Receiver<Result<Vec<Show>, String>> {
     rx
 }
 
+/// Whether what was typed is a feed's address rather than words to search
+/// for.
 pub fn is_address(typed: &str) -> bool {
     let typed = typed.trim();
     (typed.starts_with("https://") || typed.starts_with("http://") || typed.starts_with("feed://")) && !typed.contains(' ')
@@ -832,13 +1006,20 @@ pub fn search_later(term: &str) -> mpsc::Receiver<Result<Vec<Show>, String>> {
     rx
 }
 
+/// How a fetch of an episode stands.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fetching {
+    /// So many bytes of so many (0 where the server does not say).
     Under(u64, u64),
     Done(PathBuf),
     Failed(String),
 }
 
+/// Fetch the episode at `url` into its file in the cache, on a thread of its
+/// own: into a file beside it first, renamed once whole, so a broken fetch
+/// never passes for an episode. Already there, it is done at once. Begun
+/// before and broken off — the program quit, the machine went to sleep — it
+/// goes on where it stopped, where the server can send a part.
 pub fn fetch_episode(url: &str, bytes: u64) -> mpsc::Receiver<Fetching> {
     let (tx, rx) = mpsc::channel();
     let target = cached(url);
@@ -925,6 +1106,9 @@ pub fn fetch_episode(url: &str, bytes: u64) -> mpsc::Receiver<Fetching> {
     rx
 }
 
+/// The chapters in a fetched episode's own tag — see
+/// [`feed::chapters_in_id3`]. Only the tag is read, and no more of it than
+/// sixteen megabytes.
 pub fn chapters_in_file(file: &Path) -> Vec<Chapter> {
     use std::io::Read;
     let Ok(mut f) = std::fs::File::open(file) else { return Vec::new() };
@@ -941,10 +1125,16 @@ pub fn chapters_in_file(file: &Path) -> Vec<Chapter> {
     feed::chapters_in_id3(&tag)
 }
 
+/// curl's answer where a server will not send part of a file.
 const CURL_NO_RANGES: i32 = 33;
 
+/// How long an episode's broken-off fetch is kept to go on from.
 const PART_KEPT_DAYS: u64 = 7;
 
+/// Throw away the fetches broken off more than [`PART_KEPT_DAYS`] ago: the
+/// program quit or fell over in the middle of one, and nothing else lets go of
+/// a `.part` — the others are gone on from when asked for again. At the start,
+/// before anything is fetched.
 pub fn sweep_parts() {
     let Ok(dir) = std::fs::read_dir(cache_dir()) else { return };
     let limit = std::time::Duration::from_secs(PART_KEPT_DAYS * 86_400);
@@ -957,6 +1147,9 @@ pub fn sweep_parts() {
     }
 }
 
+/// Whether a `.part` stands still: nothing has been written to it for longer
+/// than a fetch may stand still before it is given up (curl's minute), so no
+/// fetch is under way into it.
 fn standing_still(entry: &std::fs::DirEntry) -> bool {
     entry
         .metadata()
@@ -966,6 +1159,8 @@ fn standing_still(entry: &std::fs::DirEntry) -> bool {
         .is_some_and(|age| age > std::time::Duration::from_secs(120))
 }
 
+/// Let go of an episode fetched, once heard to its end: the place kept
+/// says it was heard, and it would only take room.
 pub fn forget(file: &Path) {
     fetched_changed();
     if file.starts_with(cache_dir()) {
@@ -973,6 +1168,7 @@ pub fn forget(file: &Path) {
     }
 }
 
+/// Let go of every episode fetched — except the file `but`, the one playing.
 pub fn forget_all(but: Option<&Path>) {
     fetched_changed();
     let Ok(dir) = std::fs::read_dir(cache_dir()) else { return };
@@ -984,6 +1180,8 @@ pub fn forget_all(but: Option<&Path>) {
     }
 }
 
+/// Let go of the episodes fetched more than `days` ago — „geladene behalten"
+/// under podcasts — except the file `but`, the one playing.
 pub fn forget_older(days: u64, but: &[PathBuf]) -> usize {
     fetched_changed();
     let Ok(dir) = std::fs::read_dir(cache_dir()) else { return 0 };
@@ -999,6 +1197,8 @@ pub fn forget_older(days: u64, but: &[PathBuf]) -> usize {
     gone
 }
 
+/// Whether the episode at `url` is fetched — asked for every row on every
+/// frame, so the answer is kept for two seconds.
 pub fn is_fetched(url: &str) -> bool {
     use std::collections::HashMap;
     use std::time::{Duration, Instant};
@@ -1014,17 +1214,21 @@ pub fn is_fetched(url: &str) -> bool {
     here
 }
 
+/// What [`is_fetched`] last found, by address, and when.
 type FetchedKnown = std::collections::HashMap<String, (bool, std::time::Instant)>;
 static FETCHED_KNOWN: std::sync::Mutex<Option<FetchedKnown>> = std::sync::Mutex::new(None);
 
+/// Forget what [`is_fetched`] found, as files come and go.
 fn fetched_changed() {
     *FETCHED_KNOWN.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// Whether `path` is an episode still being fetched.
 fn is_part(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "part")
 }
 
+/// A podcast list as OPML, for any podcast app to read.
 pub fn opml(shows: &[Show]) -> String {
     let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<opml version=\"2.0\">\n  <head><title>kessler</title></head>\n  <body>\n");
@@ -1040,10 +1244,13 @@ pub fn opml(shows: &[Show]) -> String {
     out
 }
 
+/// The podcasts an OPML file names.
 pub fn shows_in_opml(text: &str) -> Vec<Show> {
     feed::opml_shows(text).into_iter().map(|(title, feed)| Show { title, feed, ..Default::default() }).collect()
 }
 
+/// Where a podcast's picture is kept: by its feed's address, beside the
+/// episodes' folder.
 pub fn artwork_path(show: &Show) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1051,6 +1258,8 @@ pub fn artwork_path(show: &Show) -> PathBuf {
     crate::config::Config::data_dir().join("podcast-art").join(format!("{:016x}", hasher.finish()))
 }
 
+/// Fetch a podcast's picture on a thread of its own, where it has one and
+/// it is not there yet; from `artwork`, else the feed's own.
 pub fn fetch_artwork(show: &Show, artwork: &str) {
     let path = artwork_path(show);
     let url = if show.artwork.is_empty() { artwork.to_string() } else { show.artwork.clone() };
@@ -1060,8 +1269,20 @@ pub fn fetch_artwork(show: &Show, artwork: &str) {
     picture_worker(url, path);
 }
 
+/// How big a podcast's picture is kept, on its longer side: twice the largest
+/// it is shown at, enough for a Retina screen. Until then they were kept as
+/// they came, often three thousand points a side.
 pub const PICTURE_SIDE: u32 = 600;
 
+/// `url` asked for no bigger than it is needed, where the server it is on
+/// makes a picture at another size on asking: Apple's — most podcasts' —
+/// name the size in the address (`…/3000x3000bb.jpg`), Simplecast's too
+/// (`…/3000x3000/1/image.jpg`); imgix (Megaphone and others), Acast, NPR,
+/// Squarespace and Substack take it as a parameter. Screened into dots a
+/// picture is never shown finer than a few hundred of them, and the
+/// difference is the network's time and the memory it is decoded in.
+/// Addresses that are signed — imgix with an `s=`, Transistor's — are left
+/// as they are: changed, they are refused. Any other server's too.
 pub fn smaller_picture_url(url: &str) -> String {
     let side = PICTURE_SIDE;
     let (address, query) = match url.split_once('?') {
@@ -1147,6 +1368,10 @@ pub fn smaller_picture_url(url: &str) -> String {
     }
 }
 
+/// Hand a picture to fetch to the one thread that fetches them all, in turn.
+///
+/// fifteen podcasts followed at once came to half a gigabyte, still there after
+/// the podcasts were switched off again. One thread reuses its own.
 fn picture_worker(url: String, path: PathBuf) {
     use std::sync::{mpsc, Mutex, OnceLock};
     static WORK: OnceLock<Mutex<mpsc::Sender<(String, PathBuf)>>> = OnceLock::new();
@@ -1166,6 +1391,8 @@ fn picture_worker(url: String, path: PathBuf) {
     let _ = send.lock().unwrap_or_else(|e| e.into_inner()).send((url, path));
 }
 
+/// Hand what the allocator holds free back to the system: a big picture
+/// unpacked and let go otherwise stays with the program.
 pub fn give_back_memory() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     unsafe {
@@ -1182,6 +1409,9 @@ pub fn give_back_memory() {
     }
 }
 
+/// Fetch the picture at `url` and keep it at `path`, made small — on
+/// [`picture_worker`]'s thread, one at a time, so thirty podcasts' pictures
+/// fetched together are not thirty big ones decoded at once.
 fn save_picture(url: &str, path: &Path) {
     let smaller = smaller_picture_url(url);
     let picture = |address: &str| crate::library::coverart::fetch(address).ok().filter(|b| image::guess_format(b).is_ok());
@@ -1196,6 +1426,8 @@ fn save_picture(url: &str, path: &Path) {
     }
 }
 
+/// `bytes`, a picture, made no bigger than [`PICTURE_SIDE`] and written as
+/// a JPEG — `None` where it is small enough already, or is no picture.
 pub fn small_picture(bytes: &[u8]) -> Option<Vec<u8>> {
     static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
@@ -1209,6 +1441,8 @@ pub fn small_picture(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Where an episode's own picture is kept: by its address, beside the podcasts'
+/// — one picture that many episodes share is kept once.
 pub fn episode_art_path(url: &str) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1216,6 +1450,9 @@ pub fn episode_art_path(url: &str) -> PathBuf {
     crate::config::Config::data_dir().join("podcast-art").join(format!("e{:016x}", hasher.finish()))
 }
 
+/// Fetch an episode's own picture, once a session at most, where it is not
+/// there yet — for the one looked at and the one playing, not for every row
+/// in a list.
 pub fn fetch_episode_art(url: &str) {
     use std::sync::Mutex;
     static ASKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -1234,6 +1471,8 @@ pub fn fetch_episode_art(url: &str) {
     picture_worker(url, path);
 }
 
+/// The picture to show for `episode` of `show`: its own where it has one
+/// and it is here, else the podcast's.
 pub fn picture_for(episode: &Episode, show: &Show) -> PathBuf {
     if !episode.artwork.is_empty() {
         let own = episode_art_path(&episode.artwork);
@@ -1244,10 +1483,16 @@ pub fn picture_for(episode: &Episode, show: &Show) -> PathBuf {
     artwork_path(show)
 }
 
+/// Let go of every podcast's picture, to be fetched again (menu → podcasts
+/// → „bilder neu laden").
 pub fn forget_artwork() {
     let _ = std::fs::remove_dir_all(crate::config::Config::data_dir().join("podcast-art"));
 }
 
+/// How much the fetched episodes take on the disk, in bytes.
+///
+/// Asked on every frame the first column or the podcasts' tab is drawn, so
+/// counted again only every two seconds.
 pub fn cache_size() -> u64 {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
@@ -1268,6 +1513,8 @@ pub fn cache_size() -> u64 {
 #[cfg(test)]
 mod tests {
 
+    /// The same feed with only its build date changed has the same print;
+    /// another episode, another print.
     #[test]
     fn a_feed_built_anew_but_the_same_is_the_same() {
         let a = "<rss><channel><lastBuildDate>Mon, 01 Jan 2024</lastBuildDate><item>1</item></channel></rss>";
@@ -1278,6 +1525,7 @@ mod tests {
         assert!(Validators { digest: feed_digest(a), ..Validators::default() }.any());
     }
 
+    /// What curl writes of the headers, one block per address, read back.
     #[test]
     fn answers_and_moves_are_read() {
         let said = "HTTP/1.1 301 Moved Permanently\r\nLocation: /new/feed.xml\r\n\r\nHTTP/2 200\r\netag: \"abc\"\r\nlast-modified: Mon, 01 Jan 2024 10:00:00 GMT\r\n\r\n";
@@ -1290,6 +1538,7 @@ mod tests {
         assert_eq!(moved_for_good("https://a.example/old.xml", &passing), None);
     }
 
+    /// What is kept of a feed on the disk comes back as it went.
     #[test]
     fn a_kept_feed_comes_back_whole() {
         let feed = Feed {
@@ -1315,6 +1564,8 @@ mod tests {
     }
     use super::*;
 
+    /// What was fetched by hand is kept by its address, written only where
+    /// there is any, and a file older than the field reads as none.
     #[test]
     fn an_episode_fetched_by_hand_is_held() {
         let old: Kept = toml::from_str("seen_at = 1").expect("read");
@@ -1333,6 +1584,8 @@ mod tests {
         assert!(kept.held.is_empty());
     }
 
+    /// Twice in the queue, the first stays; a played row of one to come
+    /// goes; the one that starts is in neither.
     #[test]
     fn an_episode_stands_in_the_queue_once() {
         let show = Show { title: "p".into(), feed: "f".into(), ..Default::default() };
@@ -1349,6 +1602,9 @@ mod tests {
         assert_eq!(ids(&kept.spent).iter().filter(|i| *i == "a").count(), 0);
     }
 
+    /// Going to a played row brings what came after it back as what is
+    /// to come, the one playing with it; going forward past rows to come
+    /// makes them played — as the music's queue moves its needle.
     #[test]
     fn the_queue_goes_back_and_forward_as_the_musics_does() {
         let show = Show { title: "p".into(), feed: "f".into(), ..Default::default() };
@@ -1367,6 +1623,8 @@ mod tests {
         assert_eq!(ids(&kept.queue), ["f"]);
     }
 
+    /// A played episode goes after the others; played again it moves to
+    /// the end, not in twice; the oldest go past the most kept.
     #[test]
     fn played_episodes_line_up_once_and_the_oldest_go() {
         let show = Show { title: "p".into(), feed: "f".into(), ..Default::default() };
@@ -1383,6 +1641,8 @@ mod tests {
         assert_eq!(kept.spent.last().map(|s| s.id.clone()), Some((SPENT_KEPT + 2).to_string()));
     }
 
+    /// Apple's pictures asked for at the size they are kept at; others as they
+    /// are.
     #[test]
     fn pictures_are_asked_for_small() {
         assert_eq!(
@@ -1413,6 +1673,7 @@ mod tests {
         assert_eq!(smaller_picture_url(transistor), transistor);
     }
 
+    /// A big picture kept small; a small one left as it is.
     #[test]
     fn a_big_picture_is_kept_small() {
         let encode = |side: u32| {
@@ -1426,6 +1687,8 @@ mod tests {
         assert!(small_picture(&encode(300)).is_none());
     }
 
+    /// „offen": begun and not finished, or out since following and not begun;
+    /// never heard to the end, never archived.
     #[test]
     fn what_is_open() {
         let show = Show { title: "s".into(), feed: "https://x/feed".into(), ..Default::default() };

@@ -1,3 +1,21 @@
+//! Small real audio files for the tests, written out as hex.
+//!
+//! Not files in the repository: the way between the two machines this project
+//! is built on rewrote a binary fixture in transit once — it arrived with a
+//! provenance tag stapled to the front — and a test that fails because of what
+//! happened to its own fixture on the way teaches nobody anything. As text they
+//! arrive exactly as they left.
+//!
+//! One silent fragment per format Kessler claims to play, each a real file
+//! made by a real encoder: MPEG frames, a FLAC stream, AAC and Apple Lossless in an MP4 box, Vorbis in Ogg, and PCM in RIFF, in AIFF and in AIFF-C. None carries a tag;
+//! all are enough for a tag library to identify the format, and for the
+//! decoder to prove it can open it. The MP4 one is written the way iTunes
+//! writes one — its index in front of its audio — because with the two the
+//! other way round rodio's decoder does not return an error but panics
+//! outright, and a fixture that walks into that tells us nothing about the
+//! files this program will meet — which is what `every_format_we_claim`
+//! in `player::audio` uses them for.
+
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -147,6 +165,9 @@ pub const WAV: &str = concat!(
     "00000000"
 );
 
+/// Apple Lossless in the same box — what iTunes writes when asked for lossless,
+/// Its index in front, as iTunes
+/// writes it.
 pub const M4A_ALAC: &str = concat!(
     "0000001c667479704d344120000002004d34412069736f6d69736f32000002866d6f6f760000",
     "006c6d766864000000000000000000000000000003e800000064000100000100000000000000",
@@ -169,6 +190,8 @@ pub const M4A_ALAC: &str = concat!(
     "001f6d6461740000100000064000000f080100000000000000ff818ff0"
 );
 
+/// PCM in an AIFF box: what a CD imported on a Mac is, when it is not
+/// compressed.
 pub const AIFF: &str = concat!(
     "464f524d0000034e41494646434f4d4d000000120001000001900010400bfa00000000000000",
     "53534e4400000328000000000000000000000000000000000000000000000000000000000000",
@@ -195,6 +218,8 @@ pub const AIFF: &str = concat!(
     "000000000000000000000000000000000000"
 );
 
+/// PCM in an AIFF-C box, little-endian (`sowt`): what GarageBand, Logic and
+/// macOS itself write when they say „AIFF", often under `.aifc`.
 pub const AIFC: &str = concat!(
     "464f524d00000360414946434656455200000004a2805140434f4d4d00000018000100000190",
     "0010400bfa00000000000000736f7774000053534e4400000328000000000000000000000000",
@@ -228,6 +253,7 @@ pub fn bytes(hex: &str) -> Vec<u8> {
         .collect()
 }
 
+/// A copy of one of them, somewhere it can be written to.
 pub fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("kessler-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -235,6 +261,7 @@ pub fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// Write one of them out as a real file.
 pub fn place(at: &Path, hex: &str) {
     if let Some(parent) = at.parent() {
         std::fs::create_dir_all(parent).unwrap();

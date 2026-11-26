@@ -1,3 +1,23 @@
+//! kessler in the panel on Linux.
+//!
+//! What the Mac calls the menu bar is, on a Linux desktop, the panel's tray,
+//! and the way into it is the StatusNotifierItem over D-Bus: KDE draws the
+//! items itself, as do XFCE, Cinnamon, LXQt and waybar; GNOME with the
+//! AppIndicator extension, which Ubuntu brings along. The item says what its
+//! picture is — pixels, sent anew for every picture of the scope or the
+//! running title — and where its menu is, which the panel then reads over a
+//! second interface, `com.canonical.dbusmenu`, and draws in its own style.
+//!
+//! The same picture as the Mac's: the box with the k cut out of it, drawn
+//! on the Rust side. A panel has no template images, so the colour is ours:
+//! light on a dark panel, dark on a light one — see [`ink`]. And the menu has
+//! the same words, but as lines: a panel's menu has no row of keys.
+//!
+//! One connection, made the first time the item is shown and kept: hiding
+//! gives its name back, which the panel takes as the item going away, and
+//! showing asks for it again. A panel started later — or restarted — is
+//! told of the item again when it comes.
+
 use super::Command;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
@@ -9,22 +29,29 @@ const MENU_PATH: &str = "/MenuBar";
 const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 
+/// The menu's lines, by id. The root is 0.
 const TITLE: i32 = 1;
 const PLAY: i32 = 3;
 const PREVIOUS: i32 = 4;
 const NEXT: i32 = 5;
 const SHOW: i32 = 7;
 const QUIT: i32 = 8;
+/// The volume: a panel's menu has no slider (dbusmenu knows none), so its
+/// figure, and a line each to raise and lower it by a tenth.
 const VOLUME: i32 = 9;
 const LOUDER: i32 = 10;
 const QUIETER: i32 = 11;
 const SPACE: i32 = 12;
+/// The sleep timer, while an episode plays: a click steps it on.
 const SLEEP: i32 = 13;
+/// How far „lauter" and „leiser" move it, in percent.
 const STEP: u8 = 10;
 const LINES: [i32; 13] = [TITLE, 2, PLAY, PREVIOUS, NEXT, SLEEP, SPACE, VOLUME, LOUDER, QUIETER, 6, SHOW, QUIT];
 
+/// A picture as the item sends it: width, height, ARGB bytes.
 type Pixmap = (i32, i32, Vec<u8>);
 
+/// The words of the menu, as the window last said them.
 #[derive(Default, Clone)]
 struct Words {
     play: String,
@@ -42,14 +69,20 @@ struct Words {
 #[derive(Default)]
 struct Shared {
     commands: VecDeque<Command>,
+    /// The picture as it came: black, the coverage in alpha.
     raw: Option<(Vec<u8>, usize, usize)>,
+    /// Light on a dark panel.
     light: bool,
     playing: bool,
     title: String,
+    /// The volume, in percent.
     volume: u8,
     words: Words,
+    /// Counted up whenever the menu says something else.
     revision: u32,
+    /// Whether the window wants the item there.
     shown: bool,
+    /// Whether the name is held, so the panel sees the item.
     held: bool,
 }
 
@@ -61,6 +94,7 @@ fn shared() -> &'static Mutex<Shared> {
 static CONNECTION: OnceLock<zbus::blocking::Connection> = OnceLock::new();
 static CONNECTING: std::sync::Once = std::sync::Once::new();
 
+/// The item's name on the bus, as the specification would have it.
 fn name() -> String {
     format!("org.kde.StatusNotifierItem-{}-1", std::process::id())
 }
@@ -76,6 +110,7 @@ pub fn poll() -> Option<Command> {
     shared().lock().ok()?.commands.pop_front()
 }
 
+/// Put the item in the panel, or take it out.
 pub fn show(show: bool) {
     let Ok(mut held) = shared().lock().map(|mut s| {
         s.shown = show;
@@ -105,6 +140,8 @@ pub fn show(show: bool) {
     }
 }
 
+/// Make the connection and serve both interfaces on it, then hold the name
+/// while the window wants the item, and tell every panel that comes along.
 fn connect() {
     let connection = zbus::blocking::connection::Builder::session()
         .and_then(|b| b.serve_at(ITEM_PATH, Item))
@@ -138,6 +175,7 @@ fn connect() {
     }
 }
 
+/// Take the name and tell the panel. Whether the name is held.
 fn hold(connection: &zbus::blocking::Connection) -> bool {
     if let Err(e) = connection.request_name(name()) {
         eprintln!("kessler: kein symbol in der leiste ({e})");
@@ -147,6 +185,8 @@ fn hold(connection: &zbus::blocking::Connection) -> bool {
     true
 }
 
+/// Tell the panel's watcher the item is there. Nobody to tell — no panel
+/// that draws such items — is no error: the item waits for one.
 fn register(connection: &zbus::blocking::Connection) {
     let _ = connection.call_method(
         Some(WATCHER),
@@ -157,6 +197,7 @@ fn register(connection: &zbus::blocking::Connection) {
     );
 }
 
+/// The picture: `wide` × `tall` pixels, black with the coverage in alpha.
 pub fn image(rgba: &[u8], wide: usize, tall: usize) {
     if let Ok(mut shared) = shared().lock() {
         shared.raw = Some((rgba.to_vec(), wide, tall));
@@ -164,6 +205,7 @@ pub fn image(rgba: &[u8], wide: usize, tall: usize) {
     emit(|e| async move { Item::new_icon(&e).await });
 }
 
+/// Light on a dark panel, dark on a light one.
 pub fn ink(light: bool) {
     let changed = shared().lock().is_ok_and(|mut s| std::mem::replace(&mut s.light, light) != light);
     if changed {
@@ -171,6 +213,7 @@ pub fn ink(light: bool) {
     }
 }
 
+/// What the menu says: what plays, whether it plays, and the words.
 pub fn state(playing: bool, title: &str, volume: u8, words: &super::TrayWords) {
     let revision = {
         let Ok(mut shared) = shared().lock() else {
@@ -202,6 +245,7 @@ pub fn state(playing: bool, title: &str, volume: u8, words: &super::TrayWords) {
     }
 }
 
+/// Send one of the item's signals, if the item is there to send it.
 fn emit<F, Fut>(signal: F)
 where
     F: FnOnce(SignalEmitter<'static>) -> Fut,
@@ -220,6 +264,8 @@ where
     let _ = zbus::block_on(signal(emitter));
 }
 
+/// The picture as the item sends it: square, as a panel draws its items, the
+/// box in the middle; in ARGB with the bytes in network order.
 fn pixmap(raw: &[u8], wide: usize, tall: usize, light: bool) -> Pixmap {
     let side = wide.max(tall);
     let (left, top) = ((side - wide) / 2, (side - tall) / 2);
@@ -235,18 +281,23 @@ fn pixmap(raw: &[u8], wide: usize, tall: usize, light: bool) -> Pixmap {
     (side as i32, side as i32, out)
 }
 
+/// `org.kde.StatusNotifierItem`: the picture, the tooltip, where the menu is.
 struct Item;
 
 #[zbus::interface(name = "org.kde.StatusNotifierItem")]
 impl Item {
+    /// A plain click: play and pause, as on a Mac; the right one opens the
+    /// menu.
     fn activate(&self, _x: i32, _y: i32) {
         push(Command::Toggle);
     }
 
+    /// The middle button: the window.
     fn secondary_activate(&self, _x: i32, _y: i32) {
         push(Command::Raise);
     }
 
+    /// The menu is the panel's to draw, from `Menu`.
     fn context_menu(&self, _x: i32, _y: i32) {}
 
     fn scroll(&self, _delta: i32, _orientation: String) {}
@@ -276,6 +327,7 @@ impl Item {
         0
     }
 
+    /// No named icon: the picture is ours.
     #[zbus(property)]
     fn icon_name(&self) -> String {
         String::new()
@@ -317,12 +369,14 @@ impl Item {
         String::new()
     }
 
+    /// kessler, and under it what plays.
     #[zbus(property)]
     fn tool_tip(&self) -> (String, Vec<Pixmap>, String, String) {
         let title = shared().lock().map(|s| s.title.clone()).unwrap_or_default();
         (String::new(), Vec::new(), "kessler".into(), title)
     }
 
+    /// Every click opens the menu, as on a Mac.
     #[zbus(property)]
     fn item_is_menu(&self) -> bool {
         false
@@ -340,6 +394,7 @@ impl Item {
     async fn new_tool_tip(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
+/// One line of the menu and the lines under it, as dbusmenu lays them out.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Type, Value, zbus::zvariant::OwnedValue)]
 struct Entry {
     id: i32,
@@ -347,6 +402,7 @@ struct Entry {
     children: Vec<OwnedValue>,
 }
 
+/// What line `id` says.
 fn properties(id: i32, shared: &Shared) -> HashMap<String, OwnedValue> {
     let mut map = HashMap::new();
     let mut put = |key: &str, value: Value| {
@@ -399,6 +455,7 @@ fn properties(id: i32, shared: &Shared) -> HashMap<String, OwnedValue> {
     map
 }
 
+/// The whole menu: no line has lines under it.
 fn layout(shared: &Shared) -> Entry {
     let children = LINES
         .iter()
@@ -414,6 +471,7 @@ fn layout(shared: &Shared) -> Entry {
     Entry { id: 0, properties: root, children }
 }
 
+/// What a click on line `id` asks for.
 fn clicked(id: i32) {
     match id {
         PLAY => push(Command::Toggle),
@@ -431,6 +489,7 @@ fn clicked(id: i32) {
     }
 }
 
+/// `com.canonical.dbusmenu`: the menu, for the panel to draw.
 struct Menu;
 
 #[zbus::interface(name = "com.canonical.dbusmenu")]
@@ -514,6 +573,8 @@ impl Menu {
 mod tests {
     use super::*;
 
+    /// The picture goes out square, the box in its middle, in the ink asked
+    /// for, the coverage in the first byte of each pixel.
     #[test]
     fn the_picture_goes_out_square() {
         let mut raw = vec![0u8; 4 * 2 * 4];
@@ -526,6 +587,8 @@ mod tests {
         assert_eq!(&dark[16..20], &[255, 0x1C, 0x1C, 0x1C]);
     }
 
+    /// The menu has its eight lines, says play or pause as the music does,
+    /// and hides the title's line while nothing plays.
     #[test]
     fn the_menu_says_what_plays() {
         let mut shared = Shared { words: Words { play: "play".into(), pause: "pause".into(), ..Default::default() }, ..Default::default() };

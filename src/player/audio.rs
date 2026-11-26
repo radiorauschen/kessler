@@ -11,37 +11,96 @@ use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 
 use crate::error::{KesslerError, Result};
 
+/// Low-level audio output using rodio.
+///
+/// The output device is optional. A machine with no sound card — a container,
+/// a session over SSH, a laptop whose Bluetooth headphones just walked out of
+/// range — should still be able to browse a library and read its tags. So a
+/// missing device is not an error here: the engine keeps working and stays
+/// silent, and [`AudioEngine::is_available`] lets the interface say so.
+///
+/// **The device is opened when there is something to play, and let go of
+/// when there has not been for a while** — see [`AudioEngine::rest_when_idle`].
+/// An open output never stops: with nothing to play it sends silence to the
+/// card, all day, and on a Mac an output that is running keeps the machine
+/// from going to sleep by itself. It also stays bound to the device it was
+/// opened on, so headphones plugged in later were never heard from; opened
+/// afresh, it takes whatever the system's output is now.
 pub struct AudioEngine {
+    /// The open device and the sink on it, while there is one.
     output: RefCell<Option<Output>>,
+    /// The volume, kept here so a device opened later starts at it.
     volume: Cell<f32>,
+    /// A paused track whose device was let go of: which file, and where in
+    /// it. Resuming opens the device again, then the file, then goes there.
     parked: RefCell<Option<PathBuf>>,
+    /// When the pause began — see [`FRESH_AFTER`].
     paused_at: Cell<Option<Instant>>,
+    /// What plays was opened elsewhere and may still be growing — an
+    /// episode on its way in. Opened again from its file it would end where
+    /// the file ends now, so a pause alone does not open it afresh.
     borrowed: Cell<bool>,
+    /// Whether what plays was kept steady — see [`super::watch::steady`] — so
+    /// that taken up again after a long pause it is again.
     steadied: Cell<bool>,
+    /// Which file is at the front of the sink — what [`Self::parked`] takes
+    /// when the device is let go of.
     playing_path: RefCell<VecDeque<PathBuf>>,
+    /// How long each file handed to the sink runs, oldest first.
+    ///
+    /// A sink is a queue, and that is the whole of gapless playing: the next
+    /// file is decoded and put behind the current one while it is still
+    /// running, so the hand-over happens inside the sink with no gap at all.
+    /// What the sink cannot say is *which* of them is playing now — only how
+    /// many are left — so their lengths are kept here in the same order, and
+    /// the front of this line is what is playing.
     lined_up: Arc<Mutex<VecDeque<Duration>>>,
+    /// When playback started (for position tracking).
     playback_start: Arc<Mutex<Option<Instant>>>,
+    /// Accumulated position before last pause.
     accumulated_position: Arc<Mutex<Duration>>,
+    /// Total duration of the current track.
     track_duration: Arc<Mutex<Duration>>,
+    /// Why there is no sound, when there is none.
     unavailable_reason: RefCell<Option<String>>,
+    /// The samples on their way to the card, for whatever draws them.
     heard: Arc<Heard>,
+    /// How loud each file is to be played — see [`super::leveling`].
     leveling: Arc<super::leveling::Leveling>,
 }
 
+/// An open device and the sink playing into it.
 struct Output {
+    /// Held, not used: dropping it closes the device.
     _stream: MixerDeviceSink,
     sink: Arc<Mutex<Player>>,
+    /// Since when it has had nothing to do, if it has had nothing to do.
     idle_since: Option<Instant>,
+    /// The rate it was opened at, and when the device was last asked whether it
+    /// still runs at it.
     rate: u32,
     asked_at: Instant,
+    /// The device's name as it was opened, to see at „play" whether the
+    /// system has moved on to another one since.
     name: String,
+    /// Said by the stream itself, from its own thread: the device went away or
+    /// was changed under it, and nothing played into it is heard any more.
     lost: Arc<AtomicBool>,
 }
 
+/// A pause longer than this ends on a freshly opened device rather than on the
+/// one it began on. A stream left open over a pause is the one thing here
+/// nobody is listening to: the lid closed, the headphones taken off, the system
+/// moved to another output — and „play" went into a stream that no longer
+/// sounded. Opening it costs a few milliseconds; below this, a pause is a pause
+/// and resumes on the sample.
 const FRESH_AFTER: Duration = Duration::from_secs(10);
 
+/// How often the device is asked whether its rate is still the one it was
+/// opened at, while something plays.
 const DEVICE_ASKED_EVERY: Duration = Duration::from_secs(3);
 
+/// The default output device's rate and name as the system says them now.
 fn device_now() -> Option<(u32, String)> {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
     let device = rodio::cpal::default_host().default_output_device()?;
@@ -50,10 +109,21 @@ fn device_now() -> Option<(u32, String)> {
     Some((rate, name))
 }
 
+/// How long the device is kept with nothing in it — stopped, or at the end
+/// of the queue — before it is let go of. Long enough that nothing between
+/// two clicks closes it; short enough that a finished record does not keep
+/// the card running for the rest of the evening.
 const REST_EMPTY: Duration = Duration::from_secs(20);
+/// And how long with a track paused in it. Longer: a pause is often a phone
+/// call, and the first second after pressing play again is spent opening the
+/// device rather than playing.
 const REST_PAUSED: Duration = Duration::from_secs(5 * 60);
 
 impl AudioEngine {
+    /// Create an engine. The device is not opened yet — only looked for, so
+    /// the interface can say straight away when there is none.
+    ///
+    /// Never fails for want of a device — see the type's documentation.
     pub fn new() -> Result<Self> {
         let engine = Self {
             output: RefCell::new(None),
@@ -83,10 +153,12 @@ impl AudioEngine {
         *self.unavailable_reason.borrow_mut() = Some(reason);
     }
 
+    /// The sink, if the device is open.
     fn sink(&self) -> Option<Arc<Mutex<Player>>> {
         self.output.borrow().as_ref().map(|o| Arc::clone(&o.sink))
     }
 
+    /// The sink, opening the device for it if it is not open.
     fn woken_sink(&self) -> Option<Arc<Mutex<Player>>> {
         if let Some(sink) = self.sink() {
             return Some(sink);
@@ -136,6 +208,11 @@ impl AudioEngine {
         }
     }
 
+    /// Let go of the device if it has had nothing to play for long enough.
+    ///
+    /// Asked on every tick of the player, playing or not. Nothing to play
+    /// means an empty sink, or a paused one; a paused track is remembered
+    /// (which file, where in it) so pressing play picks it up where it was.
     pub fn rest_when_idle(&self) {
         if self.output.borrow().as_ref().is_some_and(|open| open.lost.load(Ordering::Relaxed)) {
             self.open_afresh();
@@ -183,6 +260,9 @@ impl AudioEngine {
         tracing::debug!("das ausgabegerät ist losgelassen");
     }
 
+    /// Close the device and open it again, with what was in it: a track
+    /// playing goes on from where it was, a paused one waits there for
+    /// „play", an empty sink is simply let go of.
     fn open_afresh(&self) {
         let Some(open) = self.output.borrow_mut().take() else { return };
         let (empty, paused) = {
@@ -215,10 +295,17 @@ impl AudioEngine {
         }
     }
 
+    /// The sound itself, for the things that draw it.
+    ///
+    /// Handed out rather than copied: two pictures may want it in the same
+    /// frame, and it is the same stream.
     pub fn heard(&self) -> Arc<Heard> {
         Arc::clone(&self.heard)
     }
 
+    /// How long until [`Self::rest_when_idle`] would let the device go, if
+    /// it is open and idle — for the window, which draws nothing while
+    /// nothing changes and so has to be asked back at that moment.
     pub fn rest_due_in(&self) -> Option<Duration> {
         let output = self.output.borrow();
         let open = output.as_ref()?;
@@ -228,14 +315,29 @@ impl AudioEngine {
         Some(long_enough.saturating_sub(since.elapsed()) + Duration::from_millis(50))
     }
 
+    /// Whether there is an output device to play through — open, or to be
+    /// opened when there is something to play.
     pub fn is_available(&self) -> bool {
         self.unavailable_reason.borrow().is_none()
     }
 
+    /// Why playback is silent, when it is.
     pub fn unavailable_reason(&self) -> Option<String> {
         self.unavailable_reason.borrow().clone()
     }
 
+    /// Load and start playing a file.
+    ///
+    /// `duration_hint` is the length we already know from the file's tags.
+    /// Most MP3 decoders cannot report a total duration up front, so without
+    /// the hint the progress bar would stay empty.
+    ///
+    /// A file that is simply not there any more is answered with
+    /// [`KesslerError::Gone`] rather than with a decoder's complaint: the
+    /// shelf is a picture of the disk taken when it was last read, and the
+    /// disk is allowed to have moved on. Asked before opening, because the
+    /// reason matters more than the failure — the window marks the row with
+    /// it.
     pub fn play_file(&self, path: &Path, duration_hint: Option<Duration>) -> Result<()> {
         self.steadied.set(false);
         if matches!(path.try_exists(), Ok(false)) {
@@ -280,6 +382,8 @@ impl AudioEngine {
         Ok(())
     }
 
+    /// [`Self::play_file`], kept at the rate and channels the file begins with,
+    /// and watched — see [`super::watch`]. For a podcast's episode.
     pub fn play_file_steady(&self, path: &Path, duration_hint: Option<Duration>) -> Result<()> {
         if matches!(path.try_exists(), Ok(false)) {
             return Err(KesslerError::Gone(path.to_path_buf()));
@@ -293,10 +397,15 @@ impl AudioEngine {
         Ok(())
     }
 
+    /// What plays now was kept steady by the caller — see
+    /// [`Self::play_file_steady`].
     pub fn mark_steadied(&self) {
         self.steadied.set(true);
     }
 
+    /// Start a source opened elsewhere — a file still being fetched — as
+    /// `play_file` starts a file: `path` names it, `duration_hint` is its
+    /// length where the source does not know it.
     pub fn play_source<S: Source + Send + 'static>(&self, source: S, path: &Path, duration_hint: Option<Duration>) {
         let total = source.total_duration().or(duration_hint).unwrap_or(Duration::ZERO);
         self.borrowed.set(true);
@@ -318,6 +427,9 @@ impl AudioEngine {
         *self.playback_start.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     }
 
+    /// Start a station's stream, opened on another thread by
+    /// [`super::stream::open`]: what `play_file` does with a file, with no
+    /// length to know and nothing to lay behind it.
     pub fn play_stream(&self, source: Decoder<BufReader<super::stream::Stream>>, url: &str) {
         self.steadied.set(false);
         *self.parked.borrow_mut() = None;
@@ -338,6 +450,19 @@ impl AudioEngine {
         *self.playback_start.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     }
 
+    /// Lay a file behind the one playing, so the two run into each other.
+    ///
+    /// Nothing about the sound changes when the hand-over comes: the sink
+    /// simply reaches the end of one source and starts the next, which is what
+    /// a record does between two bands. The old way — waiting for the sink to
+    /// run dry, then opening the next file and starting the decoder — put a
+    /// hole of a few hundred milliseconds between every two tracks, and on a
+    /// record that runs through, that hole is the whole difference.
+    ///
+    /// Refused while nothing is playing, and refused twice over: exactly one
+    /// track is ever laid out, because a sink cannot take a source back once
+    /// it has been given one — see [`Self::lined_up_len`], which is how the
+    /// player finds out that what it laid out is no longer what it wants.
     pub fn line_up(&self, path: &Path, duration_hint: Option<Duration>) -> bool {
         let Some(sink) = self.sink() else { return false };
         if self.lined_up.lock().unwrap_or_else(|e| e.into_inner()).len() != 1 {
@@ -358,14 +483,26 @@ impl AudioEngine {
         true
     }
 
+    /// The file being heard right now, as the sink has it.
     pub fn now_playing(&self) -> Option<PathBuf> {
         self.playing_path.borrow().front().cloned()
     }
 
+    /// How many files the sink is holding, the one playing included.
     pub fn lined_up_len(&self) -> usize {
         self.lined_up.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
+    /// Whether the sink has moved on to the file laid out behind this one.
+    ///
+    /// Asked every frame. The sink says only how many sources are left, so a
+    /// hand-over is seen rather than announced: one fewer than we put there
+    /// means the next one has begun, and the clock that counts the position
+    /// starts again from nothing.
+    /// A sink that has run all the way dry is not a hand-over, whatever it is
+    /// holding: both files ended between two frames, which the old path deals
+    /// with properly. Counting it here would move the queue on twice for one
+    /// track that was heard.
     pub fn handed_over(&self) -> bool {
         let Some(sink) = self.sink() else { return false };
         let left = sink.lock().unwrap_or_else(|e| e.into_inner()).len();
@@ -387,6 +524,7 @@ impl AudioEngine {
         true
     }
 
+    /// Pause playback.
     pub fn pause(&self) {
         let Some(sink) = self.sink() else { return };
         let sink = sink.lock().unwrap_or_else(|e| e.into_inner());
@@ -400,6 +538,7 @@ impl AudioEngine {
         }
     }
 
+    /// Resume playback.
     pub fn resume(&self) {
         let long = self.paused_at.take().is_some_and(|at| at.elapsed() >= FRESH_AFTER) && !self.borrowed.get();
         let moved = self.output.borrow().as_ref().is_some_and(|open| {
@@ -422,6 +561,7 @@ impl AudioEngine {
         }
     }
 
+    /// Pick a parked track up where it was paused.
     fn unpark(&self, path: &Path) {
         let at = *self.accumulated_position.lock().unwrap_or_else(|e| e.into_inner());
         let Some(sink) = self.woken_sink() else { return };
@@ -443,6 +583,7 @@ impl AudioEngine {
         paths.push_back(path.to_path_buf());
     }
 
+    /// Stop playback completely.
     pub fn stop(&self) {
         *self.parked.borrow_mut() = None;
         if let Some(sink) = self.sink() {
@@ -452,10 +593,12 @@ impl AudioEngine {
         *self.accumulated_position.lock().unwrap_or_else(|e| e.into_inner()) = Duration::ZERO;
     }
 
+    /// The levelling table and switch, for the window to fill and set.
     pub fn leveling(&self) -> Arc<super::leveling::Leveling> {
         Arc::clone(&self.leveling)
     }
 
+    /// Set volume.
     pub fn set_volume(&self, volume: f32) {
         let volume = volume.clamp(0.0, 1.0);
         self.volume.set(volume);
@@ -464,6 +607,10 @@ impl AudioEngine {
         }
     }
 
+    /// Whether the sink has finished playing (queue empty).
+    ///
+    /// With no device there is nothing to finish, so this stays false rather
+    /// than making the queue race to its end.
     pub fn is_finished(&self) -> bool {
         match self.sink() {
             Some(sink) => sink.lock().unwrap_or_else(|e| e.into_inner()).empty(),
@@ -471,6 +618,12 @@ impl AudioEngine {
         }
     }
 
+    /// Jump to a position in the current track.
+    ///
+    /// Returns false when the format cannot be seeked (rodio refuses some) or
+    /// there is no device. The position bookkeeping runs off wall-clock time,
+    /// so it has to be reset here or the display would keep counting from
+    /// wherever it was.
     pub fn seek(&self, position: Duration) -> bool {
         if self.parked.borrow().is_some() {
             *self.accumulated_position.lock().unwrap_or_else(|e| e.into_inner()) = position;
@@ -492,6 +645,9 @@ impl AudioEngine {
         true
     }
 
+    /// Get the current playback position — never past the track's end. The
+    /// clock is a stopwatch beside the sound, not the sound itself; with no
+    /// card to play on it ran on to „0:40 / 0:04" (smoke test).
     pub fn position(&self) -> Duration {
         let acc = *self.accumulated_position.lock().unwrap_or_else(|e| e.into_inner());
         let at = if let Some(start) = *self.playback_start.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -503,10 +659,12 @@ impl AudioEngine {
         if total.is_zero() { at } else { at.min(total) }
     }
 
+    /// Get the total duration of the current track.
     pub fn duration(&self) -> Duration {
         *self.track_duration.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Get the playback progress as a fraction 0.0..1.0.
     pub fn progress(&self) -> f64 {
         let dur = self.duration();
         if dur.is_zero() {
@@ -517,6 +675,16 @@ impl AudioEngine {
     }
 }
 
+/// Open a file for playback.
+///
+/// `Decoder::try_from(File)` rather than `Decoder::new(reader)`: only the
+/// first tells the decoder how long the file is, and the MP4 reader cannot
+/// work without that — it has to reach the index, which may sit behind the
+/// audio. Handed a reader of unknown length it tries to seek, fails, and the
+/// failure is not returned but reached as an `unreachable!()` deep in rodio.
+///
+/// Which is why the panic is caught as well. One odd file in eight thousand
+/// should be a sentence in the status line, not the end of the evening.
 pub fn open(
     path: &Path,
 ) -> std::result::Result<super::gapless::Trimmed<Decoder<BufReader<File>>>, String> {
@@ -534,9 +702,15 @@ pub fn open(
 }
 
 thread_local! {
+    /// Whether a panic on this thread is one [`quietly`] expects.
     static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Run `work`, a panic in it caught and not written to the terminal.
+///
+/// Files are opened on several threads at once — the player's, the one
+/// measuring loudness. One hook now, set once, silent only for the thread that
+/// asked.
 pub(super) fn quietly<T>(work: impl FnOnce() -> T + std::panic::UnwindSafe) -> std::thread::Result<T> {
     static HOOKED: std::sync::Once = std::sync::Once::new();
     HOOKED.call_once(|| {
@@ -553,21 +727,54 @@ pub(super) fn quietly<T>(work: impl FnOnce() -> T + std::panic::UnwindSafe) -> s
     done
 }
 
+/// How many frames are kept for whoever wants to draw them.
+///
+/// Two thousand is a little under a twentieth of a second at CD rate: long
+/// enough for the lowest band either picture shows to have a couple of whole
+/// waves in it, and a little more than one frame of the search field's
+/// picture at thirty a second — so the vectorscope draws every sample that
+/// went past, with a margin for its filters to settle in.
 const KEPT: usize = 2048;
 
+/// How many frames the ring holds: three seconds at CD rate, well over one at
+/// 96 kHz. The pictures take the last [`KEPT`] of them as they always did; the
+/// long-exposed vectorscope takes all it missed since its last frame — a
+/// quarter of a second, or a whole one in step with the clock — and lays it
+/// down in steps; see `gui::library::picture::look_in`. A megabyte, written in
+/// blocks.
 const HELD: usize = 131_072;
 
+/// How many frames are collected before the ring is touched.
+///
+/// The tap sits in the audio thread, between the decoder and the card, and
+/// that thread has a deadline: a lock taken per sample would be forty
+/// thousand locks a second for a picture nobody is even always looking at.
+/// So the frames pile up in the tap's own scratch and go over in blocks.
 const BLOCK: usize = 128;
 
+/// The sound itself, for the things that draw it.
+///
+/// Two readings of the same stream: the last few hundredths of a second of
+/// it folded to one channel, and the same moments with the two channels kept
+/// apart. The first is what a spectrum is made of — see [`crate::gui::sound`]; the
+/// second is what a vectorscope is made of — see [`crate::gui::scope`].
+///
+/// Written by the audio thread, read by the window. Neither waits for the
+/// other for longer than a memcpy of sixteen kilobytes.
 #[derive(Debug, Default)]
 pub struct Heard {
     ring: Mutex<Ring>,
+    /// Frames a second, of whatever was heard last. Nought before anything
+    /// has been.
     rate: std::sync::atomic::AtomicU32,
 }
 
 #[derive(Debug)]
 struct Ring {
+    /// Left and right. A mono file is heard as the same sample twice, which
+    /// is what it is: a sound in the middle.
     frames: Vec<[f32; 2]>,
+    /// Where the next frame goes.
     at: usize,
 }
 
@@ -581,6 +788,11 @@ impl Default for Ring {
 }
 
 impl Heard {
+    /// The last [`KEPT`] frames, oldest first, each folded to one sample.
+    ///
+    /// Copied out rather than borrowed: the audio thread is writing into the
+    /// ring while the window draws, and a picture built from a buffer that is
+    /// being written under it is a picture with a seam in it.
     pub fn recent(&self) -> Vec<f32> {
         self.recent_pairs()
             .into_iter()
@@ -588,10 +800,12 @@ impl Heard {
             .collect()
     }
 
+    /// The last [`KEPT`] frames, oldest first, left and right.
     pub fn recent_pairs(&self) -> Vec<[f32; 2]> {
         self.last_pairs(KEPT)
     }
 
+    /// The last `wanted` frames, at most [`HELD`], oldest first.
     pub fn last_pairs(&self, wanted: usize) -> Vec<[f32; 2]> {
         let wanted = wanted.min(HELD);
         if wanted == 0 {
@@ -612,6 +826,8 @@ impl Heard {
         out
     }
 
+    /// Frames a second of what [`Heard::recent_pairs`] holds. A filter tuned
+    /// to a pitch has to know how far apart the samples are.
     pub fn rate(&self) -> u32 {
         self.rate.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -628,6 +844,8 @@ impl Heard {
             .store(rate, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Nothing is playing any more: the picture should settle rather than
+    /// freeze on the last thing it heard.
     fn quiet(&self) {
         if let Ok(mut ring) = self.ring.lock() {
             ring.frames.fill([0.0; 2]);
@@ -636,16 +854,33 @@ impl Heard {
     }
 }
 
+/// A source that hands every sample on — levelled, when levelling is on —
+/// and keeps a copy.
+///
+/// The one honest way to draw the music: not the file's tags, not the
+/// position in the track, but the samples on their way to the card. It costs
+/// one copy per sample, and nothing at all when nobody looks.
+///
+/// The first two channels are kept as left and right; a mono file is heard in
+/// both, and anything past the second channel — a centre, a surround — is
+/// left out rather than guessed into one side or the other.
 struct Tap<S> {
     inner: S,
     heard: Arc<Heard>,
     scratch: Vec<[f32; 2]>,
     channels: u16,
     rate: u32,
+    /// The frame being put together, and how many of its samples are in.
     pending: ([f32; 2], u16),
+    /// Levelling's switch, read per sample so a change is heard at once,
+    /// and this file's two factors — see [`super::leveling`].
     switch: Option<Arc<std::sync::atomic::AtomicU8>>,
     factors: super::leveling::Factors,
+    /// The factor being applied, which walks to the wanted one over some
+    /// milliseconds rather than jumping — a jump in the middle of a wave is
+    /// a click. `None` until the first sample, which starts where it should.
     gain_now: Option<f32>,
+    /// The equalizer, after the levelling — see [`super::eq`].
     eq: super::eq::Running,
 }
 
@@ -670,6 +905,7 @@ where
         }
     }
 
+    /// The same, levelled by the engine's table for `path`.
     fn levelled(inner: S, heard: Arc<Heard>, leveling: &super::leveling::Leveling, path: &Path) -> Self {
         let mut tap = Self::new(inner, heard);
         tap.switch = Some(leveling.switch());
@@ -743,6 +979,19 @@ where
         self.inner.total_duration()
     }
 
+    /// Hand a seek straight through to the file underneath.
+    ///
+    /// Not optional, and the reason for the test at the foot of this file: a
+    /// `Source` that does not say this gets the default, and the default
+    /// refuses every seek. So putting anything at all in front of the decoder
+    /// takes seeking away from every format at once — and the window can only
+    /// report what it is told, about files that seek perfectly well. That is
+    /// what happened when this tap was put in the path.
+    ///
+    /// Everything the tap is holding goes with the jump: half a frame that
+    /// belongs to the old position, a block that was still filling, and the
+    /// ring the picture is drawn from. Otherwise the first thing drawn after a
+    /// seek is the second before it.
     fn try_seek(&mut self, pos: Duration) -> std::result::Result<(), rodio::source::SeekError> {
         self.inner.try_seek(pos)?;
         self.pending = ([0.0; 2], 0);
@@ -757,6 +1006,7 @@ where
 mod format_support {
     use crate::library::{fixtures, metadata};
 
+    /// A file of this format, as hex — or `None` if we never made one.
     fn fixture(extension: &str) -> Option<&'static str> {
         Some(match extension {
             "mp3" => fixtures::MP3,
@@ -781,6 +1031,8 @@ mod format_support {
         }
     }
 
+    /// Exactly what playback does, minus the sound card — the same function,
+    /// so a format that passes here is a format that plays.
     fn opens(path: &std::path::Path) -> Result<(), String> {
         super::open(path).map(|_| ())
     }
@@ -807,6 +1059,9 @@ mod format_support {
         );
     }
 
+    /// Apple Lossless shares its extension with AAC, so the loop above never
+    /// meets it: an `.m4a` from iTunes' lossless import said „unrecognized
+    /// format" without the decoder for it built in.
     #[test]
     fn apple_lossless_decodes_too() {
         let dir = fixtures::scratch("alac");
@@ -816,6 +1071,8 @@ mod format_support {
         assert!(!samples.is_empty(), "and gives sound");
     }
 
+    /// Read ahead, every format gives the same samples as read on the spot
+    /// — the store changes when the file is decoded, not what comes out.
     #[test]
     fn reading_ahead_changes_nothing_that_is_heard() {
         let dir = fixtures::scratch("ahead");
@@ -830,6 +1087,13 @@ mod format_support {
         }
     }
 
+    /// Point this at a file of your own to find out whether it would play.
+    ///
+    ///   KESSLER_TRY_FILE=".../something.m4a" cargo test a_real_file -- --nocapture
+    ///
+    /// The fixtures here are made by ffmpeg, and a format has corners that one
+    /// encoder may never turn. When the question is "will my two hundred files
+    /// play", only one of those files can answer it.
     #[test]
     fn a_real_file_decodes() {
         let Ok(path) = std::env::var("KESSLER_TRY_FILE") else {
@@ -843,6 +1107,7 @@ mod format_support {
         }
     }
 
+    /// The two lists must stay disjoint as formats move between them.
     #[test]
     fn nothing_is_both_playable_and_passed_over() {
         for extension in metadata::SUPPORTED_EXTENSIONS {
@@ -859,6 +1124,7 @@ mod tap {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// A source that counts the seeks it is asked for and plays a steady tone.
     struct Stand {
         seeks: Arc<AtomicUsize>,
         left: usize,
@@ -894,6 +1160,13 @@ mod tap {
         }
     }
 
+    /// The tap hands a seek through to the file underneath.
+    ///
+    /// The regression this exists for: putting the tap in front of the decoder
+    /// gave `Source:try_seek` its default, which refuses — so every track in
+    /// every format answered, and the tap, which has nothing to do with
+    /// seeking, was the last place anybody would look. Anything else put in
+    /// this path must pass this test too.
     #[test]
     fn a_seek_reaches_the_file_through_the_tap() {
         let seeks = Arc::new(AtomicUsize::new(0));
@@ -912,6 +1185,8 @@ mod tap {
         assert_eq!(seeks.load(Ordering::Relaxed), 1, "the file was never asked");
     }
 
+    /// And throws away what it was holding, so the picture does not carry the
+    /// old position across the jump.
     #[test]
     fn a_seek_empties_what_the_tap_was_holding() {
         let heard = Arc::new(Heard::default());
@@ -943,6 +1218,10 @@ mod tap {
             "the ring still holds the second before the jump"
         );
     }
+    /// Two channels go into the ring as two, not folded: the vectorscope in
+    /// the search field draws the left against the right, and a ring of means
+    /// would draw every record as mono. The mean is still there for the
+    /// spectrum, worked out on the way out.
     #[test]
     fn the_ring_keeps_left_and_right_apart() {
         struct Wide(usize);
@@ -979,6 +1258,7 @@ mod tap {
         assert_eq!(heard.rate(), 48_000, "the ring does not know how fast it runs");
     }
 
+    /// And a mono file is heard in both, which is where it is: the middle.
     #[test]
     fn a_mono_file_is_heard_in_both_channels() {
         let heard = Arc::new(Heard::default());
@@ -995,6 +1275,9 @@ mod tap {
         assert_eq!(*heard.recent_pairs().last().unwrap(), [0.5, 0.5]);
     }
 
+    /// The ring keeps more than the pictures take: the last [`KEPT`] as
+    /// before, and as far back as [`HELD`] for a long exposure, oldest first
+    /// across the seam where it wraps.
     #[test]
     fn the_ring_hands_back_as_much_as_is_asked() {
         let heard = Heard::default();
@@ -1014,6 +1297,11 @@ mod tap {
 
 #[cfg(test)]
 mod gapless_probe {
+    /// Not a test of the program but of the decoders under it: two halves of
+    /// one continuous tone, decoded the way playback decodes them, laid end
+    /// to end — how many samples of silence, or of a jump, stand at the join?
+    ///
+    /// `GAP_DIR` names a folder holding `a.<ext>` and `b.<ext>`.
     #[test]
     #[ignore]
     fn the_join_between_two_halves() {

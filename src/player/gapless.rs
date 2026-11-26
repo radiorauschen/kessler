@@ -1,3 +1,30 @@
+//! The silence an AAC encoder puts at both ends of a file, and taking it off.
+//!
+//! An AAC stream cannot start on its first sample: the encoder needs a block of
+//! run-up, and whatever the file's last block does not fill is padded. So every
+//! AAC file carries some silence it was never meant to have — a thousand
+//! samples or two at the front, a few hundred at the back — and the container
+//! writes down exactly how much, so that a player can cut it off again. The
+//! decoder under Kessler does not read that note, and two halves of one
+//! continuous piece came out with seventy milliseconds of nothing between them:
+//! small enough to miss on a pop album, and the whole of the problem on a live
+//! record or a DJ mix, which is where anybody listens for it.
+//!
+//! MP3 does not need this — its note (the LAME header) is read by the decoder
+//! and the join comes out exact — and neither do FLAC or WAV, which have no
+//! run-up at all. The probe at the foot of `audio.rs` measures all four.
+//!
+//! There are two places the note can be, and both are read:
+//!
+//! - `iTunSMPB`, a text tag iTunes writes: the run-up, the padding, and the
+//!   length that is left, in samples. Most files from iTunes carry it.
+//! - The edit list of the audio track (`elst`), which is the standard's own
+//!   way of saying. ffmpeg writes it, and so
+//!   does Apple's encoder.
+//!
+//! What comes out is a number of seconds to drop and a number of seconds to
+//! keep, and [`Trimmed`] does the dropping as the samples go by.
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -5,12 +32,15 @@ use std::time::Duration;
 
 use rodio::Source;
 
+/// How much of a file is its own sound: where it starts, and how long it
+/// runs — in seconds, so it holds whatever rate the decoder comes out at.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Trim {
     pub skip: f64,
     pub keep: Option<f64>,
 }
 
+/// Read the note, if the file is an MP4 and has one.
 pub fn trim_for(path: &Path) -> Option<Trim> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     if !matches!(ext.as_str(), "m4a" | "m4b" | "mp4" | "m4p") {
@@ -22,6 +52,8 @@ pub fn trim_for(path: &Path) -> Option<Trim> {
     (trim.skip > 0.0 || trim.keep.is_some()).then_some(trim)
 }
 
+/// The contents of one top-level box, found by skipping over the others —
+/// the sound itself can be hundreds of megabytes, and none of it is read.
 fn find_top(file: &mut File, wanted: &[u8; 4]) -> Option<Vec<u8>> {
     let length = file.metadata().ok()?.len();
     let mut at = 0u64;
@@ -56,6 +88,7 @@ fn find_top(file: &mut File, wanted: &[u8; 4]) -> Option<Vec<u8>> {
     None
 }
 
+/// The boxes directly inside a box's body, as (kind, body).
 fn children(data: &[u8]) -> Vec<([u8; 4], &[u8])> {
     let mut out = Vec::new();
     let mut at = 0usize;
@@ -93,6 +126,8 @@ fn be64(data: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_be_bytes(data.get(at..at + 8)?.try_into().ok()?))
 }
 
+/// The timescale of an `mvhd` or `mdhd`: where it stands depends on whether
+/// the box has 32- or 64-bit times.
 fn timescale(full_box: &[u8]) -> Option<u32> {
     match full_box.first()? {
         1 => be32(full_box, 20),
@@ -142,6 +177,9 @@ fn parse_moov(moov: &[u8]) -> Option<Trim> {
     None
 }
 
+/// `moov/udta/meta/ilst/----` with the name `iTunSMPB`: twelve hex numbers,
+/// of which the second is the run-up, the third the padding, and the fourth
+/// how many samples are the music.
 fn itunsmpb(moov: &[u8]) -> Option<Trim> {
     let meta = child(child(moov, b"udta")?, b"meta")?;
     let ilst = child(meta.get(4..)?, b"ilst")?;
@@ -185,9 +223,16 @@ fn sample_rate(moov: &[u8]) -> Option<u32> {
     None
 }
 
+/// A source with its run-up dropped and its padding cut off.
+///
+/// Counted in samples as they go by, so it costs a comparison per sample and
+/// nothing else. A seek lands where it was asked to in the music, not in the
+/// file: the run-up is added before the decoder is told.
 pub struct Trimmed<S> {
     inner: S,
+    /// Samples still to be dropped before the music begins.
     skip: usize,
+    /// Samples still to be let through, when the end is known.
     left: Option<usize>,
     trim: Option<Trim>,
     channels: usize,
@@ -195,6 +240,9 @@ pub struct Trimmed<S> {
 }
 
 impl<S: Source> Trimmed<S> {
+    /// Wrap a decoded file. `trim` is what [`trim_for`] read; it is applied
+    /// only when the decoder has not already done so — which it can tell by
+    /// the length: a decoder that trims says the shorter one.
     pub fn new(inner: S, trim: Option<Trim>) -> Self {
         let channels = usize::from(inner.channels().get());
         let rate = inner.sample_rate().get();
@@ -218,6 +266,7 @@ impl<S: Source> Trimmed<S> {
         ((seconds * self.rate as f64).round().max(0.0) as usize) * self.channels
     }
 
+    /// Where the counters stand with the music at `pos`.
     fn reset(&mut self, pos: Duration) {
         let Some(trim) = self.trim else {
             return;
@@ -291,6 +340,8 @@ impl<S: Source> Source for Trimmed<S> {
 mod tests {
     use super::*;
 
+    /// A box claiming a 64-bit size near the largest number: no box, no
+    /// panic, and no endless search.
     #[test]
     fn a_size_past_any_number_is_a_broken_file() {
         let mut huge = vec![0, 0, 0, 1];
@@ -304,6 +355,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// An edit list as ffmpeg writes it: 1024 samples of run-up at 44.1 kHz,
+    /// three seconds of music in a movie timescale of a thousand.
     #[test]
     fn an_edit_list_is_read() {
         let mut moov = Vec::new();
@@ -336,6 +389,7 @@ mod tests {
         assert_eq!(trim.keep, Some(3.0));
     }
 
+    /// iTunes' note, when it is there, is the one believed.
     #[test]
     fn itunes_note_is_read() {
         let boxed = |kind: &[u8; 4], body: &[u8]| {
@@ -374,6 +428,7 @@ mod tests {
         assert!((trim.keep.unwrap() - 0x204E74 as f64 / 44100.0).abs() < 1e-9);
     }
 
+    /// Whatever is not an MP4 is left alone without being opened.
     #[test]
     fn other_formats_are_not_touched() {
         assert_eq!(trim_for(Path::new("/nowhere/a.mp3")), None);

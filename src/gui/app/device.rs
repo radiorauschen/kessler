@@ -1,6 +1,13 @@
+//! The iPod: noticing it, its panel, the transfer and what is read back
+//! from it.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// Albums and tracks, read off the device rather than out of the library.
+    ///
+    /// The same three lists, narrowed the same way, sorted by the same
+    /// headings — only the shelf they come from is different.
     pub(in crate::gui) fn reload_from_device(
         &mut self,
         artist: Option<String>,
@@ -32,6 +39,8 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Stop looking for iPods, and let go of one there: the watch's thread ends
+    /// the next time it has news.
     pub(in crate::gui) fn give_up_devices(&mut self) {
         self.device_watch = None;
         if self.attached.is_none() {
@@ -49,6 +58,13 @@ impl GuiApp {
         }
     }
 
+    /// Watch for an iPod being plugged in or pulled out.
+    ///
+    /// On its own thread and on a slow clock: looking costs a directory
+    /// listing, but *reading* a device costs a few thousand records, so the
+    /// database is only read when the volume that is there has changed. The
+    /// window learns about it the same way it learns about a finished scan —
+    /// a message, picked up on the next frame.
     pub(in crate::gui) fn watch_for_devices(&mut self) {
         if self.device_watch.is_some() {
             return;
@@ -111,6 +127,7 @@ impl GuiApp {
         self.device_watch = Some(rx);
     }
 
+    /// Pick up what the watcher found.
     pub(in crate::gui) fn poll_devices(&mut self) -> Result<()> {
         let Some(rx) = &self.device_watch else {
             return Ok(());
@@ -157,6 +174,9 @@ impl GuiApp {
         Ok(())
     }
 
+    /// What the iPod played and rated while it was away, into the library and
+    /// to last.fm — only what was not taken at an earlier plug-in; see
+    /// `ipod::playcounts`. Reads the device, writes nothing to it.
     fn take_plays(&mut self) {
         use crate::ipod::playcounts;
         if !self.config.ipod_take_plays {
@@ -251,6 +271,10 @@ impl GuiApp {
         let _ = self.reload_all();
     }
 
+    /// What the menu says is to happen when an iPod comes: nothing, the
+    /// overview of a whole-library sync, or that sync straight away — see
+    /// `Config::ipod_on_connect`. Never on one that cannot be written to,
+    /// and never over a transfer already under way.
     fn on_connect(&mut self) {
         let wanted = self.config.ipod_on_connect.clone();
         if (wanted != "fragen" && wanted != "abgleichen") || !self.config.ui.music {
@@ -279,6 +303,11 @@ impl GuiApp {
         }
     }
 
+    /// Go over to the device — its shelf in the columns, what it says about
+    /// itself in the fourth — or come back to the library, both together. The
+    /// device's column is never beside the library's own columns: the two are
+    /// kept strictly apart, so a click on its name in the masthead and one on
+    /// its line in the foot do the same.
     pub fn toggle_device_view(&mut self) {
         let to = !self.showing_ipod();
         if let Err(e) = self.use_device(to) {
@@ -291,6 +320,10 @@ impl GuiApp {
         }
     }
 
+    /// Open the device column and work out what it says.
+    ///
+    /// The comparison with the library is a walk over every track in both,
+    /// so it is done here, once, and not while drawing.
     pub fn open_device_panel(&mut self) {
         if self.attached.is_none() {
             self.set_status(tr!("kein ipod angesteckt"));
@@ -300,6 +333,7 @@ impl GuiApp {
         self.show_device_panel();
     }
 
+    /// The device into the fourth column, whatever held it.
     pub(in crate::gui) fn show_device_panel(&mut self) {
         self.device_open = true;
         if !self.all_sides() {
@@ -325,6 +359,9 @@ impl GuiApp {
         self.follow_the_playing();
     }
 
+    /// Work the device column's figures out again if the device they were
+    /// worked out for is not the one there now — another one plugged in, or
+    /// the same one after a transfer.
     pub fn refresh_device_summary(&mut self) {
         let Some(attached) = &self.attached else {
             self.device_summary = None;
@@ -399,6 +436,10 @@ impl GuiApp {
         self.device_summary = Some(summary);
     }
 
+    /// The library's tracks the plugged-in iPod has already, worked out once
+    /// per device and per count of tracks on it — a sync or a removal
+    /// changes the count, and a read of the device's database every frame
+    /// would be a read too many. Empty with nothing plugged in.
     pub fn tracks_on_device(&mut self) -> crate::gui::OnDevice {
         let Some(attached) = &self.attached else {
             self.on_device = None;
@@ -424,10 +465,16 @@ impl GuiApp {
         ids
     }
 
+    /// Whether a sync converts what the device cannot play: asked for in
+    /// the menu, and possible because ffmpeg is there.
     pub fn converts_for_ipod(&self) -> bool {
         self.config.ipod_convert && crate::ipod::sync::transcoder_available()
     }
 
+    /// The library's newest tracks, as the playlist the device keeps of them:
+    /// as many as the „zuletzt" row shows, newest first. Named in the window's
+    /// language, and known by the other's too, so switching does not leave two
+    /// of it on the device.
     pub fn newest_list(&self) -> Option<crate::ipod::sync::DeviceList> {
         const NAME: &str = "zuletzt hinzugefügt";
         if self.attached.as_ref().is_some_and(|a| !a.generation.has_playlists()) {
@@ -449,6 +496,14 @@ impl GuiApp {
         Some(crate::ipod::sync::DeviceList { name, also_named, tracks })
     }
 
+    /// The episodes fetched and still to be heard, as the playlist the
+    /// device keeps of them, the newest first — the experiment of
+    /// `[ipod_podcasts]`: an old iPod has no podcasts of its own, but it
+    /// has playlists. An episode heard to its end or archived is not among
+    /// them, unless it is kept on purpose. Each as a track: its title, its
+    /// podcast as artist and record, its length read off the file — the
+    /// feed's word for it is often a little out, and the length is what
+    /// tells the device's copy from another.
     pub fn podcast_list(&self) -> Option<crate::ipod::sync::DeviceList> {
         if !self.config.ipod_podcasts || !self.config.ui.podcasts {
             return None;
@@ -484,10 +539,16 @@ impl GuiApp {
         Some(crate::ipod::sync::DeviceList { name: "podcasts".into(), also_named: Vec::new(), tracks })
     }
 
+    /// Whether the columns are reading the device.
     pub fn showing_ipod(&self) -> bool {
         self.source == Source::Device && self.attached.is_some()
     }
 
+    /// Read the device instead of the library, or go back.
+    ///
+    /// The whole of the first column changes, so every selection in it is a
+    /// selection of something that is no longer there — the cursor goes back to
+    /// the top rather than to whatever now happens to stand at its old number.
     pub fn use_device(&mut self, on: bool) -> Result<()> {
         let wanted = match (on, self.attached.is_some()) {
             (true, true) => Source::Device,
@@ -511,6 +572,12 @@ impl GuiApp {
         self.reload_all()
     }
 
+    /// Hand the volume to the system to be unmounted, and forget it.
+    ///
+    /// Returns the name, so whoever asked can say which one went. The watcher
+    /// would notice the mount point vanishing within two seconds anyway, but
+    /// two seconds of a status line still describing a device that is being
+    /// pulled out of a socket is two seconds too many.
     pub fn eject_device(&mut self) -> Result<String> {
         let Some(device) = &self.attached else {
             return Err(crate::error::KesslerError::Ipod(tr!("kein ipod da").into()));
@@ -540,6 +607,12 @@ impl GuiApp {
         Ok(name)
     }
 
+    /// Send the whole shelf, not a selection of it.
+    ///
+    /// The one iPod job that was only ever a terminal command
+    /// (`kessler ipod sync --apply`): everything the library has that the
+    /// device does not. It goes through the same panel a right-click does —
+    /// nothing is copied before somebody has read what would be.
     pub fn transfer_library(&mut self) -> Result<()> {
         let mut everything =
             self.db
@@ -567,6 +640,10 @@ impl GuiApp {
         Ok(())
     }
 
+    /// „neu umwandeln": the device's converted copies not in the form now
+    /// chosen, converted again and put on in place of the old ones — which
+    /// go once the new database is written. The usual plan first, to say yes
+    /// to.
     pub fn reconvert_on_device(&mut self) -> Result<()> {
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return Ok(()) };
         let library = self.db.get_tracks(None, None, SortField::Artist, SortOrder::Ascending, None)?;
@@ -593,6 +670,12 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Put today's copy of the device's database somewhere safe.
+    ///
+    /// The other terminal-only command (`kessler ipod backup`). A sync makes
+    /// one of these by itself before it writes; this is for making one when
+    /// you are *not* about to write — before letting another program at the
+    /// device, say.
     pub fn backup_device(&mut self) {
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else {
             self.set_status(tr!("kein ipod angesteckt"));
@@ -616,6 +699,8 @@ impl GuiApp {
         }
     }
 
+    /// „name", clicked in the device column: a field opens on the name it
+    /// has now, all of it marked.
     pub fn start_naming_device(&mut self) {
         let Some(device) = &self.attached else { return };
         let mut entry = crate::gui::tagedit::Entry::new(device.name.clone());
@@ -623,6 +708,10 @@ impl GuiApp {
         self.naming_device = Some(entry);
     }
 
+    /// The typed name, onto the device. Written at once, like „sichern": it is
+    /// a few bytes in a database read back before it goes in — see
+    /// `sync::rename`. The name unchanged, or nothing typed, is nothing to
+    /// write.
     pub fn rename_device(&mut self) {
         let Some(entry) = self.naming_device.take() else { return };
         let Some(device) = &self.attached else { return };
@@ -646,6 +735,9 @@ impl GuiApp {
         }
     }
 
+    /// „bericht speichern": the report on the device — see
+    /// `crate::ipod::report` — onto the desktop, and shown there, to be sent
+    /// along.
     pub fn save_device_report(&mut self) {
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return };
         let library = self
@@ -678,6 +770,10 @@ impl GuiApp {
         }
     }
 
+    /// „aufräumen" in the device's column: the files on it that its database
+    /// does not list — a sync broken off before the database was written left
+    /// them, taking room and showing nowhere — taken off. Not while a sync
+    /// runs, which has files on their way that are not listed yet.
     pub fn tidy_device(&mut self) {
         if self.copying() {
             self.set_status(tr!("auf den ipod wird gerade kopiert"));
@@ -696,6 +792,8 @@ impl GuiApp {
         }
     }
 
+    /// A model chosen for a device that cannot say which it is: written to
+    /// it, and the device read again, known now.
     pub fn choose_device_model(&mut self, generation: crate::ipod::device_info::Generation) {
         self.choosing_model = false;
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return };
@@ -711,6 +809,7 @@ impl GuiApp {
         }
     }
 
+    /// Typing the device's name: enter writes it, escape leaves it as it was.
     pub(in crate::gui) fn handle_naming_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;
@@ -728,6 +827,12 @@ impl GuiApp {
         }
     }
 
+    /// Work out what sending these tracks to the device would do.
+    ///
+    /// Nothing is written here. The plan is a reading of both sides — what is
+    /// already there, what would be copied, what this generation cannot play,
+    /// what has gone missing off the disk since the last scan — and it goes on
+    /// screen to be read before anybody says yes.
     pub fn plan_transfer(
         &mut self,
         tracks: Vec<Track>,
@@ -794,6 +899,12 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Say yes: copy the files, then write the database.
+    ///
+    /// On a thread of its own, because copying a gigabyte to a twenty-year-old
+    /// disk over USB takes minutes and a window that stops answering for
+    /// minutes looks broken. What it reports comes back down a channel, the
+    /// same way scanning and adding do.
     pub fn run_transfer(&mut self, convert: bool) {
         let Some(transfer) = self.transfer.as_mut() else {
             return;
@@ -836,6 +947,9 @@ impl GuiApp {
         };
     }
 
+    /// „abbrechen" while it copies: it stops before the next track, and the
+    /// database is written for what is across, so nothing copied lies on the
+    /// device unlisted.
     pub fn stop_transfer(&mut self) {
         if let Some(Stage::Going { stop, doing, .. }) = self.transfer.as_mut().map(|t| &mut t.stage) {
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -843,6 +957,7 @@ impl GuiApp {
         }
     }
 
+    /// Put the panel away.
     pub fn close_transfer(&mut self) {
         if matches!(
             self.transfer.as_ref().map(|t| &t.stage),
@@ -853,10 +968,14 @@ impl GuiApp {
         self.transfer = None;
     }
 
+    /// Whether a transfer is on screen at all.
     pub fn transferring(&self) -> bool {
         self.transfer.is_some()
     }
 
+    /// Why tracks carried from the library cannot be put down on „ipod"
+    /// just now, if they cannot. Only what is under way stands in the way:
+    /// a plan or a removal waiting for its yes gives way to the new plan.
     pub fn refuses_drops(&self) -> Option<String> {
         let attached = self.attached.as_ref()?;
         if let Some(why) = &attached.refusal {
@@ -871,6 +990,9 @@ impl GuiApp {
         None
     }
 
+    /// Whether files are being copied this moment. A plan waiting for its
+    /// yes, or the result of one finished, is not that: tracks dropped on
+    /// „ipod" replace it with a plan of their own.
     pub fn copying(&self) -> bool {
         matches!(
             self.transfer.as_ref().map(|t| &t.stage),
@@ -878,6 +1000,11 @@ impl GuiApp {
         )
     }
 
+    /// Pick up what the worker has said since the last frame.
+    /// While the copy runs, the device's free space as it is now — read
+    /// twice a second, not every frame: it is a question to the file system.
+    /// The bar in the device's column grows with it, the music part by what
+    /// has landed since the copy began.
     pub(in crate::gui) fn follow_the_space(&mut self) {
         const EVERY: std::time::Duration = std::time::Duration::from_millis(500);
         let Some(transfer) = self.transfer.as_mut() else {
@@ -987,6 +1114,10 @@ impl GuiApp {
         self.reread_device();
     }
 
+    /// Read the attached device again, in place.
+    ///
+    /// After a transfer: the shelf it stands for has changed, and the watcher
+    /// only looks for devices arriving and leaving, not for their contents.
     pub(in crate::gui) fn reread_device(&mut self) {
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else {
             return;
@@ -1011,6 +1142,8 @@ impl GuiApp {
         let _ = self.reload_all();
     }
 
+    /// : asked in the iPod's column, with how much room it gives back, before
+    /// anything goes.
     pub fn ask_to_remove(&mut self, tracks: Vec<Track>, what: String) {
         let Some(device) = &self.attached else { return };
         if let Some(why) = &device.refusal {
@@ -1026,6 +1159,7 @@ impl GuiApp {
         self.show_device_panel();
     }
 
+    /// „entfernen", pressed.
     pub fn run_removal(&mut self) {
         let Some(mount) = self.attached.as_ref().map(|a| a.mount.clone()) else { return };
         let Some(removal) = self.removal.as_mut() else { return };
@@ -1074,6 +1208,9 @@ impl GuiApp {
     }
 }
 
+/// One field's keys while it is typed into, other than escape and enter,
+/// which the field's own owner answers: the caret, marking all, deleting,
+/// and what is typed.
 pub(in crate::gui) fn type_into(ctx: &egui::Context, entry: &mut crate::gui::tagedit::Entry) {
     use egui::{Key, Modifiers};
     const NONE: Modifiers = Modifiers::NONE;

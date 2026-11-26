@@ -1,25 +1,43 @@
+//! Whether a newer kessler is out.
+//!
+//! Asked when the row under „allgemein" is clicked, and at the start only
+//! where `[ui] update_on_start` asks for it: the newest release on GitHub,
+//! its number against the one built. Nothing is
+//! downloaded or installed — a newer one opens its page.
+//!
+//! Every merge into main hangs its packages on a release of its version, so
+//! the newest release is the newest kessler.
+
 use std::sync::mpsc;
 
 use crate::json::Json;
 
+/// Where the newest release is asked for; `KESSLER_UPDATE_ENDPOINT` for a
+/// stand-in.
 fn endpoint() -> String {
     std::env::var("KESSLER_UPDATE_ENDPOINT")
         .unwrap_or_else(|_| "https://api.github.com/repos/radiorauschen/kessler/releases/latest".to_string())
 }
 
+/// What the asking came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
+    /// A newer one, and its page.
     Newer { version: String, page: String },
+    /// None newer than this one.
     Current,
+    /// No answer to be had: not reachable, or not to be seen.
     Unseen(String),
 }
 
+/// The row's state: asking, or what came.
 pub struct Check {
     asking: Option<mpsc::Receiver<Answer>>,
     pub answer: Option<Answer>,
 }
 
 impl Check {
+    /// Ask, on a thread of its own.
     pub fn start() -> Check {
         let (tell, asking) = mpsc::channel();
         std::thread::Builder::new()
@@ -31,6 +49,7 @@ impl Check {
         Check { asking: Some(asking), answer: None }
     }
 
+    /// Take in the answer once it is there. Whether it is still asking.
     pub fn tend(&mut self) -> bool {
         if let Some(asking) = &self.asking {
             match asking.try_recv() {
@@ -59,8 +78,14 @@ fn ask() -> Answer {
     }
 }
 
+/// The signed and notarized disk image for the Mac, always the newest one:
+/// a release of its own, apart from the version's, which carries only what
+/// is built for Linux.
 pub const MAC_DISK_IMAGE: &str = "https://github.com/radiorauschen/kessler/releases/download/mac/kessler-macos.dmg";
 
+/// The release in `doc` against the version `built`. On a Mac a newer one
+/// opens the disk image itself rather than the release's page, where there
+/// is nothing for the Mac.
 fn read(doc: &Json, built: &str, mac: bool) -> Answer {
     let Some(tag) = doc.text("tag_name") else {
         return Answer::Unseen(String::new());
@@ -74,6 +99,7 @@ fn read(doc: &Json, built: &str, mac: bool) -> Answer {
     }
 }
 
+/// „1.4.131" as numbers, to be compared in order.
 fn numbers(version: &str) -> Option<Vec<u64>> {
     version.split('.').map(|part| part.trim().parse().ok()).collect()
 }

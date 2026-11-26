@@ -1,6 +1,21 @@
+//! A pile of tracks, read as a shelf.
+//!
+//! The library answers in SQL: it has indexes, it has a grouping artist, it
+//! knows what a record is. A device and a list have neither — they are a
+//! sequence of tracks and nothing else — and yet the three columns beside them
+//! have to work exactly as they always do.
+//!
+//! So this takes any `&[Track]` and builds the same `Artist`, `Album` and
+//! `Track` values the database would have returned, grouped, narrowed and
+//! sorted by the same rules. Two shelves use it: the iPod in
+//! [`super::attached`], and a list of the user's own making. Neither writes
+//! anything back through here; this is a reading, and only a reading.
+
 use crate::db::models::{Album, Artist, SortField, SortOrder, Track};
 use crate::db::{grouping_artist, shelf_key, sort_key};
 
+/// Every artist on the shelf, in the order the artist column wants them:
+/// alphabetical by folded key, and the nameless last.
 pub fn artists(shelf: &[Track], query: Option<&str>) -> Vec<Artist> {
     let mut found: Vec<Artist> = Vec::new();
     let mut places: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -35,6 +50,7 @@ pub fn artists(shelf: &[Track], query: Option<&str>) -> Vec<Artist> {
     found
 }
 
+/// The albums on the shelf, narrowed to one artist when one is chosen.
 pub fn albums(shelf: &[Track], artist: Option<&str>, query: Option<&str>) -> Vec<Album> {
     let wanted = artist.map(sort_key);
     let mut found: Vec<Album> = Vec::new();
@@ -85,6 +101,7 @@ pub fn albums(shelf: &[Track], artist: Option<&str>, query: Option<&str>) -> Vec
     keyed.into_iter().map(|(_, a)| a).collect()
 }
 
+/// The tracks, narrowed and sorted the way the track column asks for.
 pub fn tracks(
 shelf: &[Track],
 artist: Option<&str>,
@@ -162,11 +179,20 @@ query: Option<&str>,
     found.into_iter().map(|(_, track)| track).collect()
 }
 
+/// Where a track's artist stands: as the iPod lists them (`shelf_key`), then by
+/// folded name, so two names the iPod ranks alike do not interleave. The artist
+/// it is shelved under — the album artist where there is one — so a record by
+/// one album artist with several track artists stays one record.
 fn artist_rank(track: &Track) -> ((u8, String), String) {
     let shelved = grouping_artist(track);
     (shelf_key(shelved), sort_key(shelved))
 }
 
+/// The tracks a typed query leaves standing.
+///
+/// The same rule as the library's filter: every word has to appear
+/// somewhere in title, artist or album, accents and case ignored on both
+/// sides.
 pub fn left_after<'a>(shelf: &'a [Track], query: Option<&'a str>) -> impl Iterator<Item = &'a Track> + 'a {
     let words: Vec<String> = query
         .map(|q| q.split_whitespace().map(sort_key).collect())
@@ -212,6 +238,9 @@ mod tests {
         }
     }
 
+    /// A record stays in one piece on the device's shelf: its tracks by
+    /// several artists under one album artist, and tracks that disagree
+    /// about the year, all run together, in their own order.
     #[test]
     fn a_record_is_not_split_by_its_track_artists_or_years() {
         let shelf = vec![

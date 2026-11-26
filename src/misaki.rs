@@ -1,9 +1,17 @@
+//! Misaki is Num Kadoma's, free to use, copy and pass on, changed or not
+//! (`misaki/misaki.txt`). The table is built from its TrueType form by
+//! `bundle/make-misaki.py` — see there for the layout. Latin is four dots wide,
+//! kanji and kana eight.
+
 use unicode_normalization::UnicodeNormalization;
 
 static TABLE: &[u8] = include_bytes!("misaki/misaki.bin");
 
+/// One character's record: the character, its width, its eight rows.
 const RECORD: usize = 13;
 
+/// One character: its width in dots, and its rows from the top, the
+/// leftmost dot the high bit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Glyph {
     width: usize,
@@ -34,6 +42,10 @@ fn glyph(c: char) -> Option<Glyph> {
     None
 }
 
+/// Letters drawn here in Misaki's manner, which its table has not: the capital
+/// umlauts, the dots touching the letter as there is no row above it, and the
+/// low quote German opens with. Rows from the top, the leftmost dot the high
+/// bit.
 const DRAWN: [(char, [u8; 8]); 4] = [
     ('Ä', [0b1010_0000, 0b0100_0000, 0b1010_0000, 0b1110_0000, 0b1010_0000, 0b1010_0000, 0, 0]),
     ('Ö', [0b1010_0000, 0b0100_0000, 0b1010_0000, 0b1010_0000, 0b1010_0000, 0b0100_0000, 0, 0]),
@@ -41,6 +53,12 @@ const DRAWN: [(char, [u8; 8]); 4] = [
     ('„', [0, 0, 0, 0, 0, 0b0101_0000, 0b1010_0000, 0]),
 ];
 
+/// What Misaki has no letter for, put into what it has. Its Latin is plain
+/// ASCII: an accented small letter gets its mark as dots in the empty top
+/// row — two for an umlaut, one for anything else — so „düül" still reads
+/// as itself; the capital umlauts are [`DRAWN`], other accented capitals
+/// have no room above and go without. ß as ss, and a question mark for what
+/// is not there at all.
 fn spelled(c: char, out: &mut Vec<Glyph>) {
     if let Some(found) = glyph(c) {
         out.push(found);
@@ -85,6 +103,8 @@ fn spelled_str(text: &str, out: &mut Vec<Glyph>) {
     }
 }
 
+/// A line of text as columns of dots, each a byte with the top row in the
+/// lowest bit — the way the screen takes its pixels, so painting is a copy.
 pub fn columns(text: &str) -> Vec<u8> {
     let mut glyphs = Vec::new();
     spelled_str(text, &mut glyphs);

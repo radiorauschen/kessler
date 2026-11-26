@@ -1,17 +1,28 @@
+//! The equalizer's column: ten bands standing up, drawn as the timeline is
+//! drawn, the curve they make together behind them, and the ready-made
+//! settings over them. `z`.
+
 use super::*;
 use crate::player::eq;
 
+/// The swell's name for each band, so each thickens on its own.
 const SWELLS: [&str; eq::COUNT] = ["eq0", "eq1", "eq2", "eq3", "eq4", "eq5", "eq6", "eq7", "eq8", "eq9"];
 
+/// What each band is called under it.
 const NAMES: [&str; eq::COUNT] = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
 
+/// The field the bands stand in: as tall as there is room for, between these.
 const FIELD_LEAST: f32 = 150.0;
 const FIELD_MOST: f32 = 280.0;
 
+/// The least air between two names standing side by side under the bands;
+/// with less, they lie on their side.
 const NAME_GAP: f32 = 6.0;
 
+/// Between the field and a name lying on its side.
 const NAME_DROP: f32 = 6.0;
 
+/// How much a turn of the wheel moves a band, in decibels.
 const WHEEL_DB: f32 = 0.5;
 
 pub(super) fn eq_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
@@ -88,6 +99,7 @@ pub(super) fn eq_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pal
     Rect::from_min_size(top, Vec2::new(width, height))
 }
 
+/// What the window calls a ready-made setting.
 fn preset_word(name: &str) -> &'static str {
     match name {
         "mehr bass" => tr!("mehr bass"),
@@ -99,6 +111,7 @@ fn preset_word(name: &str) -> &'static str {
     }
 }
 
+/// „+3,5" — one decimal, a sign, the language's comma.
 fn decibels(db: f32) -> String {
     let rounded = (db * 2.0).round() / 2.0;
     let said = if rounded.fract() == 0.0 { format!("{:+.0}", rounded) } else { format!("{:+.1}", rounded) };
@@ -110,6 +123,10 @@ fn decibels(db: f32) -> String {
     }
 }
 
+/// Words side by side, wrapping onto a further line where the column is
+/// narrow; the chosen ones in the ink and underlined, the rest in the second
+/// tone — a quiet one, the third — and the ink under the pointer. Each word
+/// is (what it says, chosen, quiet). Which one was clicked.
 fn word_row(ui: &mut Ui, width: f32, words: &[(&str, bool, bool)], m: Metrics, palette: &Palette) -> Option<usize> {
     let gap = m.marker_pad_x * 2.0;
     let room = (width - m.marker_pad_x * 2.0).max(40.0);
@@ -164,6 +181,8 @@ fn word_row(ui: &mut Ui, width: f32, words: &[(&str, bool, bool)], m: Metrics, p
     clicked
 }
 
+/// The ten bands and the curve. Some(keep) when a band moved: `keep` once
+/// the hand has let go.
 #[allow(clippy::too_many_arguments)]
 fn bands(ui: &mut Ui, width: f32, height: f32, gains: &mut [f32; eq::COUNT], on: bool, m: Metrics, palette: &Palette) -> Option<bool> {
     let slot_width = (width - m.marker_pad_x * 2.0) / eq::COUNT as f32;
@@ -280,8 +299,12 @@ fn bands(ui: &mut Ui, width: f32, height: f32, gains: &mut [f32; eq::COUNT], on:
     moved
 }
 
+/// Where the curve stands its decibels true; past it, leaning in.
 const KNEE: f32 = 10.0;
 
+/// `db` as drawn: true up to [`KNEE`], then bending towards `ceiling` (the
+/// field's edge, in decibels) without ever reaching it — the same either
+/// way from nought.
 fn soft_edge(db: f32, ceiling: f32) -> f32 {
     let room = (ceiling - KNEE).max(0.5);
     let over = db.abs() - KNEE;

@@ -1,3 +1,14 @@
+//! The settings menu.
+//!
+//! It exists so the interface can drop the permanent strip of key hints along
+//! the bottom edge: those are worth reading twice and then never again, and a
+//! line of chrome that earns its place only in the first minute does not
+//! belong on screen for the rest of the time.
+//!
+//! Same rules as everything else — two type sizes, lowercase, no borders. It
+//! separates itself from the list behind by dimming that list, not by drawing
+//! a frame around itself.
+
 use eframe::egui::{self, Rect, Sense, Ui, Vec2};
 
 use super::text;
@@ -6,30 +17,64 @@ use super::dither::Screen;
 use super::theme::{Brightness, Palette, Role, Theme};
 use super::GuiApp;
 
+/// The menu keeps its own row height. It is a panel, not a list of thousands of
+/// rows, so it has no reason to tighten when the window does — but it is the
+/// *same* height a list row has when the window is roomy, air included, so the
+/// panel reads on the window's own rhythm rather than beside it, and its plates
+/// are the lists' plates.
 fn row_height() -> f32 {
     super::theme::ROW_ROOMY + super::theme::ROW_AIR
 }
 
+/// How long the menu takes to go when it hands over to the key sheet, in
+/// seconds: about as long as the sheet then takes to come (egui's own fade,
+/// a twelfth of a second), so the two read as one quick change.
 const HANDOVER: f64 = 0.08;
 
+/// The menu's first frames, through which every tab is measured afresh as it
+/// comes out — see `render`.
 const RECENTRE_FRAMES: u8 = 3;
 
+/// The veil behind the menu and behind the key sheet: one, so that going
+/// from the one to the other does not take it away and bring it back.
 const SCRIM: &str = "sheet-scrim";
 
+/// How wide one column of the menu is, inside the padding — the width every
+/// row is set to, whether there is one column of them or two.
 const COLUMN: f32 = 352.0;
 const PADDING: f32 = 24.0;
 
+/// How far the plate under a hovered row reaches past the row's words on either
+/// side, into the padding and the gap between the columns — so the words stand
+/// on it with air round them, rather than touching its ends. The words stay
+/// where they were: the plate grows outward, as the marker in the lists bleeds
+/// into their margin. As far as the lists' marker does, and held a hair clear
+/// of the rows above and below as it is, so a plate in the menu is the same
+/// shape as one in a column.
 const HOVER_BLEED: f32 = 6.0;
 
+/// The plate behind a menu row under the pointer or the keyboard's cursor:
+/// see [`HOVER_BLEED`]. Held clear of the rows above and below by what the
+/// lists' marker keeps (`Metrics::marker_inset_y`, from the row before its
+/// air), so the air all goes to the plate there and here alike.
 fn plate(rect: Rect) -> Rect {
     let inset = (super::theme::ROW_ROOMY * 0.07).round().max(1.0);
     rect.expand2(Vec2::new(HOVER_BLEED, -inset))
 }
 
+/// A column's worth of sheet, padding included.
 const WIDTH: f32 = COLUMN + PADDING * 2.0;
 
+/// The most columns the sheet is set in.
 const MOST_COLUMNS: usize = 3;
 
+/// How wide the sheet is, and how many columns it holds.
+///
+/// As many as fit inside the window's own margins, up to three — three is
+/// where the whole menu stands on an ordinary screen without scrolling — and
+/// one otherwise, never wider than a column and its padding, never wider than
+/// the window. Nothing between: a sheet stretched to a column and a half would
+/// set every row's answer that much further from the word it answers.
 fn sheet_size(widest: f32, gap: f32) -> (f32, usize) {
     let across = |n: usize| COLUMN * n as f32 + gap * (n - 1) as f32 + PADDING * 2.0;
     for n in (2..=MOST_COLUMNS).rev() {
@@ -40,6 +85,9 @@ fn sheet_size(widest: f32, gap: f32) -> (f32, usize) {
     (widest.min(WIDTH), 1)
 }
 
+/// The keys, listed once, where they can be looked up rather than lived with —
+/// in small groups under a word each, so the one being looked for is found by
+/// what it is for rather than by reading all of them.
 const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     (
         "wiedergabe",
@@ -179,12 +227,16 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
+/// One piece of a written shortcut: a key, drawn as a key, or the words
+/// between keys — „/" for „or", „+" for „together with", or a word such as
+/// „rechtsklick" that is not a key at all.
 #[derive(Debug, PartialEq)]
 enum KeyPiece<'a> {
     Key(&'a str),
     Between(&'a str),
 }
 
+/// A shortcut as written in `SHORTCUTS`: keys in brackets, the rest between.
 fn key_pieces(written: &str) -> Vec<KeyPiece<'_>> {
     let mut pieces = Vec::new();
     let mut rest = written;
@@ -214,6 +266,18 @@ fn key_pieces(written: &str) -> Vec<KeyPiece<'_>> {
     pieces
 }
 
+/// A shortcut's line in the opened list: its keys as small keys — a word on a
+/// plate, the plate a hover's shade — so what is a key and what is only „or"
+/// between two keys can no longer be misread. What it does stands at the right,
+/// quiet, as every listed line's answer does.
+///
+/// `whole` is for the sheet `?` lays over the window, which is there to be
+/// read: what does not fit beside the keys goes on over further lines instead
+/// of ending in. The menu keeps its rows one line each. Where, from the top of
+/// a key's word, the middle of its ink stands: of the figures and the tall
+/// letters, which reach from the baseline to the top, so the plate has as much
+/// air above them as below. A tail still reaches down into the air below, as on
+/// a printed key.
 fn key_ink_middle(ui: &Ui) -> f32 {
     let probe = text::line(ui, "1hk", Role::Label, egui::Color32::WHITE);
     let ink = probe.mesh_bounds;
@@ -224,6 +288,10 @@ fn key_ink_middle(ui: &Ui) -> f32 {
     }
 }
 
+/// A line with keys in it — `written` as `SHORTCUTS` writes them, keys in
+/// brackets — set on one line with its middle at `centre`, the keys on the key
+/// sheet's small plates and the words between in `words_ink`. Returns how tall
+/// it is.
 pub(in crate::gui) fn keys_centred(ui: &Ui, written: &str, centre: egui::Pos2, words_ink: egui::Color32, palette: &Palette) -> f32 {
     const PAD_Y: f32 = 2.0;
     const RADIUS: u8 = 3;
@@ -260,6 +328,8 @@ pub(in crate::gui) fn keys_centred(ui: &Ui, written: &str, centre: egui::Pos2, w
     plate_tall
 }
 
+/// How a shortcut stands while the key sheet is searched: as always with
+/// nothing typed, set back where it does not answer, lit where it does.
 #[derive(Clone, Copy, PartialEq)]
 enum Shine {
     Plain,
@@ -346,11 +416,18 @@ fn key_line(ui: &mut Ui, written: &str, what: &str, palette: &Palette, whole: bo
     }
 }
 
+/// Every key in the list, whatever group it is in.
 #[cfg(test)]
 fn every_shortcut() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     SHORTCUTS.iter().flat_map(|(_, keys)| keys.iter())
 }
 
+/// Whether a shortcut answers what was typed into the key sheet: every
+/// word of it either is one of its keys (or, from two letters on, begins
+/// one — „shi" for shift), or begins a word of what it does or of its
+/// group. As shown, so it finds in every language the window speaks; a
+/// single letter finds its key and the words it begins, not every word it
+/// is somewhere in.
 fn key_answers(asked: &str, group: &str, written: &str, what: &str) -> bool {
     let words = |text: &str| -> Vec<String> {
         crate::db::sort_key(text)
@@ -382,8 +459,14 @@ fn key_answers(asked: &str, group: &str, written: &str, what: &str) -> bool {
     any
 }
 
+/// One shortcut on the sheet as shown: its keys, what it does, and whether
+/// a search sets it back.
 type KeyShown<'a> = (&'a str, &'a str, Shine);
 
+/// The key sheet's search field: what has been typed, with a caret, or where
+/// nothing has, the word saying what typing does — on the search field's own
+/// ground, as tall and with the same air as the one in the masthead. Lifted a
+/// step, as that one is while the keyboard is in it: here it always is.
 fn keys_field(ui: &mut Ui, asked: &str, palette: &Palette) {
     use super::library::{field_height, FIELD_PAD_X, MIN_FIELD};
     let tall = field_height();
@@ -416,8 +499,11 @@ fn keys_field(ui: &mut Ui, asked: &str, palette: &Palette) {
     }
 }
 
+/// The air under the key sheet's search field, before the first group.
 const KEYS_FIELD_AIR: f32 = 8.0;
 
+/// A group's word in the key sheet: small, in the heads' colour, with a
+/// little air above it, set in by `indent`.
 fn caption_in(ui: &mut Ui, word: &str, palette: &Palette, indent: f32) {
     const ABOVE: f32 = 6.0;
     let g = text::line(ui, word, Role::Label, palette.heading());
@@ -428,34 +514,55 @@ fn caption_in(ui: &mut Ui, word: &str, palette: &Palette, indent: f32) {
     ui.painter().galley(at, g, palette.heading());
 }
 
+/// How far a choice inside an opened list is set in from its setting.
 const INDENT: f32 = 20.0;
 
+/// What kind of line a menu row is.
 #[derive(Clone, Copy, PartialEq)]
 enum Line {
+    /// A fact, there to be read.
     Reading,
+    /// A setting: click it to change or to open its list.
     Setting,
+    /// One choice inside an opened list — set in, and marked when it is the
+    /// one in use.
     Choice { active: bool },
+    /// A fact inside an opened list: set in like a choice, there to be read
+    /// — the licences under „über".
     Listed,
 }
 
+/// What the keys asked of the menu, and how many rows it had last time.
 #[derive(Clone, Copy, Default)]
 pub struct MenuKeys {
+    /// The row the cursor is on, counted in drawing order.
     pub cursor: Option<usize>,
+    /// What was pressed on it, used up by the row.
     pub press: Press,
+    /// Whether the sheet should scroll to it this frame.
     pub follow: bool,
+    /// How many rows were counted so far this frame, and last frame.
     seen: usize,
     pub count: usize,
+    /// Whether the keyboard is in the tabs rather than the rows: the open tab
+    /// is marked then, as a row is.
     pub on_tabs: bool,
+    /// Whether the tabs stand down the left, rather than along the top.
     pub tabbed: bool,
+    /// Whether the row the cursor is on was a slider last frame, which
+    /// `←` and `→` move rather than leave; and this frame, so far.
     pub on_slider: bool,
     slider_seen: bool,
 }
 
+/// A key pressed on the row the cursor is on.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum Press {
     #[default]
     Nothing,
+    /// `enter`, `space` or `→`: what a click does.
     Act,
+    /// `←` and `→` (`h` and `l`) on a slider: a step down or up.
     Less,
     More,
 }
@@ -464,10 +571,15 @@ fn menu_keys_id() -> egui::Id {
     egui::Id::unique("menu-keys")
 }
 
+/// Read and change the menu's keyboard state.
 pub fn with_menu_keys(ctx: &egui::Context, change: impl FnOnce(&mut MenuKeys)) {
     ctx.data_mut(|d| change(d.get_temp_mut_or_default(menu_keys_id())));
 }
 
+/// Called by every row one can act on, as it is drawn: whether the cursor
+/// is on it, and what was pressed there. A click with the pointer brings
+/// the cursor to the row clicked, so the two never disagree about where one
+/// is.
 fn keyed(ui: &Ui, rect: Rect, clicked: bool) -> (bool, Press) {
     let mut out = (false, Press::Nothing);
     let mut follow = false;
@@ -489,6 +601,9 @@ fn keyed(ui: &Ui, rect: Rect, clicked: bool) -> (bool, Press) {
     out
 }
 
+/// One row: a label on the left, its value on the right.
+/// „gehört": a setting's row, its value followed by `tail` in the label
+/// size, set on the same line — the two together end where a value ends.
 fn heard_row(ui: &mut Ui, value: &str, tail: Option<std::sync::Arc<egui::Galley>>, palette: &Palette) -> egui::Response {
     let Some(tail) = tail else {
         return row(ui, tr!("gehört"), value, true, palette);
@@ -524,11 +639,16 @@ fn row(
     line(ui, label, value, kind, palette, None, false)
 }
 
+/// A setting that is either on or off, answered in the words for it and lit
+/// the way the window lights whatever is on: the answer in the accent while
+/// it is on, as ↻ and ⇆ in the header are, and in the ink while it is off.
 fn toggle(ui: &mut Ui, label: &str, on: bool, words: (&str, &str), palette: &Palette) -> egui::Response {
     let value = if on { words.0 } else { words.1 };
     line(ui, crate::lang::t(label), crate::lang::t(value), Line::Setting, palette, None, on)
 }
 
+/// A few sentences of explanation under the rows they are about, wrapped, in
+/// the faintest tone.
 fn explanation(ui: &mut Ui, words: &str, palette: &Palette) {
     let width = ui.available_width();
     let g = text::prose(ui, words, Role::Label, palette.faint, width);
@@ -538,8 +658,17 @@ fn explanation(ui: &mut Ui, words: &str, palette: &Palette) {
     ui.add_space(8.0);
 }
 
+/// The words a plain switch answers in.
 const AN_AUS: (&str, &str) = ("an", "aus");
 
+/// The same, with a word that appears at the far right under the pointer.
+///
+/// For a row whose value is the thing itself — a folder's path — and whose
+/// action cannot be written into that value. The word's room is held free
+/// whether or not it is showing, so the value does not jump sideways when the
+/// pointer arrives, and so the two cannot end up printed over one another.
+/// Which is what they did: the path and „entfernen" were both set flush right,
+/// on the same line, and the result was unreadable.
 fn row_with_hint(
     ui: &mut Ui,
     label: &str,
@@ -550,16 +679,36 @@ fn row_with_hint(
     line(ui, label, value, Line::Setting, palette, Some(hint), false)
 }
 
+/// One choice in an opened list.
 fn choice(ui: &mut Ui, label: &str, value: &str, active: bool, palette: &Palette) -> egui::Response {
     line(ui, label, value, Line::Choice { active }, palette, None, false)
 }
 
+/// Rows that belong to the row above them, set in by a step.
+///
+/// The same step an opened list is set in, and for the same reason: what hangs
+/// off a setting — the cover's rows under „ansicht", „dabei" under „musik" —
+/// should read as part of it rather than as more settings beside it. Only the
+/// labels move; the answers stay flush right with every other answer. Never
+/// nested: a second step in read as a puzzle, so what hangs off a row that is
+/// itself set in says whose it is in its label and stays on the same step.
 fn set_in<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
     let mut room = ui.available_rect_before_wrap();
     room.min.x += INDENT;
     ui.scope_builder(egui::UiBuilder::new().max_rect(room), rows).inner
 }
 
+/// Draw one line of the menu.
+///
+/// Three kinds of line share this, and the differences between them are the
+/// whole point: a list that has been opened has to look like part of the
+/// setting above it rather than like more settings, and the entry in use has to
+/// be visible at a glance. Both are said the same way as everywhere else in the
+/// window: a step to the right for the list, and for the one in use the mark
+/// the track list gives the one that is playing — an arrow in front of it and
+/// the name in the accent.
+///
+/// `lit` sets the value in the accent — see [`toggle`].
 fn line(
     ui: &mut Ui,
     label: &str,
@@ -662,6 +811,16 @@ fn line(
     response
 }
 
+/// A row you can drag: a label, a word for where it stands, and a rule.
+///
+/// The same rule as the volume in the masthead, because it means the same
+/// thing — a quantity with two ends and no numbers worth reading. It thickens
+/// under the pointer and nowhere else, so the menu still has no lines in it
+/// until you reach for one.
+///
+/// Returns where it was moved to, and whether the hand has let go — the
+/// setting follows the pointer so the wall redraws as you choose, and the file
+/// is written once, when the choosing is over.
 fn slider(
     ui: &mut Ui,
     label: &str,
@@ -744,6 +903,12 @@ fn slider(
     (moved, response.drag_stopped() || response.clicked() || stepped.is_some())
 }
 
+/// The music folders: one row each, and a way to add another.
+///
+/// A row that only *reports* where the music is makes the setting look like
+/// something you edit in a file somewhere. Each folder gets its own line, says
+/// "entfernen" under the pointer, and the last line opens the system's own
+/// picker.
 fn music_folders(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let folders: Vec<std::path::PathBuf> = app.config.music_dirs.clone();
     let mut forget: Option<usize> = None;
@@ -786,6 +951,10 @@ fn music_folders(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// A path with the home folder written as `~`.
+///
+/// Every path on a Mac starts with the same twenty characters, and they are
+/// the twenty that say the least.
 fn shorten(path: &std::path::Path) -> String {
     let text = path.display().to_string();
     let Some(home) = std::env::var_os("HOME") else {
@@ -812,6 +981,7 @@ fn heading(ui: &mut Ui, label: &str, palette: &Palette) {
     ui.painter().galley(at, g, palette.heading());
 }
 
+/// Draw the menu, if it is open.
 pub fn render(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metrics) {
     let mut fading = 1.0;
     if !app.menu_open {
@@ -1005,6 +1175,13 @@ pub fn render(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metrics)
         });
 }
 
+/// Every key at once, over the window: `?` shows it, `?`, escape or a click
+/// puts it away.
+///
+/// The same list the menu folds away under „tasten", set the way the menu is
+/// set — a veil behind, a sheet in the middle — but with nothing to click
+/// in it, and its groups side by side in as many columns as fit, so the whole
+/// of it is seen at one glance rather than scrolled through.
 pub fn keys_sheet(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metrics) {
     if !app.keys_sheet_open || app.menu_open {
         return;
@@ -1144,6 +1321,9 @@ pub fn keys_sheet(app: &mut GuiApp, ui: &Ui, window: Rect, m: super::theme::Metr
         });
 }
 
+/// What kessler does at all, and in which language: the radio, the iPod, the
+/// podcasts, the screen saver below it in the same tab; a part that is off has
+/// no tab of its own.
 fn general_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("allgemein"), palette);
     let setting = app.config.ui.language.clone();
@@ -1257,12 +1437,19 @@ fn general_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     explanation(ui, tr!("setzt darstellung, spalten, bilder, schrift und die übrigen einstellungen des menüs zurück. musikordner, last.fm, ipod und die funktionen oben bleiben."), palette);
 }
 
+/// How long the second click of „einstellungen zurücksetzen" may take.
 const RESET_WINDOW_SECS: f64 = 4.0;
 
+/// The podcasts' own tab: there only while they are on under „allgemein".
 fn podcasts_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, "podcasts", palette);
     if !app.config.ui.podcasts {
         return;
+    }
+    let letters = app.config.ui.podcast_letters;
+    if toggle(ui, tr!("register"), letters, AN_AUS, palette).clicked() {
+        app.config.ui.podcast_letters = !letters;
+        app.save_config();
     }
     const BACKS: [u32; 4] = [10, 15, 30, 60];
     const AHEADS: [u32; 5] = [10, 15, 30, 45, 60];
@@ -1355,18 +1542,26 @@ fn podcasts_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// Which parts are on, for the tabs — set once a frame, read where the
+/// tabs are counted, which knows nothing of the config.
 static RADIO_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static IPOD_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 static PODCASTS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MUSIC_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 pub(in crate::gui) fn note_features(ui: &crate::config::UiConfig) {
     RADIO_ON.store(ui.radio, std::sync::atomic::Ordering::Relaxed);
     IPOD_ON.store(ui.ipod, std::sync::atomic::Ordering::Relaxed);
     PODCASTS_ON.store(ui.podcasts, std::sync::atomic::Ordering::Relaxed);
+    MUSIC_ON.store(ui.music, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// One section of the sheet: a heading and its rows.
 type Section = fn(&mut GuiApp, &mut Ui, &Palette);
 
+/// Every section, in reading order. They flow down the first column and on
+/// into the second, like a text set in two columns — see [`body`].
+/// How many there are; the heights the window keeps are counted by it.
 pub const SECTION_COUNT: usize = SECTIONS.len();
 
 const SECTIONS: &[Section] = &[
@@ -1392,11 +1587,21 @@ const SECTIONS: &[Section] = &[
     foot_section,
 ];
 
+/// The section „über" holds.
 const ABOUT: usize = 18;
 
+/// Where the iPod's section is: the one that is there only while a device is.
 const IPOD: usize = 10;
 
 const MENUBAR: usize = 13;
+
+const ARTISTS: usize = 7;
+
+const ALBUMS: usize = 8;
+
+const TRACKS: usize = 9;
+
+const LASTFM: usize = 12;
 
 const RADIO: usize = 14;
 
@@ -1406,40 +1611,54 @@ const GENERAL: usize = 16;
 
 const PODCASTS: usize = 17;
 
+/// The foot's section, after „über" in the list though shown under the
+/// header's.
 const FOOT: usize = 19;
 
+/// Whether a section has anything to say right now.
 fn shown(at: usize) -> bool {
     match at {
         IPOD => IPOD_ON.load(std::sync::atomic::Ordering::Relaxed),
         RADIO => RADIO_ON.load(std::sync::atomic::Ordering::Relaxed),
         PODCASTS => PODCASTS_ON.load(std::sync::atomic::Ordering::Relaxed),
+        ARTISTS | ALBUMS | TRACKS => MUSIC_ON.load(std::sync::atomic::Ordering::Relaxed),
         MENUBAR => crate::media::tray_available() || crate::media::touchbar_available(),
         _ => true,
     }
 }
 
+/// The menu's tabs: a name down the left, and the sections it shows beside it —
+/// one sheet at a time, clicked through.
+/// Tried first in the panels; the menu's only form, the long sheet in columns
+/// gone with them.
 pub(in crate::gui) const TABS: &[(&str, &[usize])] = &[
-    ("allgemein", &[GENERAL, 6, 5]),
-    ("bibliothek", &[0, 1]),
+    ("allgemein", &[GENERAL, LASTFM, 6, 5]),
+    ("musik", &[0, 1, ARTISTS, ALBUMS, TRACKS]),
     ("darstellung", &[2, 3, FOOT, 4, MENUBAR]),
-    ("spalten", &[7, 8, 9, SIDES]),
-    ("wiedergabe", &[11, 12]),
+    ("seitenspalten", &[SIDES]),
+    ("wiedergabe", &[11]),
     ("radio", &[RADIO]),
     ("podcasts", &[PODCASTS]),
     ("ipod", &[IPOD]),
     ("über", &[ABOUT]),
 ];
 
+/// How wide the list of tabs is.
 const TAB_LIST: f32 = 168.0;
 
+/// Between the tabs and what they hold: twice the sheet's own padding, so
+/// each side stands as far from the other as from the sheet's edge.
 const TAB_GAP: f32 = PADDING * 2.0;
 
+/// The tabs there are now: the keyboard's only while one is plugged in, the
+/// iPod's always.
 pub(in crate::gui) fn tabs_shown() -> Vec<usize> {
     (0..TABS.len())
         .filter(|&t| TABS[t].1.iter().any(|&at| shown(at)))
         .collect()
 }
 
+/// Another tab, `by` along, round again at either end — `[` and `]`.
 pub(in crate::gui) fn step_tab(app: &mut GuiApp, by: isize) {
     let tabs = tabs_shown();
     if tabs.is_empty() {
@@ -1450,6 +1669,9 @@ pub(in crate::gui) fn step_tab(app: &mut GuiApp, by: isize) {
     app.menu_tab = tabs[((at + by) % n + n) as usize % tabs.len()];
 }
 
+/// Keep the tab shown one that is there, and put a cursor the keyboard had
+/// on the first row of another tab, not on a row number left over from the
+/// last one. Says whether another tab is shown than last frame.
 fn keep_tab(app: &mut GuiApp, ui: &Ui) -> bool {
     let shown_id = egui::Id::unique("menu-tab-shown");
     let was: Option<usize> = ui.data(|d| d.get_temp(shown_id));
@@ -1470,10 +1692,14 @@ fn keep_tab(app: &mut GuiApp, ui: &Ui) -> bool {
     switched
 }
 
+/// How tall the list of tabs is.
 fn tab_list_height() -> f32 {
     row_height() * tabs_shown().len() as f32
 }
 
+/// One tab's name, on the plate every row of the menu wears, reaching into the
+/// padding by its bleed; the word at the row's edge, as far from the sheet's
+/// left edge as the answers on the right are from its right.
 fn tab(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, t: usize, width: Option<f32>) {
     let on = t == app.menu_tab;
     let down_the_side = width.is_some();
@@ -1518,6 +1744,8 @@ fn tab(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, t: usize, width: Option
     }
 }
 
+/// The tabs down the left, `height` tall. „schliessen" stands at the top
+/// right of the sheet — see `sheet_head`.
 fn tab_list(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, height: f32) {
     ui.allocate_ui_with_layout(Vec2::new(TAB_LIST, height), egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_width(TAB_LIST);
@@ -1528,6 +1756,8 @@ fn tab_list(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, height: f32) {
     });
 }
 
+/// The tabs along the top, for a window too narrow for them down the left,
+/// broken onto a second line where they do not fit on one.
 fn tab_bar(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(HOVER_BLEED as i8, 0)).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -1539,6 +1769,12 @@ fn tab_bar(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     });
 }
 
+/// What the chosen tab holds, as tall as the tallest tab so the sheet does not
+/// jump from one to the next — or as the room it is seen in, `view`, where that
+/// is less: a short tab in a sheet the window cuts short scrolled on into
+/// nothing, faded at a foot with nothing under it, and the drawing under „über"
+/// was cut off there. Returns how tall the tallest is, which is what the sheet
+/// is sized by.
 fn tab_content(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, view: f32) -> f32 {
     let settling = ui.data(|d| d.get_temp::<bool>(egui::Id::unique(SETTLING))).unwrap_or(false);
     let forgotten = tabs_shown()
@@ -1582,20 +1818,39 @@ fn tab_content(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, view: f32) -> f
     tallest
 }
 
+/// The drawing, as a mask: how much ink there is at each point, from
+/// `bundle/make-drawing.py`.
 pub(in crate::gui) const DRAWING: &[u8] = include_bytes!("drawing.png");
 
+/// The drawing at the foot of `room`, centred across it, as large as
+/// fits, however large that is, in `colour`.
+///
+/// Scaled down from the scan once for each size it is shown at, at the screen's
+/// own pixels and smoothly, so the line is as fine as the pen's rather than
+/// stepped or blurred by the card stretching it. Not screened into dots as the
+/// pictures are: a line screened is a dotted line. Returns how tall it came
+/// out.
 fn drawing(ui: &Ui, room: Rect, palette: &Palette) -> f32 {
     static MASK: std::sync::OnceLock<image::GrayImage> = std::sync::OnceLock::new();
     ink_drawing(ui, room, palette, &MASK, DRAWING, "menu-drawing", 0.46)
 }
 
+/// The drawing over „alles ist ausgeschaltet".
 const DRAWING_OFF: &[u8] = include_bytes!("drawing-off.png");
 
+/// The second drawing at the foot of `room`, as [`drawing`] sets the
+/// first. Returns how tall it came out.
 pub(in crate::gui) fn drawing_off(ui: &Ui, room: Rect, palette: &Palette) -> f32 {
     static MASK: std::sync::OnceLock<image::GrayImage> = std::sync::OnceLock::new();
     ink_drawing(ui, room, palette, &MASK, DRAWING_OFF, "all-off-drawing", 0.5)
 }
 
+/// One of the drawings, read once from `bytes` into `mask`, as [`drawing`]
+/// says; `key` keeps its texture apart from the other's, and `middle_at` says
+/// which part of its width stands in the middle of `room`.
+///
+/// Every drawing in the receded accent, `accent_faint`, the same for all of
+/// them and for any that come. Set here, so no caller can choose another.
 fn ink_drawing(
     ui: &Ui,
     room: Rect,
@@ -1657,8 +1912,22 @@ fn ink_drawing(
     size.y
 }
 
+/// Whether the sheet is still being centred this frame — see `render`.
 const SETTLING: &str = "menu-settling";
 
+/// Draw every tab but the open one where nobody sees it, to learn how tall
+/// each is.
+///
+/// The sheet is as tall as its tallest tab, so that it does not jump from one
+/// to the next — but it only knew the tabs it had shown. Opened on a short one,
+/// it was centred on that, and grew downwards off centre the moment a taller
+/// one was chosen. Measured while it is being centred, it has its whole height
+/// before anybody sees it, and a tab that changed while the menu was shut (a
+/// device plugged in) is measured afresh.
+///
+/// Off to one side, invisible and so unable to be clicked, at the width the
+/// open tab is set to. The keyboard's state is put back afterwards: the rows
+/// drawn here count themselves as rows the cursor could be on.
 fn measure_hidden_tabs(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let kept: MenuKeys = ui.data(|d| d.get_temp(menu_keys_id())).unwrap_or_default();
     with_menu_keys(ui.ctx(), |keys| {
@@ -1684,20 +1953,34 @@ fn measure_hidden_tabs(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     ui.data_mut(|d| d.insert_temp(menu_keys_id(), kept));
 }
 
+/// Cut the columns again, once every section has been measured afresh.
+///
+/// For a list folding shut. The break is kept while the sheet is open so that
+/// opening a list does not carry the row that opened it off under the pointer —
+/// but a break made with a list open, kept after it has closed, left one column
+/// short and the others long, and the sheet scrolled into the middle of itself.
+/// Forgetting the heights too keeps the stale ones from making the same break
+/// again: for one frame the sections are shared out by count, then measured,
+/// then cut.
 pub(in crate::gui) fn rebalance(app: &mut GuiApp) {
     app.menu_heights = [0.0; SECTION_COUNT];
 }
 
 thread_local! {
+    /// The name of the tab being drawn, in the language shown — see
+    /// `heading`.
     static TAB_WORD: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
 }
 
+/// Draw the sections of tab `t`, its own name not repeated over them.
 fn run_tab(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, t: usize) {
     TAB_WORD.with(|word| word.set(crate::lang::t(TABS[t].0)));
     run(app, ui, palette, TABS[t].1.iter().copied());
     TAB_WORD.with(|word| word.set(""));
 }
 
+/// Draw some of the sections one below the other, with a row of air between
+/// two, and note how tall each came out.
 fn run(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, which: impl IntoIterator<Item = usize>) {
     let mut first = true;
     for at in which {
@@ -1714,6 +1997,7 @@ fn run(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, which: impl IntoIterato
     }
 }
 
+/// The music: where it is, reading it in, adding to it, covers and years.
 fn library_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("bibliothek"), palette);
 
@@ -1786,6 +2070,12 @@ fn library_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     artist_info_rows(app, ui, palette);
 }
 
+/// Filling in what the files do not say: covers, years, genres.
+///
+/// Their own section rather than the foot of „bibliothek": they are one kind of
+/// chore — the library going through itself for what is missing — and they used
+/// to stand under the rows about getting music in, where nobody looking for
+/// them would look.
 fn fill_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("idtags ergänzen"), palette);
     let scanning = app.is_scanning();
@@ -1817,6 +2107,7 @@ fn fill_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// How the window looks.
 fn look_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("darstellung"), palette);
 
@@ -1945,6 +2236,9 @@ fn look_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// What stands in the line along the top: what is playing, the two modes, and
+/// the picture in the search field. Taken out of „darstellung" so that one is
+/// about how the whole window looks and this about the one line.
 fn header_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("kopfzeile"), palette);
 
@@ -2043,6 +2337,10 @@ fn header_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     });
 }
 
+/// What stands along the bottom: the library's counts at the left — the
+/// status always stands at the right — and whether the columns keep a margin
+/// above the window's edge where nothing is written under them. Apart from
+/// „kopfzeile", whose line it is not.
 fn foot_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("fußzeile"), palette);
     let edge = app.config.ui.columns_to_edge;
@@ -2083,10 +2381,22 @@ fn foot_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     });
 }
 
+/// The symbol in the menu bar, on a Mac — see `menubar`. Under „darstellung"
+/// rather than „kopfzeile": the menu bar is the system's, not a line of the
+/// window; a section of its own: the k, the k turning into the scope, the k
+/// turning into the running title. The
+/// radio's own tab. Always there, so the radio can be switched on from it;
+/// asleep until it is — off again, a station still on the air stops and the
+/// column goes back to the library.
 fn radio_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("radio"), palette);
     if !app.config.ui.radio {
         return;
+    }
+    let letters = app.config.ui.radio_letters;
+    if toggle(ui, tr!("register"), letters, AN_AUS, palette).clicked() {
+        app.config.ui.radio_letters = !letters;
+        app.save_config();
     }
     let logos = app.config.ui.radio_logos;
     if toggle(ui, tr!("logos der stationen laden"), logos, AN_AUS, palette).clicked() {
@@ -2195,6 +2505,8 @@ fn menubar_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     touch_bar_rows(app, ui, palette);
 }
 
+/// The Touch Bar, beside the menu bar: there only on a MacBook that has one.
+/// What plays and the keys to steer it, while the window is in front.
 fn touch_bar_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if !crate::media::touchbar_available() {
         return;
@@ -2232,6 +2544,9 @@ fn touch_bar_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// What the window may cost: how often it draws, and how often the scope in the
+/// search field moves. Nothing in it changes what is shown, only how smoothly
+/// and at what price, so it stands apart from both.
 fn frugal_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("sparsam"), palette);
 
@@ -2247,6 +2562,7 @@ fn frugal_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The slider for the face's width — see `look_section`.
 fn font_width_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, least: f32, most: f32) {
     let pending = egui::Id::unique("font-width-pending");
     let width = ui
@@ -2270,6 +2586,8 @@ fn font_width_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, least: f32, 
     }
 }
 
+/// The regular's weight on the face's weight axis, as a slider like the
+/// width's: said as the axis says it, 400 being the face's regular.
 fn style_sets_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, sets: &[super::theme::StyleSet]) {
     let on = app.config.ui.sets_of(super::theme::face_key(&app.config.ui.typeface));
     let unfolded = app.sets_open;
@@ -2294,6 +2612,9 @@ fn style_sets_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, sets: &[sup
     }
 }
 
+/// The letter an alternate redraws, as the menu can say it: everything here
+/// is set small, so a capital says so in a word. The rest of a set (arrows,
+/// ©) by a few of its characters.
 fn set_letter(set: &super::theme::StyleSet) -> String {
     match set.letter {
         Some(c) if c.is_ascii_uppercase() => format!("{} {}", tr!("gross|buchstaben"), c.to_ascii_lowercase()),
@@ -2337,8 +2658,20 @@ fn font_weight_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, least: f32,
     }
 }
 
+/// The first column.
 fn artists_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("künstler:innen"), palette);
+
+    let letters = app.config.ui.artist_letters;
+    if toggle(ui, tr!("register"), letters, AN_AUS, palette).clicked() {
+        app.config.ui.artist_letters = !letters;
+        app.save_config();
+    }
+    let bar = app.config.ui.artist_letter_bar;
+    if toggle(ui, tr!("buchstabenleiste (beta)"), bar, AN_AUS, palette).clicked() {
+        app.config.ui.artist_letter_bar = !bar;
+        app.save_config();
+    }
 
     if toggle(ui, "alle-zeile", app.config.ui.show_all_artists, ("sichtbar", "versteckt"), palette)
         .clicked()
@@ -2396,6 +2729,7 @@ fn artists_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
 
 }
 
+/// The middle column.
 fn albums_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("alben"), palette);
 
@@ -2424,12 +2758,15 @@ fn albums_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The rows under „ansicht" that belong to the view in use: the headings'
+/// covers and figures in the track list.
 fn view_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if app.merged() {
         heading_cover_rows(app, ui, palette);
     }
 }
 
+/// The track list.
 fn tracks_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if app.merged() {
         return;
@@ -2438,6 +2775,8 @@ fn tracks_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     track_column_rows(app, ui, palette);
 }
 
+/// The track list's columns, on and off, and what hangs off them — under
+/// „titelliste", or under „alben" with the albums in the list.
 fn track_column_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let merged = app.merged();
     for column in TrackColumn::ALL {
@@ -2493,6 +2832,7 @@ fn track_column_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The iPod, while one is plugged in — nothing at all while none is.
 fn ipod_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let refusal = app.attached.as_ref().map(|a| a.refusal.clone());
     if refusal.is_none() {
@@ -2551,6 +2891,9 @@ fn ipod_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// What happens when an iPod is plugged in, stepped round: nothing, the
+/// overview of a sync to answer, or the sync itself — see
+/// `Config::ipod_on_connect`.
 fn connect_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     const STEPS: [&str; 3] = ["nichts", "fragen", "abgleichen"];
     let now = STEPS.iter().position(|s| *s == app.config.ipod_on_connect).unwrap_or(0);
@@ -2564,6 +2907,8 @@ fn connect_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// Whether what the iPod played and rated while away comes into the library
+/// and to last.fm when it is plugged in — see `GuiApp::take_plays`.
 fn plays_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let on = app.config.ipod_take_plays;
     let said = match (on, app.scrobbler.is_some()) {
@@ -2577,6 +2922,8 @@ fn plays_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// Whether what the iPod cannot play goes over as MP3 — or, without ffmpeg,
+/// what is missing for it.
 fn convert_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if crate::ipod::sync::transcoder_available() {
         let on = app.config.ipod_convert;
@@ -2605,6 +2952,9 @@ fn convert_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The experiment: the episodes fetched and still to be heard go onto the
+/// iPod with a sync of the whole library, as a playlist „podcasts" — see
+/// `GuiApp::podcast_list`. Only where the podcasts are switched on.
 fn podcasts_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if !app.config.ui.podcasts {
         return;
@@ -2617,6 +2967,8 @@ fn podcasts_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// On Linux: whether kessler mounts an iPod nobody has mounted — see
+/// `ipod::udisks`. Nowhere else, where the system always does.
 fn mount_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if !cfg!(target_os = "linux") {
         return;
@@ -2628,6 +2980,7 @@ fn mount_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// How the library marks what is on the iPod already, stepped round.
 fn mark_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let marks = super::library::DEVICE_MARKS;
     let mark = app.config.ui.device_mark.clone();
@@ -2643,6 +2996,7 @@ fn mark_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// How it plays.
 fn playback_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("wiedergabe"), palette);
 
@@ -2703,6 +3057,7 @@ fn playback_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
 
 }
 
+/// Who it tells.
 fn lastfm_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, "last.fm", palette);
 
@@ -2777,6 +3132,15 @@ fn lastfm_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The key and the secret, as two fields in the menu's own rows.
+///
+/// A field is two lines: its label where every label is, and under it, set in
+/// by a step as an opened list is, what has been written, with the caret after
+/// it in the accent. Thirty-two characters do not fit beside a label in a
+/// column this wide, and a key cut short with is a key that cannot be checked
+/// by eye. The marker stands behind the field that has the keyboard — the same
+/// marker the columns put behind the row the cursor is on. The secret is shown
+/// only while it is being typed.
 fn key_fields(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     use super::lastfmkeys::LABELS;
     let mut focus_on = None;
@@ -2818,6 +3182,10 @@ fn key_fields(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// One field typed into in the menu: its label where every label is, and
+/// under it, set in by a step as an opened list is, what has been written,
+/// with the caret after it. The marker stands behind the field that has the
+/// keyboard. `masked` shows dots for what is written.
 fn entry_field(
     ui: &mut Ui,
     label: &str,
@@ -2886,8 +3254,17 @@ fn entry_field(
     response
 }
 
+/// Room kept right of a field's text for its caret.
 const CARET_ROOM: f32 = 3.0;
 
+/// What is known about the artists: the fourth column that shows it, the
+/// run that gathers it for everyone, and the way out as pages. Not under
+/// „über", which is about the program, not the people in it.
+///
+/// Under „bibliothek", as three rows rather than a section of their own: what
+/// is gathered about the artists is part of the library. The first names what it is about; the two after it are set in under it. The
+/// other artists column has no row: it opens with `o` as the queue opens with
+/// `w`, and the menu is not where columns are opened.
 fn artist_info_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let running = app.artist_hunt.as_ref().map(|h| (h.asked, h.total, h.again));
     artist_hunt_row(app, ui, palette, running, false);
@@ -2899,6 +3276,8 @@ fn artist_info_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     });
 }
 
+/// One of the two searches for what is known about the artists: those never
+/// asked about, or everyone again.
 fn artist_hunt_row(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -2928,15 +3307,21 @@ fn artist_hunt_row(
     }
 }
 
+/// Where the project lives, and who makes it.
 const LICENSE: (&str, &str) = ("gpl-3.0", "https://www.gnu.org/licenses/gpl-3.0.html");
 const GITHUB: (&str, &str) = ("radiorauschen/kessler", "https://github.com/radiorauschen/kessler");
+/// One of the parts of „informationen" that can be left out: where in the
+/// settings it is switched.
 type Part = fn(&mut crate::config::UiConfig) -> &mut bool;
 
+/// The columns at the side, one heading each: what „informationen" shows, how
+/// the lyrics are set, which kinds the log leaves out and where it goes out to,
+/// and how many other artists are listed.
 fn sides_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("informationen"), palette);
     let parts: [(&str, Part); 6] = [
         ("bild", |ui| &mut ui.info_picture),
-        ("steckbrief", |ui| &mut ui.info_facts),
+        ("eckdaten", |ui| &mut ui.info_facts),
         ("wikipedia", |ui| &mut ui.info_wikipedia),
         ("bibliothek und radio", |ui| &mut ui.info_library),
         ("mitglieder, gruppen", |ui| &mut ui.info_ties),
@@ -3000,6 +3385,7 @@ fn sides_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// Where kessler lives.
 fn about_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("über"), palette);
 
@@ -3092,6 +3478,7 @@ fn about_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// „messen", for the measurement — see `about_section`.
 fn measure_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let said = match &app.measure {
         Some(_) => tr!("läuft"),
@@ -3114,6 +3501,22 @@ fn measure_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The head of the sheet: the program's own figure, its name and its number
+/// beside it, and „schliessen" at the far end. Until then the figure stood at
+/// the foot of „über" with the name, the commit and the motto under it, and
+/// „schliessen" at the foot of the tabs. Returns how tall it stands, with the
+/// air under it.
+///
+/// While something sounds, the figure is the music — one scope, every register
+/// inside the others, the field's picture made small and set in the accent.
+/// While nothing does, it stands still as the line the icon is drawn from. It
+/// is also the one play key in the menu: a click plays or pauses what is
+/// loaded, so the music can be stopped for a moment without closing the sheet
+/// first. Nothing about it says so but the hand over it.
+///
+/// The build's commit beside the number, faint, for the day somebody asks
+/// which one this is: the `+` means the working copy had changes that were
+/// not committed when it was built, so the hash names its parent.
 fn sheet_head(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) -> f32 {
     let row = row_height();
     let tall = row * 2.0;
@@ -3174,16 +3577,26 @@ fn sheet_head(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) -> f32 {
     tall + air + ui.spacing().item_spacing.y
 }
 
+/// „kessler", set to be measured.
 fn probe_name(ui: &Ui, palette: &Palette) -> std::sync::Arc<egui::Galley> {
     text::line_tracked(ui, tr!("kessler"), Role::Content, palette.ink, HEAD_TRACKING)
 }
 
+/// A shade more air between the letters of the head — name, number and commit —
+/// than the roles keep.
 const HEAD_TRACKING: f32 = 0.4;
 
+/// The air under the head beyond the padding's, see `sheet_head`.
 const HEAD_EXTRA: f32 = 6.0;
 
+/// Between the figure and the name beside it. The sheet's own padding (24)
+/// until the figure stood on a plate of its own: with the plate's edge to
+/// measure from, that read as too far, so two thirds of it.
 const FIGURE_GAP: f32 = 16.0;
 
+/// The icon's figure: one note, three passes of it, each a little smaller and
+/// further turned — the numbers `bundle/make-icon.py` draws with. As points
+/// about a middle of (0, 0), up being negative, for a figure `across` wide.
 pub(super) fn icon_curve(across: f32, steps: usize) -> Vec<(f32, f32)> {
     let reach = 0.33 * across / 0.70;
     (0..steps)
@@ -3200,6 +3613,18 @@ pub(super) fn icon_curve(across: f32, steps: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// The same figure as light screened into dots, the way the live scope is: at
+/// the screen's own pixels, one dot a pixel, with a thin beam and no glow — so
+/// the still mark is the same fine scatter the music draws there, and not a
+/// coarser picture of its own. Made once and kept; it changes only with the
+/// size, the screen and the screening method. Paused, the plate the pictures
+/// play on keeps its place and shows the icon's k, in the accent, until the
+/// music goes on. Only where there are pictures at all; without them the still
+/// figure stands as before. False when there is nothing to draw it from (egui's
+/// own face). The k on its plate while nothing plays — paused, stopped or not
+/// yet started — so the head looks the same whatever the field shows. False
+/// while something plays, unless `always`: then where the field shows no
+/// picture.
 fn still_mark(app: &mut GuiApp, ui: &Ui, room: Rect, palette: &Palette, always: bool) -> bool {
     if !always && app.player.state() == crate::player::PlaybackState::Playing {
         return false;
@@ -3238,6 +3663,8 @@ fn still_mark(app: &mut GuiApp, ui: &Ui, room: Rect, palette: &Palette, always: 
 }
 
 pub(super) fn screened_mark(app: &mut GuiApp, ui: &Ui, room: Rect, colour: egui::Color32) {
+    /// How much light a step along the beam leaves. Low enough that the
+    /// screen scatters it into dots along the line rather than filling it.
     const BEAM: f32 = 0.3;
     let ppp = ui.ctx().pixels_per_point();
     let side = (room.width() * ppp).round().max(8.0) as usize;
@@ -3291,6 +3718,14 @@ pub(super) fn screened_mark(app: &mut GuiApp, ui: &Ui, room: Rect, colour: egui:
     }
 }
 
+/// The screen saver, under a heading of its own: when it comes, how big its
+/// dots are, how long its light lingers, how strong and how screened it is,
+/// and a way to see it now.
+///
+/// Its own section rather than rows under „darstellung", beside „im suchfeld":
+/// there the dots and the afterglow read as settings of the small scope in the
+/// field too, which they are not. Every row stands even while it is off, so it
+/// can be set up and looked at before it is let loose.
 fn saver_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("bildschirmschoner"), palette);
     let after = app.config.ui.saver_after;
@@ -3308,8 +3743,11 @@ fn saver_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// How long the window waits before a screen saver that has just been
+/// turned on starts.
 const SAVER_FIRST: u32 = 5;
 
+/// How the screen saver starts and looks, under its „an".
 fn saver_details(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     use super::saver::{AFTER, DOTS, GLOWS, SIZES};
     let after = app.config.ui.saver_after;
@@ -3409,8 +3847,13 @@ fn saver_details(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The sizes „grösse" has a notch for, smallest to largest; the system's
+/// own is 1.
 pub(super) const ZOOMS: [f32; 8] = [0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75];
 
+/// The size to draw at, from what the config says: one of the steps, or
+/// anything sensible written by hand. Nonsense — zero, a negative, NaN — is
+/// the system's size rather than an invisible window.
 pub(super) fn zoom_of(configured: f32) -> f32 {
     if configured.is_finite() && (0.5..=2.0).contains(&configured) {
         configured
@@ -3419,6 +3862,8 @@ pub(super) fn zoom_of(configured: f32) -> f32 {
     }
 }
 
+/// Where on the rule a size stands, 0 … 1: at its notch, or at the nearest
+/// one for a size set by hand.
 fn zoom_notch(zoom: f32) -> f32 {
     let at = ZOOMS
         .iter()
@@ -3429,11 +3874,16 @@ fn zoom_notch(zoom: f32) -> f32 {
     at as f32 / (ZOOMS.len() - 1) as f32
 }
 
+/// The step `by` notches from this one, held at the ends; from a size set
+/// by hand, counted from the nearest notch.
 pub(super) fn zoom_step(current: f32, by: i32) -> f32 {
     let at = (zoom_notch(current) * (ZOOMS.len() - 1) as f32).round() as i32;
     ZOOMS[(at + by).clamp(0, ZOOMS.len() as i32 - 1) as usize]
 }
 
+/// The halftone methods, unfolded under a „verfahren" row. Returns the one
+/// clicked, for the row's owner to keep — the headings, the cover beside what
+/// is playing and the saver each keep their own.
 fn screen_list(ui: &mut Ui, palette: &Palette, current: Screen) -> Option<Screen> {
     let mut picked: Option<Screen> = None;
     for method in Screen::ALL {
@@ -3444,6 +3894,11 @@ fn screen_list(ui: &mut Ui, palette: &Palette, current: Screen) -> Option<Screen
     picked
 }
 
+/// How every picture is drawn — the covers in the track list and beside what is
+/// playing, the artist's picture, the iPod's screen: screened into dots or as
+/// it is, how, and how fine. One setting for all of them; until then the
+/// headings and the playing cover had their own, and the artist's picture none
+/// in the menu.
 fn pictures_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     heading(ui, tr!("bilder"), palette);
     let dithered = app.config.ui.cover_dither;
@@ -3500,8 +3955,15 @@ fn pictures_section(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     example_picture_row(app, ui, palette);
 }
 
+/// How big the example under „bilder" is drawn, in points: about the cover
+/// beside what plays.
 const EXAMPLE_SIDE: f32 = 148.0;
 
+/// A picture made for looking at a screen with: a ground running from dark to
+/// light, for the tones; a ball lit from the upper left, for a soft passage; a
+/// flat triangle and a flat square, for slanted and straight edges. Drawn, not
+/// shipped as a file — and so nobody's cover. In colour as most covers are, the
+/// ball nearer the middle and the two flat shapes at its feet, left and right.
 fn example_picture() -> &'static image::DynamicImage {
     static PICTURE: std::sync::OnceLock<image::DynamicImage> = std::sync::OnceLock::new();
     PICTURE.get_or_init(|| {
@@ -3547,6 +4009,8 @@ fn example_picture() -> &'static image::DynamicImage {
     })
 }
 
+/// The example under „bilder", drawn as every picture is now: it answers
+/// each row above it as it is changed.
 fn example_picture_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     ui.add_space(row_height() * 0.5);
     let side = EXAMPLE_SIDE.min(ui.available_width());
@@ -3588,6 +4052,9 @@ fn example_picture_row(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The rows for the covers on the records' headings in the track list: how
+/// big, whether screened, how, and how fine — the last three falling back to
+/// the base settings until they are changed here, as the playing cover's do.
 fn heading_cover_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let shown = app.config.ui.heading_covers;
     if toggle(ui, tr!("cover"), shown, AN_AUS, palette).clicked() {
@@ -3610,6 +4077,7 @@ fn heading_cover_rows(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// How big the headings' covers are, on the step their „cover" stands on.
 fn heading_cover_size(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     use crate::config::{HEADING_COVER_LEAST, HEADING_COVER_MOST};
     let span = (HEADING_COVER_MOST / HEADING_COVER_LEAST).ln();
@@ -3625,6 +4093,7 @@ fn heading_cover_size(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// A word for where the slider stands, because "0.62" says nothing.
 fn coarseness(fineness: f32) -> &'static str {
     match fineness {
         f if f < 0.15 => tr!("sehr grob"),
@@ -3635,6 +4104,7 @@ fn coarseness(fineness: f32) -> &'static str {
     }
 }
 
+/// The colour schemes, listed under the "farben" row.
 fn theme_list(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     let current = app.theme;
     let mut chosen: Option<Theme> = None;
@@ -3686,6 +4156,10 @@ fn theme_list(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// One's own scheme, made in place: its four colours, each opening three rules
+/// — lightness, colourfulness, hue — and the code that passes it on, copied
+/// with a click and taken from somebody else by pasting theirs. See
+/// [`super::theme::Seed`].
 fn own_scheme(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     use super::theme::{custom, from_rules, rules_of, set_custom};
     let dark = palette.is_dark();
@@ -3790,16 +4264,24 @@ fn own_scheme(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// Rade Matic's foundry, where Muto comes from.
 const FOUNDRY: &str = "https://www.radematic.com";
 
+/// Who makes kessler, as „über" names it, and where to read about it.
 const PUBLISHER: (&str, &str) = ("windpark soft", "https://windparkbooks.de/soft/");
 
+/// The faces that travel with kessler, by their folder in `fonts/`, and the
+/// licence each comes under. Each only where it is there.
 const FACE_LICENSES: [(&str, &str, &str); 3] = [
     ("asap", "Asap", "sil open font license 1.1"),
     ("m plus 1 code", "M PLUS 1 Code", "sil open font license 1.1"),
     ("muto", "Muto", "nur in kessler, rade matic"),
 ];
 
+/// Everything else kessler is made of, and its terms: the 8×8 face of the
+/// keyboard's screen, built in, and the libraries — four hundred and more
+/// crates, all under free licences, the two worth naming apart from the
+/// rest because theirs differ.
 const OTHER_LICENSES: [(&str, &str); 5] = [
     ("zeichnung", "cc by-nc-nd 4.0, felix h-w"),
     ("egui-schriften", "ubuntu font licence, ofl, mit"),
@@ -3808,6 +4290,8 @@ const OTHER_LICENSES: [(&str, &str); 5] = [
     ("rust-bibliotheken", "mit, apache-2.0, bsd, zlib"),
 ];
 
+/// The licences, one row each. A face's row opens its licence where it lies
+/// beside the face — the `OFL.txt` every free one carries.
 fn licenses(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     if choice(ui, "kessler", LICENSE.0, false, palette).clicked() && !crate::lastfm::open_in_browser(LICENSE.1) {
         app.set_status(tr!("der browser liess sich nicht öffnen"));
@@ -3832,9 +4316,14 @@ fn licenses(app: &mut GuiApp, ui: &mut Ui, palette: &Palette) {
     }
 }
 
+/// The menu trigger is three dots, drawn rather than set: in the label's size
+/// and tracking the font's shrinks to a smudge. Dot radius and the distance
+/// between their middles, as shares of the plate's height.
 const DOT_RADIUS: f32 = 0.065;
 const DOT_STEP: f32 = 0.24;
 
+/// The masthead's menu trigger, its right edge at `at`. Returns true when it
+/// was clicked.
 pub fn trigger(ui: &mut Ui, at: egui::Pos2, palette: &Palette, open: bool) -> bool {
     let width = trigger_width(ui);
     let left = egui::pos2(at.x - width, at.y);
@@ -3859,6 +4348,8 @@ pub fn trigger(ui: &mut Ui, at: egui::Pos2, palette: &Palette, open: bool) -> bo
     response.clicked()
 }
 
+/// Width of the trigger, so the masthead can lay out around it: a square
+/// plate.
 pub fn trigger_width(ui: &Ui) -> f32 {
     let probe = super::library::control_plate(ui, egui::pos2(0.0, 0.0), 0.0);
     let h = probe.height();
@@ -3869,6 +4360,8 @@ pub fn trigger_width(ui: &Ui) -> f32 {
 mod tests {
     use super::*;
 
+    /// „grösse" and `cmd` + `+` `-` walk the notches and stop at the ends,
+    /// and a size nobody could read is taken as the system's.
     #[test]
     fn the_size_walks_its_notches_and_nonsense_is_the_systems() {
         assert!(ZOOMS.windows(2).all(|w| w[0] < w[1]));
@@ -3890,6 +4383,7 @@ mod tests {
         assert_eq!(crate::config::UiConfig::default().zoom, 1.0);
     }
 
+    /// „was läuft" goes round every place and comes back.
     #[test]
     fn the_playing_line_steps_through_every_place() {
         use super::super::library::PlayingAt;
@@ -3906,6 +4400,11 @@ mod tests {
 
     }
 
+    /// The sheet takes two columns when two fit, and one when they do not.
+    ///
+    /// „when they fit" is measured against the window's own content width, so
+    /// the sheet never reaches past the margin the lists behind it keep. The
+    /// one-column sheet is the old one to the point: a column and its padding.
     #[test]
     fn the_sheet_takes_as_many_columns_as_fit() {
         let gap = 48.0;
@@ -3935,6 +4434,8 @@ mod tests {
         assert!(!key_answers("  ", "fenster", "[?]", "alle tasten auf einen blick"));
     }
 
+    /// The bottom strip of key hints was removed; the menu is now the only
+    /// place they are written down, so it had better carry all of them.
     #[test]
     fn every_shortcut_is_documented() {
         let listed: Vec<String> = every_shortcut().map(|(k, _)| k.replace(['[', ']'], "")).collect();
@@ -3967,6 +4468,7 @@ mod tests {
         assert!(every_shortcut().all(|(_, what)| !what.is_empty()));
     }
 
+    /// Keys in brackets are keys; everything between them is not.
     #[test]
     fn a_written_shortcut_comes_apart_into_keys_and_words() {
         use KeyPiece::{Between, Key};

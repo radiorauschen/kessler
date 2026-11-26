@@ -1,23 +1,62 @@
+//! The application's icon, drawn while it runs: a tile and a k.
+//!
+//! The icon the system shows before kessler starts — in the Finder, the
+//! Launchpad, a start menu — is fixed, black and white, and drawn by
+//! `bundle/make-icon.py` in Asap. Once the
+//! window is up it dresses the icon in what the window is dressed in: the k in
+//! the typeface the window is set in, in the scheme's accent on its ground.
+//!
+//! The tile is the same shape the script draws — on a Mac straight sides
+//! and superelliptic corners on Apple's grid, on GNOME and KDE their own
+//! desktops' shapes, see [`Shape`] — so the icon changes colour when the
+//! window opens and does not change shape.
+
 use eframe::egui::{self, Color32};
 
 use super::glyphs::Mask;
 
+/// How big the icon is drawn, in pixels a side.
 pub const SIDE: usize = 512;
 
+/// How tall the k stands, as a share of the canvas, measured on its ink —
+/// whatever the face — so it is as tall as the closed app's.
+///
+/// The shipped k is 0.545 of its canvas (`LETTER` in `bundle/make-icon.py`).
+/// On Linux the desktop shows that picture whole, as it shows this one, so
+/// 0.545 it is here too. On a Mac the closed app's icon is the layered one
+/// (`kessler.icon`), and macOS 26 lays that layer over the tile itself
+/// rather than over the canvas round it: its k comes out 0.545 of the
+/// *tile*, which here is 824 of 1024. So 0.545 of the tile.
 const LETTER: f32 = if cfg!(target_os = "macos") { 0.545 * 824.0 / 1024.0 } else { 0.545 };
 
+/// How far the k is set by its weight rather than by its outline, across and
+/// down: a k centred on its outline has its stem — most of its ink — left of
+/// the middle and its bowl and legs low, and looks set too far left and too
+/// low. Halfway between the two looks centred.
 const BY_WEIGHT: f32 = 0.5;
 
+/// How many looks each pixel of the tile's edge is given, each way.
 const LOOKS: usize = 4;
 
+/// The shape of the tile, after the desktop it is shown on. Everything in
+/// canvas units, 0 … 1 across and down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
+    /// Apple's grid: 824 of 1024, straight sides and superelliptic corners
+    /// — the numbers `make-icon.py` draws with. Also for every desktop that
+    /// has no shape of its own.
     Mac,
+    /// Adwaita's: a rounded square on GNOME's 128-unit grid, a little
+    /// taller than wide, standing on an edge of itself a shade darker —
+    /// the lip every GNOME application icon has under its face.
     Gnome,
+    /// Breeze's: nearly the whole 48-unit grid, square, the corners only
+    /// just turned.
     Kde,
 }
 
 impl Shape {
+    /// The shape for the desktop this is running on.
     pub fn here() -> Shape {
         if !cfg!(target_os = "linux") {
             return Shape::Mac;
@@ -25,6 +64,7 @@ impl Shape {
         Self::for_desktop(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
     }
 
+    /// From what `XDG_CURRENT_DESKTOP` says — a list, by colons.
     pub fn for_desktop(desktops: &str) -> Shape {
         let said = desktops.to_ascii_uppercase();
         let names: Vec<&str> = said.split(':').collect();
@@ -37,6 +77,8 @@ impl Shape {
         }
     }
 
+    /// The tile's face, left, top, right, bottom, and how it is cut at the
+    /// corners; and where, under the face, the lip ends.
     fn outline(self) -> (Rect, Corner, f32) {
         match self {
             Shape::Mac => {
@@ -57,6 +99,7 @@ impl Shape {
         }
     }
 
+    /// Where the letter stands: in the middle of the face.
     fn middle(self) -> (f32, f32) {
         let (face, _, _) = self.outline();
         ((face.left + face.right) / 2.0, (face.top + face.bottom) / 2.0)
@@ -73,10 +116,13 @@ struct Rect {
 
 #[derive(Debug, Clone, Copy)]
 enum Corner {
+    /// A quarter of a superellipse reaching this far along each side.
     Super { reach: f32, power: f32 },
+    /// A quarter circle of this radius.
     Round(f32),
 }
 
+/// Whether a point, in canvas units, is inside `rect` cut at its corners.
 fn within(x: f32, y: f32, rect: Rect, corner: Corner) -> bool {
     if x < rect.left || x > rect.right || y < rect.top || y > rect.bottom {
         return false;
@@ -93,6 +139,8 @@ fn within(x: f32, y: f32, rect: Rect, corner: Corner) -> bool {
     (dx / reach).powf(power) + (dy / reach).powf(power) <= 1.0
 }
 
+/// How much of each pixel of a `size` canvas the tile covers, 0 … 1, and
+/// how much of that is its lip.
 fn tile_cover(size: usize, shape: Shape) -> Vec<(f32, f32)> {
     let (face, corner, lip) = shape.outline();
     let under = Rect { top: face.top + (lip - face.bottom), bottom: lip, ..face };
@@ -118,6 +166,10 @@ fn tile_cover(size: usize, shape: Shape) -> Vec<(f32, f32)> {
     cover
 }
 
+/// The icon at `size` pixels in `shape`: the tile in `ground`, its lip a
+/// shade darker, and `letter` — a mask already drawn at the size it is to
+/// stand — in the middle of the face in `ink`. Four bytes a pixel, not
+/// premultiplied.
 pub fn compose(size: usize, shape: Shape, ground: Color32, ink: Color32, letter: Option<&Mask>) -> Vec<u8> {
     let tile = tile_cover(size, shape);
     let lip_colour = ground.lerp_to_gamma(Color32::BLACK, 0.3);
@@ -158,21 +210,46 @@ pub fn compose(size: usize, shape: Shape, ground: Color32, ink: Color32, letter:
     out
 }
 
+/// The tile's edge as the edge of a thick piece of glass, in canvas units of
+/// 1024: where it faces the light — the upper left — and where it faces
+/// away; each band is the tile less the tile blurred by that much, so it is
+/// as wide as its number reaches in from the outline.
+///
+/// The light is caught twice, strongly on the edge facing it and more weakly
+/// on the edge opposite, where it comes out of the glass again; a dark line
+/// a little further in is the thickness the light bends through; and a broad
+/// soft swell, lit on the same two sides and shaded on the others, is the
+/// glass curving down to its edge. The same numbers `make-icon.py` uses.
 const GLASS_LIGHT: (f32, f32) = (-0.55, -0.85);
+/// How sharply the light falls off as the edge turns from it.
 const GLASS_FACING: f32 = 1.6;
+/// The catch-light: its band, and its strength facing the light and opposite.
 const GLASS_CATCH: (f32, f32, f32) = (3.0, 0.95, 0.60);
+/// Its softer spread, the same way round.
 const GLASS_SPREAD: (f32, f32, f32) = (10.0, 0.35, 0.15);
+/// A faint glow all round.
 const GLASS_GLOW: (f32, f32) = (20.0, 0.06);
+/// The dark line of the glass's thickness: between these two bands, this
+/// strong.
 const GLASS_THICK: (f32, f32, f32) = (6.0, 14.0, 0.40);
+/// The shade between the catch-light and the thickness where the edge faces
+/// neither way.
 const GLASS_BETWEEN: (f32, f32, f32) = (4.0, 10.0, 0.12);
+/// The swell: between these two bands; lit facing the light and opposite,
+/// shaded elsewhere.
 const GLASS_SWELL: (f32, f32) = (16.0, 44.0);
 const GLASS_SWELL_LIT: (f32, f32) = (0.30, 0.18);
 const GLASS_SWELL_SHADE: f32 = 0.12;
 
+/// The shadow under the tile, in canvas units of 1024: how far down, how
+/// soft, and how dark — as light as the system's own apps cast in the Dock.
 const SHADOW_DOWN: f32 = 12.0;
 const SHADOW_SOFT: f32 = 14.0;
 const SHADOW_STRENGTH: f32 = 0.33;
 
+/// The Mac's tile dressed as the Dock's other icons are: its edge a thick
+/// piece of glass — see [`GLASS_LIGHT`] — and a soft shadow under it. The
+/// ground inside the edge stays one colour and the letter stays flat.
 fn dress_mac(out: &mut [u8], tile: &[(f32, f32)], size: usize) {
     let scale = size as f32 / 1024.0;
     let cover: Vec<f32> = tile.iter().map(|(c, _)| *c).collect();
@@ -252,6 +329,8 @@ fn dress_mac(out: &mut [u8], tile: &[(f32, f32)], size: usize) {
     }
 }
 
+/// One box blur of `radius`, across and then down; three in a row are near
+/// enough to a Gaussian.
 fn box_blur(values: &[f32], size: usize, radius: usize) -> Vec<f32> {
     let width = (2 * radius + 1) as f32;
     let pass = |src: &[f32], across: bool| -> Vec<f32> {
@@ -276,6 +355,14 @@ fn box_blur(values: &[f32], size: usize, radius: usize) -> Vec<f32> {
     pass(&pass(values, true), false)
 }
 
+/// The k in the window's face, at the height the icon wants it at a `size`
+/// canvas — measured on its ink, so a face with tall ascenders and one with
+/// short come out the same height. `None` when the window is in egui's own
+/// face.
+///
+/// In Japanese the icon is a ケ, the first of ケスラー, drawn from the Japanese face
+/// kessler brings — its bold, as the Mac's k is — since none of the window's
+/// own faces has a katakana to draw it from.
 pub fn letter(ctx: &egui::Context, size: usize) -> Option<Mask> {
     if crate::lang::current() == crate::lang::Lang::Ja {
         if let Some(data) = japanese_face() {
@@ -287,25 +374,41 @@ pub fn letter(ctx: &egui::Context, size: usize) -> Option<Mask> {
     sized(size, |pixels| super::glyphs::letter(ctx, 'k', pixels))
 }
 
+/// The same letter with its ink `ink` pixels tall, for the symbol in the menu
+/// bar — the k in its box there.
 pub fn small_letter(ctx: &egui::Context, ink: usize) -> Option<Mask> {
     letter(ctx, (ink as f32 / LETTER).round() as usize)
 }
 
+/// The bundled Japanese face for the icon: bold where there is one.
 pub(super) fn japanese_face() -> Option<Vec<u8>> {
     let (regular, bold) = super::theme::bundled_fallback()?;
     std::fs::read(bold.unwrap_or(regular)).ok()
 }
 
+/// Where in Asap the icon's k is drawn: weight 700, width 85. The same place in
+/// the shipped icon (`bundle/make-icon.py`) and the one the window draws,
+/// whatever the window's own width and weight, so the k does not jump when the
+/// app opens or closes. A face with axes of its own is set at the same place,
+/// as far as its axes reach.
 pub const ICON_AT: &[(&str, f32)] = &[("wdth", 85.0), ("wght", 700.0)];
 
+/// How heavy the ケ is drawn, on the Japanese face's weight axis: its bold.
 pub(super) const KE_WEIGHT: f32 = 700.0;
 
+/// Once at the canvas' size to measure, once at the size that measures.
 fn sized(size: usize, draw: impl Fn(f32) -> Option<Mask>) -> Option<Mask> {
     let probe = draw(size as f32)?;
     let ink = (probe.height as f32 - 2.0).max(1.0);
     draw(size as f32 * LETTER * size as f32 / ink)
 }
 
+/// The k alone, on a square `size` pixels across, where the tile sets it:
+/// its cover, one byte a pixel. For the menu's head while nothing plays, the
+/// k on the plate the pictures play on — in the face the window is set in, at
+/// its width and its bold, so it reads as the window's own letter rather than
+/// the icon's. A face without a weight axis gives the icon's k (from its bold
+/// file); Japanese the ケ as on the icon. `None` as for [`letter`].
 pub fn letter_square(ctx: &egui::Context, size: usize) -> Option<Vec<u8>> {
     let own = match super::theme::weights() {
         Some((_, bold)) if crate::lang::current() != crate::lang::Lang::Ja => {
@@ -334,6 +437,7 @@ pub fn letter_square(ctx: &egui::Context, size: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Where a mask's ink balances, across.
 fn weight_down(mask: &Mask) -> f32 {
     let (mut sum, mut moment) = (0.0f32, 0.0f32);
     for (at, &c) in mask.cover.iter().enumerate() {
@@ -354,6 +458,7 @@ fn weight_across(mask: &Mask) -> f32 {
     if sum > 0.0 { moment / sum } else { mask.width as f32 / 2.0 }
 }
 
+/// The same pixels premultiplied, as the Mac wants them.
 pub fn premultiplied(rgba: &[u8]) -> Vec<u8> {
     rgba.as_chunks::<4>()
         .0
@@ -370,6 +475,8 @@ pub fn premultiplied(rgba: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// No scheme dresses the running icon as the closed one is — a white k on
+    /// black — or the Dock could not tell the two apart.
     #[test]
     fn no_scheme_looks_closed() {
         use super::super::theme::Theme;
@@ -380,6 +487,7 @@ mod tests {
         }
     }
 
+    /// Every scheme's k stands out on its icon's ground.
     #[test]
     fn every_icon_k_is_legible() {
         use super::super::theme::{contrast, Theme};
@@ -392,6 +500,8 @@ mod tests {
         }
     }
 
+    /// The Mac's tile is on Apple's grid: square in the middle, rounded at
+    /// the corners, nothing outside.
     #[test]
     fn the_tile_is_on_the_grid() {
         let size = 128;
@@ -404,6 +514,7 @@ mod tests {
         assert!(at(20, 20) > 0.5, "but not by much");
     }
 
+    /// GNOME's stands on a lip; KDE's nearly fills the canvas.
     #[test]
     fn each_desktop_has_its_shape() {
         let size = 128;
@@ -420,6 +531,7 @@ mod tests {
         assert_eq!(Shape::for_desktop(""), Shape::Mac);
     }
 
+    /// The letter stands in the middle in the ink; the rest is the ground.
     #[test]
     fn the_letter_stands_in_the_middle() {
         let mask = Mask { width: 4, height: 4, cover: vec![255; 16] };
@@ -434,6 +546,8 @@ mod tests {
         assert_eq!(pre, vec![100, 50, 25, 128]);
     }
 
+    /// The Japanese icon's ケ can be drawn from the face kessler brings,
+    /// and stands as tall as a k would.
     #[test]
     fn the_japanese_icon_has_its_ke() {
         let data = std::fs::read(concat!(
@@ -446,6 +560,9 @@ mod tests {
         assert!(ink > 1000, "{ink} inked");
     }
 
+    /// Not a test so much as a look: every shape in a few schemes, in Asap
+    /// as the window first opens in it, and the last row bolder — written to
+    /// `KESSLER_ICONS` (a PNG).
     #[test]
     #[ignore]
     fn icon_pictures() {
@@ -490,6 +607,9 @@ mod tests {
         sheet.save(path).unwrap();
     }
 
+    /// Every scheme's icon in the Mac's shape, 1024 square, as the window
+    /// draws it in Muto where the copy has it (else Asap) — the frames of the
+    /// animated logo, written to `KESSLER_ICON_FRAMES` (a folder).
     #[test]
     #[ignore]
     fn icon_frames() {

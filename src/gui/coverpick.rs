@@ -1,35 +1,63 @@
+//! Choosing a cover for one album.
+//!
+//! The state of the chooser, and the threads it needs. The drawing is in
+//! [`super::library`]; what is written and where is in
+//! [`crate::library::tags`] and [`crate::library::artwork`].
+//!
+//! Everything that touches the network happens on another thread. A cover
+//! search is two requests and a handful of downloads, and any one of them can
+//! sit there for twenty seconds — on the drawing thread that is a window that
+//! has stopped answering.
+
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::error::Result;
 use crate::library::coverart::{self, Candidate};
 
+/// One suggestion, with its picture if it arrived.
 pub struct Found {
     pub candidate: Candidate,
+    /// The small version, as it came down the wire.
     pub thumb: Option<Vec<u8>>,
+    /// Uploaded once, on the first frame that draws it.
     pub texture: Option<eframe::egui::TextureHandle>,
 }
 
+/// One suggestion as the search thread hands it over: what was found, and the
+/// small picture if it came down.
 type Offer = (Candidate, Option<Vec<u8>>);
 
+/// What the chooser is doing.
 pub enum State {
+    /// The search is out.
     Looking(mpsc::Receiver<Result<Vec<Offer>>>),
+    /// Here is what came back.
     Offering { found: Vec<Found>, focus: usize },
+    /// One was chosen and the full-size picture is on its way.
     Fetching(mpsc::Receiver<Result<Vec<u8>>>),
+    /// Nothing came back, or something went wrong saying so.
     Trouble(String),
 }
 
+/// The chooser, while it is open.
 pub struct Picker {
     pub artist: String,
     pub album: String,
+    /// The folded keys, so the cache is written where the grid looks for it.
     pub artist_key: String,
     pub album_key: String,
+    /// Every file of the album — the cover goes into all of them.
     pub paths: Vec<PathBuf>,
+    /// How many suggestions the drawing last fitted across. The keyboard needs
+    /// it: in a grid, down is one row further on, and only the layout knows how
+    /// far that is.
     pub across: usize,
     pub state: State,
 }
 
 impl Picker {
+    /// Open the chooser and send the search out.
     pub fn start(
         artist: String,
         album: String,
@@ -54,10 +82,14 @@ impl Picker {
         }
     }
 
+    /// Whether a thread is out. While one is, the window has to keep asking
+    /// for frames — egui draws when something happens, and an answer arriving
+    /// on a channel is not something happening.
     pub fn is_busy(&self) -> bool {
         matches!(self.state, State::Looking(_) | State::Fetching(_))
     }
 
+    /// Move the highlight, if there is anything to move it over.
     pub fn step(&mut self, delta: i32) {
         if let State::Offering { found, focus } = &mut self.state {
             if found.is_empty() {
@@ -68,12 +100,14 @@ impl Picker {
         }
     }
 
+    /// Take whichever one the highlight is on.
     pub fn take_focused(&mut self) {
         if let State::Offering { focus, .. } = &self.state {
             self.take(*focus);
         }
     }
 
+    /// Take one suggestion: fetch it at full size.
     pub fn take(&mut self, index: usize) {
         let url = match &self.state {
             State::Offering { found, .. } => match found.get(index) {
@@ -96,6 +130,9 @@ impl Picker {
         self.state = State::Fetching(rx);
     }
 
+    /// Look in on the threads. `Some` when a picture has arrived and is ready
+    /// to be written; the caller does the writing, because only it knows about
+    /// the database and the cache.
     pub fn poll(&mut self) -> Option<Vec<u8>> {
         match &mut self.state {
             State::Looking(rx) => {
@@ -139,6 +176,11 @@ impl Picker {
     }
 }
 
+/// A message without the machinery in front of it.
+///
+/// Errors come up through layers that each name themselves — "metadata error:
+/// metadata error: curl: (7) …" — and none of those words is for the person
+/// reading the window. What is left is the part that says what happened.
 fn plainly(said: &str) -> String {
     match said.rfind("error: ") {
         Some(at) => said[at + "error: ".len()..].to_string(),
@@ -146,6 +188,12 @@ fn plainly(said: &str) -> String {
     }
 }
 
+/// The search itself, on its own thread: ask the sources, then fetch the
+/// small pictures so there is something to look at.
+///
+/// A thumbnail that will not come down is not a reason to drop the
+/// suggestion — the archive sometimes has the record but not the picture, and
+/// saying so is more use than a shorter list.
 fn look(artist: &str, album: &str, lastfm_key: Option<&str>) -> Result<Vec<Offer>> {
     let candidates = coverart::search(artist, album, lastfm_key)?;
     Ok(candidates
@@ -187,6 +235,8 @@ mod tests {
         }
     }
 
+    /// The window is not the place for the names of the layers an error came
+    /// up through.
     #[test]
     fn a_message_loses_its_machinery() {
         assert_eq!(
@@ -197,6 +247,9 @@ mod tests {
         assert_eq!(plainly(""), "");
     }
 
+    /// The highlight stops at both ends rather than wrapping: a wall of
+    /// pictures is looked at, not cycled through, and jumping from the last to
+    /// the first loses your place.
     #[test]
     fn the_highlight_stays_inside_the_list() {
         let mut picker = offering(3);
@@ -209,6 +262,7 @@ mod tests {
         assert!(matches!(picker.state, State::Offering { focus: 2, .. }));
     }
 
+    /// Nothing to choose from is not an empty list to stare at.
     #[test]
     fn an_empty_answer_says_so() {
         let (tx, rx) = mpsc::channel();
@@ -224,6 +278,8 @@ mod tests {
         }
     }
 
+    /// A thread that dies without sending must not leave the chooser waiting
+    /// for ever.
     #[test]
     fn a_search_that_never_answers_ends() {
         let (tx, rx) = mpsc::channel::<Result<Vec<Offer>>>();
@@ -236,6 +292,7 @@ mod tests {
         assert!(matches!(picker.state, State::Trouble(_)));
     }
 
+    /// The picture arrives once, and the caller is the one told about it.
     #[test]
     fn a_fetched_picture_is_handed_over() {
         let (tx, rx) = mpsc::channel();
@@ -248,6 +305,7 @@ mod tests {
         assert_eq!(picker.poll(), Some(vec![1, 2, 3]));
     }
 
+    /// While a thread is out, the window has to keep asking for frames.
     #[test]
     fn busy_is_only_while_a_thread_is_out() {
         let (_tx, rx) = mpsc::channel::<Result<Vec<u8>>>();

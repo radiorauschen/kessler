@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("kessler {} ist da — menü → allgemein → neue version", "kessler {} is out — menu → general → new version"),
     (" und {} weitere", " and {} more"),

@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("beim start nachsehen", "起動時に確認"),
     ("beispielsender", "サンプル局"),
@@ -303,6 +305,7 @@ pub const PART: &[(&str, &str)] = &[
     ("zeichnung", "イラスト"),
     ("egui-schriften", "egui のフォント"),
     ("spalten", "列"),
+    ("seitenspalten", "サイド列"),
     ("noch einmal q zum beenden", "もう一度 q で終了"),
     ("noch einmal shift + d zum leeren", "もう一度 shift + d で空にする"),
     ("die synchronisierung läuft noch", "同期がまだ実行中です"),
@@ -411,6 +414,8 @@ pub const PART: &[(&str, &str)] = &[
     ("alle-zeile", "「すべて」の行"),
     ("{} titel", "{} 曲"),
     ("zuletzt-zeile", "「最近」の行"),
+    ("register", "索引"),
+    ("buchstabenleiste (beta)", "文字バー（ベータ）"),
     ("titelzahl", "曲数"),
     ("beim öffnen zeigen", "起動時に表示"),
     ("ansicht", "表示"),
@@ -569,6 +574,7 @@ pub const PART: &[(&str, &str)] = &[
     ("{}: kein bild von der eigenen seite ({})", "{}: 公式サイトに画像なし ({})"),
     ("sender", "局"),
     ("stationen", "放送局"),
+    ("von hand", "手動"),
     ("ähnliche stationen", "似ている局"),
     ("ähnlich wie {}", "{}に似た局"),
     ("stationen · suche", "放送局 · 検索"),
@@ -682,7 +688,7 @@ pub const PART: &[(&str, &str)] = &[
     ("log gespeichert: {}", "ログを保存しました: {}"),
     ("normal", "標準"),
     ("als markdown", "markdown で"),
-    ("steckbrief", "プロフィール"),
+    ("eckdaten", "基本情報"),
     ("bibliothek und radio", "ライブラリとラジオ"),
     ("mitglieder, gruppen", "メンバー・グループ"),
     ("mitlaufen", "追従"),

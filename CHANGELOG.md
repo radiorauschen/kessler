@@ -6,6 +6,26 @@ the topmost version is the one being built.
 a line starting with `## ` is a version; one starting with `- ` is a change.
 everything else is skipped.
 
+## 1.5.429
+
+<p align="center"><img src="https://raw.githubusercontent.com/radiorauschen/kessler/main/docs/screenshots/release-1.5.429.png" width="280" alt="a drawing by felix h-w: tall slabs standing in pairs, a wooden beater lying on each, and mallets on long handles swinging at them, like a xylophone of posts"></p>
+
+<p align="center">new new new</p>
+
+- **index**: names stand under their first letter, as a small heading, in the artists, the podcasts and the stations while they are sorted a–z
+- **letter bar (beta)**: under music → artists, a column of letters slides in at the right of the artists when the pointer is there. a click jumps to the letter, an arrow shows where you are
+- **radio**: a click on "stations" sorts them a–z, z–a or back to your own order "by hand". dragging works in your own order, which is kept
+- **settings**: a new tab "music" holds what is the music's alone, like "radio" and "podcasts" hold theirs. "side columns" holds info, lyrics, log and other artists. last.fm moved to "general", as the radio scrobbles too
+- **info**: "facts" is now called "key facts"
+- **footer**: without "bottom margin", a column no longer jumps up and down when a message appears in the corner. the message gets a soft background instead
+- **timeline and volume**: the handle is slimmer and comes out a little after the line
+- **smoother**: what kessler finds about an artist is saved in the background, so the window no longer halts for a moment while the radio plays
+- **screen saver**: "release note drawings" has this new drawing too
+- **for anyone who wants to help**: a new CONTRIBUTING.md says how to build, test and debug kessler. the code now keeps its explaining comments. `KESSLER_LOG` filters the log
+- **mac signing**: `notarize.sh` no longer stops when the upload fails, and `KESSLER_UPLOAD=0` turns the upload off
+
+thank you to everyone who tried kessler, wrote, sent ideas, found bugs and helped test. ♥
+
 ## 1.5.411
 
 <p align="center"><img src="https://raw.githubusercontent.com/radiorauschen/kessler/main/docs/screenshots/release-1.5.411.png" width="280" alt="a drawing by felix h-w: a folding lattice of flat slats with rows of holes, joined by round pins, standing open like a scissor gate"></p>

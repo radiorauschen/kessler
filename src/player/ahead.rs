@@ -1,50 +1,115 @@
+//! Reading ahead: a file decoded a few seconds before it is heard.
+//!
+//! Without this, the sound card's own thread asked the decoder for every sample
+//! at the moment it needed it — which meant reading the file and unpacking FLAC
+//! in the few milliseconds the card allows. Nearly always that is plenty. With
+//! the machine busy — an image being generated, the memory full and paging to
+//! disk — a block arrived late, and a late block is a gap, and a gap is a
+//! click.
+//!
+//! So the file is decoded on a thread of its own into a store of about
+//! [`AHEAD`], and the card only ever takes from the store. A second of the
+//! machine being elsewhere is then a second less in the store, not a gap.
+//!
+//! Seeking empties the store and asks the reading thread to go to the new
+//! place; until it has, silence is heard. The seek used to be done right there,
+//! on the sound card's thread, with the window waiting on it — over a hundred
+//! milliseconds in a long MP3.
+//!
+//! A station is read the same way, but can only be ahead by what the network
+//! has already brought. So it waits for a cushion of [`CUSHION`] before it is
+//! heard, and again after the network has let it run dry: otherwise playing
+//! went on with the first scrap that came, ran dry at once, and a wobbly
+//! connection was heard as a stutter rather than as one pause.
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rodio::Source;
 
+/// How much is decoded ahead of what is heard.
 pub const AHEAD: Duration = Duration::from_secs(3);
 
+/// How much of a station is gathered before it is heard, and again after it
+/// ran dry.
 pub const CUSHION: Duration = Duration::from_secs(2);
 
+/// How much of a station is kept at most: what the network brings faster
+/// than it is heard — the burst a server sends as it answers, the catching up
+/// after a wobble — is kept for the next wobble.
 pub const LIVE_ROOM: Duration = Duration::from_secs(8);
 
+/// How much of the station playing the store holds, in milliseconds — for the
+/// field-strength needle. One station plays at a time.
 static STATION_HELD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Which station's store [`STATION_HELD`] speaks for: the newest. One being
+/// let go of — its thread still in the middle of a chunk, or dropped after
+/// the next has started — may not write over it.
 static STATION_NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Counted up for each station's store, for [`STATION_NOW`].
 static STATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// How much of the station playing has been brought ahead of what is heard.
 pub fn station_held() -> Duration {
     Duration::from_millis(STATION_HELD.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// Samples decoded in one go, and handed over as one piece.
 const CHUNK: usize = 4096;
 
+/// What the two threads share.
 struct Store {
     chunks: VecDeque<Vec<f32>>,
+    /// The file has run out.
     done: bool,
+    /// The source has been let go of; the thread is to stop.
     stop: bool,
+    /// A place to go to, asked for and not yet gone to by the thread.
     seek_to: Option<Duration>,
+    /// Gone somewhere, and nothing from the new place in the store yet:
+    /// silence rather than waiting.
     seeking: bool,
+    /// Since when the store has been empty with the card asking: silence
+    /// rather than waiting, until the cushion is there — see
+    /// [`STARVED_AFTER`].
     starved: Option<std::time::Instant>,
+    /// A station not heard yet: its first cushion being gathered.
     first: bool,
 }
 
+/// How long the sound card's thread waits for an empty store before it plays
+/// silence instead. It used to wait for as long as it took — and a station
+/// whose connection went without being closed never sent another byte: the
+/// card's thread stood still, and with it everything that waits for that thread
+/// to let a source go — the next press on pause, on another station, on a track
+/// — which is the window. A machine too busy to decode is heard the same way as
+/// before, as a gap.
 const STARVED_AFTER: Duration = Duration::from_millis(30);
 
 struct Shared<S> {
+    /// The decoder. Held by the reading thread while it decodes a chunk and
+    /// puts it in the store, and by a seek — so the two never cross.
     inner: Mutex<S>,
     store: Mutex<Store>,
+    /// Rung when there is something in the store, or room in it.
     changed: Condvar,
+    /// How many chunks the store holds when full.
     room: usize,
+    /// How many chunks end a silence: one for a file, which the machine can
+    /// always read faster than it is heard; [`CUSHION`] for a station.
     cushion: usize,
+    /// Whether it is a station, for the measurement.
     live: bool,
+    /// How long one chunk plays, in milliseconds, for [`STATION_HELD`].
     chunk_ms: u64,
+    /// Its number, for [`STATION_NOW`]; nought for a file.
     station: u64,
 }
 
+/// A source that is read ahead of time — see the module.
 pub struct Ahead<S: Source + Send + 'static> {
     shared: Arc<Shared<S>>,
     current: Vec<f32>,
@@ -55,10 +120,13 @@ pub struct Ahead<S: Source + Send + 'static> {
 }
 
 impl<S: Source + Send + 'static> Ahead<S> {
+    /// A file, read [`AHEAD`] ahead.
     pub fn new(inner: S) -> Self {
         Self::with(inner, AHEAD, None)
     }
 
+    /// A station: silent until [`CUSHION`] has come, and again after it ran
+    /// dry.
     pub fn live(inner: S) -> Self {
         Self::with(inner, LIVE_ROOM, Some(CUSHION))
     }
@@ -106,6 +174,8 @@ impl<S: Source + Send + 'static> Ahead<S> {
     }
 }
 
+/// The reading thread: fill the store, wait while it is full or the file
+/// has run out, stop when told.
 fn read<S: Source>(shared: &Shared<S>) {
     loop {
         let seek_to = {
@@ -165,6 +235,7 @@ fn read<S: Source>(shared: &Shared<S>) {
     }
 }
 
+/// How much a station's store holds, for the needle; nothing for a file.
 fn note_held<S>(shared: &Shared<S>, store: &Store) {
     let current = STATION_NOW.load(std::sync::atomic::Ordering::Relaxed) == shared.station;
     if shared.live && current && !store.stop {
@@ -228,6 +299,8 @@ impl<S: Source + Send + 'static> Iterator for Ahead<S> {
     }
 }
 
+/// Wait for the store to change, [`STARVED_AFTER`] at most: still empty
+/// then, it is starved, and silence is played until something comes.
 fn wait_a_little<'a, S>(shared: &'a Shared<S>, store: std::sync::MutexGuard<'a, Store>) -> std::sync::MutexGuard<'a, Store> {
     let (mut store, waited) = shared.changed.wait_timeout(store, STARVED_AFTER).unwrap_or_else(|e| e.into_inner());
     if waited.timed_out() && store.chunks.is_empty() && !store.done && !store.stop && !store.seeking {
@@ -237,6 +310,14 @@ fn wait_a_little<'a, S>(shared: &'a Shared<S>, store: std::sync::MutexGuard<'a, 
 }
 
 impl<S: Source + Send + 'static> Source for Ahead<S> {
+    /// What is left of the piece in hand, or the next piece's length — waited
+    /// for, as `next` would — and 0 at the end.
+    ///
+    /// the player's queue, the mixer turning it to the card's channels and rate
+    /// — looks at its channels and rate only where a span begins, so the first
+    /// thing played set them for everything after it until the device was let
+    /// go. A mono episode after the stereo radio played twice as fast; a stereo
+    /// one after a mono one half as fast.
     fn current_span_len(&self) -> Option<usize> {
         let left = self.current.len().saturating_sub(self.at);
         if left > 0 {
@@ -275,6 +356,9 @@ impl<S: Source + Send + 'static> Source for Ahead<S> {
         self.total
     }
 
+    /// Away with everything read for the old place — in the store and in hand —
+    /// and the reading thread sent to the new one; back at once. A place the
+    /// decoder cannot go to is said in „messen" and it plays on where it was.
     fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
         let mut store = self.shared.store.lock().unwrap_or_else(|e| e.into_inner());
         store.chunks.clear();
@@ -293,6 +377,8 @@ impl<S: Source + Send + 'static> Source for Ahead<S> {
 mod tests {
     use super::*;
 
+    /// Counts up from zero, and seeks by setting the count: a source whose
+    /// every sample says where it came from.
     struct Counting {
         at: u32,
         end: u32,
@@ -327,6 +413,8 @@ mod tests {
         }
     }
 
+    /// Every sample comes through, in order, and the end is the end —
+    /// through many more chunks than the store holds at once.
     #[test]
     fn everything_comes_through_in_order() {
         let ahead = Ahead::new(Counting { at: 0, end: 50_000 });
@@ -335,6 +423,8 @@ mod tests {
         assert!(got.iter().enumerate().all(|(i, s)| *s == i as f32));
     }
 
+    /// After a seek the next sample is the new place's, not what was read
+    /// ahead for the old one.
     #[test]
     fn a_seek_throws_away_what_was_read_ahead() {
         let mut ahead = Ahead::new(Counting { at: 0, end: 100_000 });
@@ -346,6 +436,7 @@ mod tests {
         assert_eq!(ahead.next(), Some(40_001.0));
     }
 
+    /// A decoder that takes its time to go somewhere, as a long MP3 does.
     struct Slow(Counting);
 
     impl Iterator for Slow {
@@ -374,6 +465,8 @@ mod tests {
         }
     }
 
+    /// A seek is back at once, however long the decoder takes to get there:
+    /// silence meanwhile, a whole frame at a time, then the new place.
     #[test]
     fn a_seek_does_not_wait_for_the_decoder() {
         let mut ahead = Ahead::new(Slow(Counting { at: 0, end: 100_000 }));
@@ -387,6 +480,7 @@ mod tests {
         assert_eq!(after, vec![30_000.0, 30_001.0]);
     }
 
+    /// Silence of a given shape.
     struct Shaped {
         left: usize,
         channels: u16,
@@ -417,6 +511,10 @@ mod tests {
         }
     }
 
+    /// A mono file after a stereo one in the same player — or the other way
+    /// round — plays at its own pace. Each said it was one endless piece, so
+    /// what took them in never looked at the next one's channels: mono read as
+    /// stereo went twice as fast, stereo read as mono half as fast.
     #[test]
     fn the_next_source_is_read_in_its_own_shape() {
         for (first, second) in [(1u16, 2u16), (2, 1)] {
@@ -428,6 +526,10 @@ mod tests {
         }
     }
 
+    /// Let go of, the reading thread ends rather than waiting for ever.
+    /// A source that never gives another sample and never ends — a
+    /// station gone quiet without hanging up — is heard as silence, at
+    /// once and for as long as it lasts; the card's thread is not held.
     #[test]
     fn a_source_that_stalls_is_silence_not_a_wait() {
         struct Stalled;
@@ -470,6 +572,8 @@ mod tests {
         assert_eq!(Arc::strong_count(&shared), 1);
     }
 
+    /// A station that sends only what it is let: ones, as many as `given`
+    /// says, then waits — the network, as slow as the test wants it.
     struct Gated {
         given: Arc<std::sync::atomic::AtomicUsize>,
         sent: usize,
@@ -507,14 +611,19 @@ mod tests {
         }
     }
 
+    /// Samples in a cushion of the gated station: whole chunks, as counted.
     fn cushion_of_gated() -> usize {
         (2 * 8000 * CUSHION.as_millis() as usize / 1000).div_ceil(CHUNK) * CHUNK
     }
 
+    /// Asks for samples the way the card does, for a while, and says how
+    /// many were sound rather than silence.
     fn heard(ahead: &mut Ahead<Gated>, asked: usize) -> usize {
         (0..asked).filter(|_| ahead.next() == Some(1.0)).count()
     }
 
+    /// A station is silent until the cushion has come — not from the first
+    /// scrap on.
     #[test]
     fn a_station_waits_for_its_cushion() {
         use std::sync::atomic::Ordering;
@@ -528,6 +637,8 @@ mod tests {
         assert_eq!(heard(&mut ahead, 1000), 1000);
     }
 
+    /// Run dry, a station gathers the cushion again before it goes on: one
+    /// pause, not a stutter of scraps.
     #[test]
     fn a_station_run_dry_gathers_again() {
         use std::sync::atomic::Ordering;

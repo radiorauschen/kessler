@@ -1,25 +1,65 @@
+//! Looking a cover up on the open databases.
+//!
+//! Three sources, none of which wants a key:
+//!
+//! * the **Cover Art Archive**, reached through MusicBrainz. Community scans,
+//!   often large, occasionally the wrong pressing.
+//! * **Deezer**, which hands back a thousand pixels square as a matter of
+//!   course and knows most of what was ever released.
+//! * the **iTunes search**, as a fallback. Always there, always square, never
+//!   bigger than what the store shows.
+//!
+//! * **Last.fm**, when the program has a key for it (it does, once it
+//!   scrobbles): its album pictures are the ones its listeners settled on,
+//!   and it knows the small releases the shops never carried. Only its
+//!   *artist* pictures are the grey placeholder star; album covers are real.
+//!
+//! All three are asked politely: one request each, a real user agent, a short
+//! timeout, and nothing cached beyond what the caller does with the answer.
+//! None is asked at all unless somebody clicks.
+//!
+//! The network goes through `curl`, as it does for Last.fm and for the same
+//! reason: this build cannot take on an HTTP crate, and curl is on every
+//! machine this program runs on.
+
 use std::process::Stdio;
 
 use crate::error::{KesslerError, Result};
 use crate::json::Json;
 
+/// What every request says it is.
+///
+/// MusicBrainz asks clients to name themselves, and a generic agent is what
+/// gets one blocked. It asks for a contact address too; this program has none
+/// to give that would not be somebody's private one, so it gives its name and
+/// its version and nothing else. `KESSLER_COVERART_AGENT` replaces the lot for
+/// anyone who wants to identify themselves properly.
 pub(crate) fn agent() -> String {
     std::env::var("KESSLER_COVERART_AGENT").unwrap_or_else(|_| {
         concat!("kessler/", env!("CARGO_PKG_VERSION"), " ( music library )").to_string()
     })
 }
 
+/// Long enough for a slow archive, short enough that a hung request does not
+/// sit in front of the person for a minute.
 pub(crate) const TIMEOUT_SECS: u32 = 20;
 
+/// How many suggestions are worth showing. More than this and the choice stops
+/// being a choice.
 pub const MOST_OFFERED: usize = 8;
 
+/// One suggestion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
+    /// Where it came from, as the interface says it: "archiv", "deezer" or
+    /// "itunes".
     pub source: &'static str,
     pub artist: String,
     pub album: String,
     pub year: Option<i32>,
+    /// A small version, for showing.
     pub thumb: String,
+    /// The one actually written into the files.
     pub full: String,
 }
 
@@ -43,6 +83,10 @@ fn coverart_endpoint() -> String {
         .unwrap_or_else(|_| "https://coverartarchive.org/release-group".to_string())
 }
 
+/// Percent-encode one value for a query string.
+///
+/// Same rule as the Last.fm form encoder, and written out here rather than
+/// borrowed so that the two are free to differ if a service ever demands it.
 pub(crate) fn encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
@@ -56,6 +100,11 @@ pub(crate) fn encode(value: &str) -> String {
     out
 }
 
+/// Fetch a URL and hand back whatever came down.
+///
+/// `--fail-with-body` so that a 404 — which is what the archive says when a
+/// release has no picture — arrives as an error rather than as an HTML page
+/// that would go into a file as if it were a JPEG.
 pub fn fetch(url: &str) -> Result<Vec<u8>> {
     for wait in BUSY_WAITS {
         match fetch_once(url) {
@@ -66,18 +115,28 @@ pub fn fetch(url: &str) -> Result<Vec<u8>> {
     fetch_once(url).map_err(|e| e.into_error(url))
 }
 
+/// The most a search's answer or a picture may weigh: a large cover or a
+/// podcast's picture is a few megabytes, so this leaves room enough, while a
+/// server sending without end cannot fill the memory.
 const MOST_BYTES: u64 = 40_000_000;
 
+/// How long to wait before asking a busy service again, in seconds.
 const BUSY_WAITS: [u64; 2] = [2, 5];
 
+/// Why a fetch came back with nothing.
 enum Fetched {
+    /// The service said it is busy: 503 or 429.
     Busy,
+    /// It did not answer in time.
     Slow,
+    /// The name of the host could not be found: no network.
     Offline,
+    /// Anything else, as curl said it.
     Said(String),
 }
 
 impl Fetched {
+    /// As the window says it: which service, and what, in words.
     fn into_error(self, url: &str) -> KesslerError {
         let host = url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or(url).trim_start_matches("www.");
         KesslerError::Metadata(match self {
@@ -130,6 +189,15 @@ pub(crate) fn fetch_text(url: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&fetch(url)?).into_owned())
 }
 
+/// Ask every source and put what they say in one list.
+///
+/// A source that is down, blocked or simply has nothing contributes nothing;
+/// it does not take the others with it. Only if all of them fail does this
+/// fail, because then the person is owed a reason.
+///
+/// Deliberately *not* Last.fm: its album images have been the same grey star
+/// placeholder for years, so a list of them would be a list of the same blank
+/// square three times over.
 pub fn search(artist: &str, album: &str, lastfm_key: Option<&str>) -> Result<Vec<Candidate>> {
     let mut found = Vec::new();
     let mut trouble: Option<String> = None;
@@ -160,6 +228,12 @@ pub fn search(artist: &str, album: &str, lastfm_key: Option<&str>) -> Result<Vec
     Ok(found)
 }
 
+/// MusicBrainz names the record; the Cover Art Archive has the picture.
+///
+/// The search is on the release *group* rather than a release: a person
+/// looking for the cover of Geogaddi means the record, not the Japanese CD
+/// pressing of it, and the archive keeps a group-level picture for exactly
+/// that reason.
 fn from_archive(artist: &str, album: &str) -> Result<Vec<Candidate>> {
     let query = format!(
         "artist:\"{}\" AND releasegroup:\"{}\"",
@@ -201,6 +275,11 @@ fn from_archive(artist: &str, album: &str) -> Result<Vec<Candidate>> {
     Ok(out)
 }
 
+/// The characters Lucene reads as syntax, taken out.
+///
+/// An album called `[ ]` or `+ +` is a real thing, and a query that breaks on
+/// it comes back as an error rather than as no results — which looks to the
+/// person like the network is down.
 pub(crate) fn lucene_safe(text: &str) -> String {
     text.chars()
         .map(|c| match c {
@@ -214,6 +293,12 @@ pub(crate) fn lucene_safe(text: &str) -> String {
         .join(" ")
 }
 
+/// Deezer's search. No key either, and the one source of the three that hands
+/// back a thousand pixels square as a matter of course.
+///
+/// Its field-qualified query (`artist:"…" album:"…"`) is stricter than a bare
+/// search and comes back with the record rather than with everything that
+/// mentions the band.
 fn from_deezer(artist: &str, album: &str) -> Result<Vec<Candidate>> {
     let query = format!("artist:\"{}\" album:\"{}\"", quoteless(artist), quoteless(album));
     let url = format!("{}?q={}&limit=5", deezer_endpoint(), encode(&query));
@@ -247,6 +332,7 @@ fn lastfm_endpoint() -> String {
         .unwrap_or_else(|_| "https://ws.audioscrobbler.com/2.0/".to_string())
 }
 
+/// Last.fm's picture of the record, if it has a real one.
 fn from_lastfm(artist: &str, album: &str, key: &str) -> Result<Vec<Candidate>> {
     let url = format!(
         "{}?method=album.getinfo&artist={}&album={}&api_key={}&format=json&autocorrect=1",
@@ -260,6 +346,10 @@ fn from_lastfm(artist: &str, album: &str, key: &str) -> Result<Vec<Candidate>> {
     Ok(read_lastfm_album(&doc, artist, album).into_iter().collect())
 }
 
+/// The picture out of an `album.getinfo` reply: the largest one listed, and
+/// as the full-size original — the address without its size step — for
+/// writing into files. The grey star Last.fm puts where it has nothing is
+/// no picture.
 fn read_lastfm_album(doc: &Json, artist: &str, album: &str) -> Option<Candidate> {
     const PLACEHOLDER: &str = "2a96cbd8b46e442fc41c2b86b821562f";
     let found = doc.get("album")?;
@@ -284,6 +374,9 @@ fn read_lastfm_album(doc: &Json, artist: &str, album: &str) -> Option<Candidate>
     })
 }
 
+/// A Last.fm image address without its size step —
+/// `…/i/u/300x300/abc.jpg` → `…/i/u/abc.jpg` — which serves the picture as
+/// it was uploaded.
 fn original_size(url: &str) -> String {
     let Some(at) = url.find("/i/u/") else {
         return url.to_string();
@@ -297,6 +390,7 @@ fn original_size(url: &str) -> String {
     }
 }
 
+/// A value fit to go inside a quoted query term.
 fn quoteless(text: &str) -> String {
     text.replace(['"', '\\'], " ")
         .split_whitespace()
@@ -304,6 +398,8 @@ fn quoteless(text: &str) -> String {
         .join(" ")
 }
 
+/// The iTunes search. No key, no sign-up, and it knows nearly everything that
+/// was ever sold.
 fn from_itunes(artist: &str, album: &str) -> Result<Vec<Candidate>> {
     let url = format!(
         "{}?term={}&entity=album&limit=6",
@@ -333,6 +429,12 @@ fn from_itunes(artist: &str, album: &str) -> Result<Vec<Candidate>> {
     Ok(out)
 }
 
+/// The store's own trick: the size is in the file name, and asking for a
+/// bigger one works.
+///
+/// 600 rather than 1200 or 100000 — the larger sizes exist for some records
+/// and not for others, and a link that four-oh-fours on half the library is
+/// worse than a picture that is merely big enough.
 fn enlarged(url: &str) -> String {
     url.replace("100x100bb", "600x600bb")
 }
@@ -373,6 +475,12 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
+    /// A stand-in for the service: answers one request with this body, then
+    /// stops. Returns the address to point the code at.
+    ///
+    /// The real services cannot be reached from the build environment, so the
+    /// shape of the reply is what gets tested — which is the part that can be
+    /// got wrong anyway.
     fn server(body: &'static str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
@@ -432,6 +540,9 @@ mod tests {
         assert_eq!(found[0].full, "https://art.test/release-group/aa1b2c3d/front-500");
     }
 
+    /// `[ ]` by Sigur Rós, `+/-` by anyone: album titles really do consist of
+    /// Lucene syntax, and a query built straight out of one comes back as an
+    /// error rather than as nothing found.
     #[test]
     fn a_title_made_of_syntax_is_still_a_query() {
         assert_eq!(lucene_safe("[ ]"), "");
@@ -442,6 +553,7 @@ mod tests {
         assert_eq!(lucene_safe("kid a mnesia"), "kid a mnesia");
     }
 
+    /// The one piece of knowledge about the store's URLs, kept in one place.
     #[test]
     fn a_bigger_picture_is_asked_for_by_name() {
         assert_eq!(
@@ -461,6 +573,8 @@ mod tests {
         {"id": 302128, "title": "Twoism", "artist": {"name": "Boards of Canada"}}
     ]}"#;
 
+    /// The second entry has no picture at all, and an entry without one is not
+    /// a suggestion.
     #[test]
     fn deezer_gives_the_biggest_it_has() {
         std::env::set_var("KESSLER_DEEZER_ENDPOINT", server(DEEZER_REPLY));
@@ -474,6 +588,8 @@ mod tests {
         assert_eq!(found[0].full, "https://cdn.test/1000.jpg");
     }
 
+    /// A quotation mark in an album title would end the quoted term early and
+    /// turn the rest of it into syntax.
     #[test]
     fn a_quoted_term_stays_one_term() {
         assert_eq!(quoteless("say \"hello\""), "say hello");
@@ -481,6 +597,8 @@ mod tests {
         assert_eq!(quoteless("  mezzanine  "), "mezzanine");
     }
 
+    /// A value with a space or a quotation mark in it has to survive the trip
+    /// into a query string.
     #[test]
     fn the_query_string_is_encoded() {
         assert_eq!(encode("boards of canada"), "boards%20of%20canada");

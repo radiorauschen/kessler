@@ -1,9 +1,22 @@
+//! A measurement of the window, written down to be sent along with a report
+//! of something slow.
+//!
+//! Off unless the menu turns it on (über → `messen`). While it runs, every
+//! five seconds one line goes to `kessler-messung.log` beside the library:
+//! how many frames were drawn and how long they took, how much of a core the
+//! program used and how much memory it has held at most, and what was going
+//! on — music, the window in front or out of sight, the scope in
+//! the search field, the menu, the menu bar. That is enough to
+//! tell which of them a number belongs to, on a machine nobody here can see.
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// How long one line covers.
 const SPAN: Duration = Duration::from_secs(5);
 
+/// What was going on during a frame — see [`Measure::frame`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Doing {
     pub playing: bool,
@@ -12,13 +25,17 @@ pub struct Doing {
     pub field_scope: bool,
     pub menu: bool,
     pub covers_waiting: bool,
+    /// The podcasts' view open, feeds being read, an episode being fetched.
     pub podcasts: bool,
     pub feeds: bool,
     pub fetching: bool,
+    /// The frame had something from the hand to answer: the pointer moved,
+    /// a key, a click, a scroll. Frames without are the program's own.
     pub input: bool,
 }
 
 impl Doing {
+    /// The words for one line, those that were true at least once.
     fn said(seen: &[Doing]) -> String {
         let any = |f: fn(&Doing) -> bool| seen.iter().any(f);
         let mut words = Vec::new();
@@ -42,25 +59,47 @@ impl Doing {
     }
 }
 
+/// The measurement while it runs.
 pub struct Measure {
     path: PathBuf,
     began: Instant,
     cpu_then: Duration,
     frame_began: Option<Instant>,
+    /// How long the frame's `logic` took — the player, the database, what
+    /// is told to the system — apart from the drawing after it.
     logic_took: Option<f32>,
+    /// Where the last lap ended: the frame's start, then each [`Measure::lap`].
     lapped: Option<Instant>,
+    /// The longest step of `logic` in the span, and its name. A frame of 70 ms
+    /// in the logic said nothing about which part of it.
     slowest: (f32, &'static str),
+    /// Every step of this frame, logic and drawing, for the line a slow
+    /// frame gets.
     steps: Vec<(&'static str, f32)>,
+    /// What was pressed this frame — keys and buttons — for the same line.
     pressed: String,
+    /// What asked for the frames that nobody's hand asked for, counted by the
+    /// place in the code — the answer to.
     asked: std::collections::HashMap<String, usize>,
+    /// How soon each request for this frame wanted it, in the order egui
+    /// kept their places — see [`watch_repaints`].
     soon: Vec<Duration>,
     frames: Vec<f32>,
     logic: Vec<f32>,
     doing: Vec<Doing>,
+    /// What the textures hold, as the window last said — see
+    /// [`textures_said`]: where the memory goes that is not the program's
+    /// own heap.
     pub textures: String,
+    /// Which view and list the window showed last, so a change of it is
+    /// said once — see [`Measure::view_is`].
     view: String,
 }
 
+/// The textures egui holds — every cover, picture and the glyphs' atlas —
+/// in megabytes, how many, the atlas's size and the biggest of the rest.
+/// Each lives twice: on the graphics card, and egui keeps the atlas in
+/// memory as well.
 pub fn textures_said(ctx: &eframe::egui::Context) -> String {
     let manager = ctx.tex_manager();
     let manager = manager.read();
@@ -85,14 +124,26 @@ pub fn textures_said(ctx: &eframe::egui::Context) -> String {
     )
 }
 
+/// How soon every request for a frame wanted it, in the order they came —
+/// the same order egui keeps their places in. Taken at each frame's start.
 static SOON: std::sync::Mutex<Vec<Duration>> = std::sync::Mutex::new(Vec::new());
 
+/// Requests kept at most between two frames, where nobody takes them.
 const SOON_MOST: usize = 4096;
 
+/// A request that wants a frame within this is one that keeps the window
+/// drawing; one that wants it in a quarter of a second or two seconds is not.
 const QUICK: Duration = Duration::from_millis(50);
 
+/// A frame that takes longer than this, in milliseconds, gets a line of its
+/// own: which steps took the time, and what was pressed. The five-second
+/// line only says that one was slow, not where.
 const SLOW_FRAME: f32 = 40.0;
 
+/// Have egui say how soon each request wanted its frame. egui keeps the
+/// place of every request, whether it wants the frame now or in two seconds;
+/// counting them all, a place that asked for two seconds every frame stood
+/// in the log as often as the one that asked for the next frame, and hid it.
 pub fn watch_repaints(ctx: &eframe::egui::Context) {
     static WATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if WATCHING.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -107,6 +158,7 @@ pub fn watch_repaints(ctx: &eframe::egui::Context) {
 }
 
 impl Measure {
+    /// Start one, the file begun with a line saying so.
     pub fn start(path: PathBuf) -> std::io::Result<Self> {
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
         writeln!(
@@ -136,11 +188,16 @@ impl Measure {
         })
     }
 
+    /// A line of its own, at once, with the time — what the sound of an episode
+    /// is, between the five-second lines.
     pub fn note(&mut self, said: &str) {
         let at = chrono::Local::now().format("%H:%M:%S").to_string();
         self.write_note(&at, said, crate::player::watch::memory_now_mb());
     }
 
+    /// A line said elsewhere, with the time and memory of when it was said
+    /// — not of when it is written, which for what came before the
+    /// measurement began is all the same moment.
     pub fn noted(&mut self, note: &crate::player::watch::Note) {
         self.write_note(&note.at, &note.said, note.memory_mb);
     }
@@ -151,6 +208,8 @@ impl Measure {
         }
     }
 
+    /// The view the window shows now: said in a line of its own when it
+    /// is another than before.
     pub fn view_is(&mut self, view: &str) {
         if self.view != view {
             self.view = view.to_string();
@@ -162,6 +221,7 @@ impl Measure {
         &self.path
     }
 
+    /// The frame begins: the first thing `logic` does.
     pub fn begin(&mut self) {
         self.soon = std::mem::take(&mut *SOON.lock().unwrap_or_else(|e| e.into_inner()));
         let now = Instant::now();
@@ -171,6 +231,8 @@ impl Measure {
         self.pressed.clear();
     }
 
+    /// One step of `logic` is done: the time since the last one is put down
+    /// under this name, if it is the longest of the span.
     pub fn lap(&mut self, what: &'static str) {
         let now = Instant::now();
         if let Some(then) = self.lapped.replace(now) {
@@ -182,6 +244,8 @@ impl Measure {
         }
     }
 
+    /// One part of the drawing is done: put down for this frame only. The
+    /// span's line keeps its longest step of the logic alone.
     pub fn drawn(&mut self, what: &'static str) {
         let now = Instant::now();
         if let Some(then) = self.lapped.replace(now) {
@@ -189,12 +253,17 @@ impl Measure {
         }
     }
 
+    /// The frame's logic is done: the last thing `logic` does.
     pub fn logic_done(&mut self) {
         if let Some(began) = self.frame_began {
             self.logic_took = Some(began.elapsed().as_secs_f32() * 1000.0);
         }
     }
 
+    /// The frame is drawn: the last thing `ui` does. Writes a line when the
+    /// span is full.
+    /// `asked` is what requested this frame, when no hand did: egui keeps
+    /// the place of every `request_repaint`.
     pub fn frame(&mut self, doing: Doing, asked: &[eframe::egui::RepaintCause]) {
         if !doing.input {
             let known = self.soon.len() == asked.len();
@@ -220,10 +289,13 @@ impl Measure {
         }
     }
 
+    /// What was pressed this frame, as it is put down if the frame is slow.
     pub fn pressed(&mut self, said: String) {
         self.pressed = said;
     }
 
+    /// A slow frame's own line: its three longest steps, the rest together,
+    /// and what was pressed.
     fn say_slow(&mut self, took: f32) {
         let mut steps = self.steps.clone();
         steps.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -290,6 +362,7 @@ impl Measure {
     }
 }
 
+/// The processor time this program has used so far, all its threads.
 fn cpu_time() -> Duration {
     #[cfg(unix)]
     {
@@ -304,6 +377,8 @@ fn cpu_time() -> Duration {
     Duration::ZERO
 }
 
+/// The most memory the program has held at once, in megabytes. A Mac
+/// counts it in bytes, Linux in kilobytes.
 fn peak_memory_mb() -> u64 {
     #[cfg(unix)]
     {
@@ -320,6 +395,7 @@ fn peak_memory_mb() -> u64 {
 mod tests {
     use super::*;
 
+    /// One line a span, with the frames counted and what went on named.
     #[test]
     fn a_span_is_written_as_one_line() {
         let path = std::env::temp_dir().join(format!("kessler-messung-{}.log", std::process::id()));
@@ -350,6 +426,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A change of view is said once, with the memory held at that moment;
+    /// the same view again says nothing.
     #[test]
     fn a_change_of_view_is_said_once_with_the_memory() {
         let path = std::env::temp_dir().join(format!("kessler-messung-ansicht-{}.log", std::process::id()));

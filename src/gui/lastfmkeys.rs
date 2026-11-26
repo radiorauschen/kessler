@@ -1,18 +1,35 @@
+//! Typing in last.fm's key and secret, in the window.
+//!
+//! It used to be a terminal command only (`kessler lastfm setup`), on the
+//! argument that two long strings needed a text field this interface did not
+//! have. It has one now — the tag editor's — and for most people a terminal
+//! step in the middle of an otherwise windowed program is where they give up.
+//! So: menu → last.fm →, two fields, ⌘V into each, enter, and straight on to
+//! the browser to agree. The command stays, for scripts.
+//!
+//! The state and the keys are here; the drawing is in [`super::menu`], the one
+//! place the fields appear.
+
 use eframe::egui;
 
 use super::tagedit::Entry;
 use super::GuiApp;
 
+/// Where last.fm hands out keys to anyone with an account.
 pub const APPLY_URL: &str = "https://www.last.fm/api/account/create";
 
+/// The two fields, and which one has the keyboard.
 pub struct KeyForm {
     pub entries: [Entry; 2],
     pub focus: usize,
 }
 
+/// What the fields are called, in order.
 pub const LABELS: [&str; 2] = ["schlüssel", "geheimnis"];
 
 impl KeyForm {
+    /// Opened on what is there already, so a key can be looked at or
+    /// corrected rather than typed again.
     pub fn open(key: Option<&str>, secret: Option<&str>) -> Self {
         KeyForm {
             entries: [Entry::new(key.unwrap_or_default()), Entry::new(secret.unwrap_or_default())],
@@ -29,6 +46,8 @@ impl KeyForm {
         &mut self.entries[self.focus]
     }
 
+    /// Both values, tidied, if both look like what last.fm gives out;
+    /// otherwise which field is wrong.
     pub fn values(&self) -> std::result::Result<(String, String), usize> {
         let key = tidy(self.entries[0].text());
         let secret = tidy(self.entries[1].text());
@@ -42,12 +61,15 @@ impl KeyForm {
     }
 }
 
+/// A pasted key comes with whatever was around it: spaces, a line break,
+/// sometimes the label from the page. Only the hex is kept.
 fn tidy(text: &str) -> String {
     let text = text.trim();
     let text = text.rsplit(':').next().unwrap_or(text);
     text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
 }
 
+/// last.fm's keys and secrets are 32 hex digits, both of them.
 fn looks_like_key(text: &str) -> bool {
     text.len() == 32 && text.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -60,6 +82,8 @@ impl GuiApp {
         ));
     }
 
+    /// Keep both, forget the account they belonged to, and go straight on to
+    /// connecting — agreeing in the browser is the only step left.
     pub fn save_lastfm_keys(&mut self) {
         let Some(form) = self.lastfm_keys.as_mut() else {
             return;
@@ -88,6 +112,8 @@ impl GuiApp {
         }
     }
 
+    /// Keys while the fields are open: they have all of them, the menu's
+    /// own `m` and `esc` included — escape leaves the fields, not the menu.
     pub(super) fn handle_lastfm_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;
@@ -148,6 +174,7 @@ mod tests {
 
     const KEY: &str = "0123456789abcdef0123456789abcdef";
 
+    /// What a paste drags along is dropped; what is left has to be a key.
     #[test]
     fn a_pasted_key_is_tidied_and_checked() {
         let mut form = KeyForm::open(None, None);
@@ -157,6 +184,8 @@ mod tests {
         assert_eq!(form.values(), Ok((KEY.to_string(), KEY.to_string())));
     }
 
+    /// And the field that is wrong is the one named, so the caret can go
+    /// there.
     #[test]
     fn the_wrong_field_is_named() {
         let mut form = KeyForm::open(Some(KEY), Some("abc"));
@@ -165,6 +194,7 @@ mod tests {
         assert_eq!(form.values(), Err(0));
     }
 
+    /// Tab goes round the two, and back.
     #[test]
     fn tab_goes_round() {
         let mut form = KeyForm::open(None, None);

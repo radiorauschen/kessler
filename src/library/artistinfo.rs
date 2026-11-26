@@ -1,3 +1,36 @@
+//! What is known about an artist: looked up once, kept on disk, added to by
+//! hand.
+//!
+//! A good part of listening is spent in a browser — Wikipedia, last.fm,
+//! a search engine — finding out who somebody is. This gathers the answer
+//! into one place beside the music and keeps it, so it is there the next
+//! time without a network: a picture, where they are from and when they were
+//! active, a paragraph about them, the tags and the similar artists last.fm
+//! knows, and the links to read further. What the sources do not know, the
+//! person fills in: those fields are theirs, and a new search never touches
+//! them.
+//!
+//! The sources, asked in this order, none of which wants anything but the
+//! last.fm key the program already has for scrobbling:
+//!
+//! * **MusicBrainz** — who it is: person or group, origin, years, genres,
+//!   and the links to everywhere else (Wikidata, Discogs, Bandcamp, the
+//!   artist's own site). Its name match decides whether the rest is asked
+//!   about the right person at all.
+//! * **Wikipedia**, reached through Wikidata's link rather than by name —
+//!   „Coil" by name is a spring — in the window's language first, then
+//!   English: the paragraph, and a picture when there is one.
+//! * **Deezer** — a square picture, the likeliest source of one; taken only
+//!   when the name is exactly the same. Wikipedia's is kept beside it, uncut,
+//!   for showing a picture in its own shape.
+//! * **Wikimedia** — who made Wikipedia's picture and under which licence,
+//!   for the sources at the foot of the column.
+//! * **last.fm**, when a key is set up — tags, similar artists, and its
+//!   biography where Wikipedia has none.
+//!
+//! Through `curl`, like every other request this program makes. Nothing is
+//! asked unless the artist is looked at, or a new search is asked for.
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -6,21 +39,29 @@ use super::coverart::{encode, fetch, fetch_text};
 use crate::error::{KesslerError, Result};
 use crate::json::Json;
 
+/// One link to read further, as the panel says it and where it goes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
     pub label: String,
     pub url: String,
 }
 
+/// Where a picture is from, as the sources at the foot of the column name
+/// it: the source, the page it stands on, and — from Wikimedia — who made it
+/// and under which licence.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Credit {
+    /// „wikimedia commons", „wikipedia", „deezer"; empty for none.
     pub from: String,
     pub page: String,
     pub author: String,
     pub license: String,
 }
 
+/// The pictures a search brought: the square one to show as it is (Deezer's,
+/// else Wikipedia's cut to a square), and the one to show in its own shape
+/// (Wikipedia's, uncut, else the square one).
 #[derive(Debug, Clone, Default)]
 pub struct Pictures {
     pub square: Option<Vec<u8>>,
@@ -33,38 +74,71 @@ impl Pictures {
     }
 }
 
+/// What the sources said, the last time they were asked. Replaced whole by
+/// a new search.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Found {
+    /// MusicBrainz's id, when it recognised the name.
     pub mbid: String,
+    /// „person", „gruppe", …, in the window's words — see [`kind_word`].
     pub kind: String,
+    /// Where they are from: the begin area, else the area, else the country.
     pub origin: String,
+    /// „1986–2004", „seit 1986", „1946–1994" for a person.
     pub active: String,
+    /// MusicBrainz's own few words telling two of the same name apart.
     pub disambiguation: String,
+    /// Where the square picture is from, and the one in its own shape.
     pub picture_credit: Credit,
     pub full_credit: Credit,
+    /// A paragraph or two about them.
     pub about: String,
+    /// Where `about` came from: „wikipedia" or „last.fm".
     pub about_from: String,
+    /// The paragraph in each language it was found in — German and English
+    /// both, when Wikipedia has both — so switching the window's language
+    /// switches the paragraph without asking anyone again. Older files have
+    /// only `about`.
     pub told: Vec<Told>,
+    /// The languages Wikipedia was asked in, so a paragraph missing in the
+    /// window's language is asked for once and not again: German and
+    /// English, and Japanese. Empty in older files.
     pub asked: Vec<String>,
+    /// Genres and tags, the most agreed-on first.
     pub tags: Vec<String>,
+    /// MusicBrainz's genres alone, the most agreed-on first: the style. Its
+    /// tags and last.fm's are anyone's words — „seen live", „american".
+    /// Empty in older files.
     pub genres: Vec<String>,
+    /// Similar artists, by last.fm.
     pub similar: Vec<String>,
+    /// Similar artists again, more of them and with how similar each is —
+    /// last.fm's `artist.getSimilar`. What the gaps are counted from;
+    /// `similar`, from `artist.getInfo`, holds only five and no measure.
     pub kin: Vec<Kin>,
     pub links: Vec<Link>,
+    /// For a group, who is or was in it — and where else each of them played.
     pub members: Vec<Tie>,
+    /// For a person, the groups they are or were in.
     pub groups: Vec<Tie>,
 }
 
+/// A paragraph about them in one language, and where it came from.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Told {
+    /// `de`, `en` or `ja`.
     pub lang: String,
     pub text: String,
+    /// „wikipedia" or „last.fm".
     pub from: String,
 }
 
 impl Found {
+    /// The paragraph to show in `lang`: in that language if it was found in
+    /// it, else whichever was found — with its language, when that is
+    /// known and is not `lang`, so it can be said.
     pub fn about_in(&self, lang: &str) -> (&str, &str, Option<&str>) {
         if let Some(told) = self.told.iter().find(|t| t.lang == lang && !t.text.is_empty()) {
             return (&told.text, &told.from, None);
@@ -78,11 +152,15 @@ impl Found {
         (&self.about, &self.about_from, other)
     }
 
+    /// Whether the paragraph in `lang` could still be found by asking again:
+    /// there is none in it, and the last search did not ask in it — a file from
+    /// before that language was asked for.
     pub fn lacks(&self, lang: &str) -> bool {
         !self.asked.iter().any(|l| l == lang) && !self.told.iter().any(|t| t.lang == lang && !t.text.is_empty())
     }
 }
 
+/// What a search brought, in a few words, for the log.
 pub fn summary(found: &Found, pictured: bool) -> String {
     let mut said: Vec<String> = Vec::new();
     if !found.told.is_empty() {
@@ -109,6 +187,7 @@ pub fn summary(found: &Found, pictured: bool) -> String {
     said.join(" · ")
 }
 
+/// One similar artist and how similar, from 0 to 1 as last.fm says it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Kin {
@@ -116,18 +195,26 @@ pub struct Kin {
     pub weight: f32,
 }
 
+/// How many similar artists are asked for. Enough that a gap shared by a
+/// few of the library's artists shows up, few enough to keep the files small.
 const KIN_ASKED: usize = 30;
 
+/// Somebody in a group, or a group somebody is in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Tie {
     pub name: String,
     pub mbid: String,
+    /// „1986–", „1995–2004", or nothing when MusicBrainz does not say.
     pub years: String,
+    /// Still in it.
     pub current: bool,
+    /// For a member: the other groups they are in.
     pub also: Vec<String>,
 }
 
+/// What the person wrote in themselves. Never touched by a search; shown in
+/// place of what was found wherever it is filled in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Own {
@@ -136,6 +223,7 @@ pub struct Own {
     pub style: String,
     pub note: String,
     pub link: String,
+    /// The picture is one they chose, and a search leaves it alone.
     pub picture: bool,
 }
 
@@ -149,17 +237,22 @@ impl Own {
     }
 }
 
+/// Everything kept about one artist, as it is written to disk.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ArtistInfo {
+    /// The name it was looked up by, as the library spells it.
     pub name: String,
+    /// When the sources were last asked, `YYYY-MM-DD`; empty for never.
     pub looked_up: String,
+    /// Whether they recognised the name at all.
     pub recognised: bool,
     pub found: Found,
     pub own: Own,
 }
 
 impl ArtistInfo {
+    /// The person's word where there is one, what was found otherwise.
     pub fn origin(&self) -> &str {
         pick(&self.own.origin, &self.found.origin)
     }
@@ -168,6 +261,8 @@ impl ArtistInfo {
         pick(&self.own.active, &self.found.active)
     }
 
+    /// Their own description of the style, else MusicBrainz's genres, else
+    /// the first few tags that name a style.
     pub fn style(&self) -> String {
         if !self.own.style.is_empty() {
             return self.own.style.clone();
@@ -177,6 +272,9 @@ impl ArtistInfo {
     }
 }
 
+/// Whether a tag names a style rather than something about the listener, the
+/// voice or the country — the words people put on artists most that are not
+/// a kind of music.
 fn names_a_style(tag: &str) -> bool {
     const NOT_STYLES: [&str; 30] = [
         "seen live", "favorites", "favourites", "favorite", "favourite", "my favorite",
@@ -197,6 +295,8 @@ fn pick<'a>(own: &'a str, found: &'a str) -> &'a str {
     }
 }
 
+/// Where everything about one artist is kept, by the folded name the library
+/// groups them under.
 pub fn key(artist_key: &str) -> u64 {
     super::artwork::key(artist_key, "\u{2}artist")
 }
@@ -209,15 +309,20 @@ pub fn picture_path(dir: &Path, key: u64) -> PathBuf {
     dir.join(format!("{key:016x}.jpg"))
 }
 
+/// The same picture in its own shape, uncut — or another one that has a shape
+/// of its own: Wikipedia's beside Deezer's square.
 pub fn full_picture_path(dir: &Path, key: u64) -> PathBuf {
     dir.join(format!("{key:016x}-full.jpg"))
 }
 
+/// What is on disk about this artist, if anything.
 pub fn load(dir: &Path, key: u64) -> Option<ArtistInfo> {
     let text = std::fs::read_to_string(info_path(dir, key)).ok()?;
     toml::from_str(&text).ok()
 }
 
+/// Write it down, whole, by way of a file beside it so a crash never leaves
+/// half of one.
 pub fn save(dir: &Path, key: u64, info: &ArtistInfo) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let text = toml::to_string_pretty(info)
@@ -229,6 +334,9 @@ pub fn save(dir: &Path, key: u64, info: &ArtistInfo) -> Result<()> {
     Ok(())
 }
 
+/// A picture of them, cut to a square from its middle and made small: the
+/// panel shows a square, and a portrait squeezed into one is a face pulled
+/// wide.
 pub fn store_picture(dir: &Path, key: u64, raw: &[u8]) -> Result<bool> {
     let Ok(image) = image::load_from_memory(raw) else {
         return Ok(false);
@@ -256,6 +364,8 @@ pub fn store_picture(dir: &Path, key: u64, raw: &[u8]) -> Result<bool> {
     Ok(true)
 }
 
+/// A picture as it is, uncut, made small on its longer side: for showing in
+/// its own shape.
 pub fn store_full_picture(dir: &Path, key: u64, raw: &[u8]) -> Result<bool> {
     let Some(jpeg) = super::artwork::shrink_to_jpeg(raw, FULL_PICTURE_LONGEST, 85) else {
         return Ok(false);
@@ -265,8 +375,13 @@ pub fn store_full_picture(dir: &Path, key: u64, raw: &[u8]) -> Result<bool> {
     Ok(true)
 }
 
+/// How big the uncut picture is kept on its longer side: twice the widest the
+/// column shows it, for a Retina screen.
 const FULL_PICTURE_LONGEST: u32 = 800;
 
+/// Write down what a search found: in place of what was found before, beside
+/// what the person wrote, with the picture unless theirs is one they chose.
+/// Returns what is now on disk, and whether the picture changed.
 pub fn take_in(
     dir: &Path,
     key: u64,
@@ -293,10 +408,14 @@ pub fn take_in(
     Ok((info, pictured))
 }
 
+/// Whether the sources have been asked about this artist at all.
 pub fn looked_up(dir: &Path, key: u64) -> bool {
     load(dir, key).is_some_and(|i| !i.looked_up.is_empty())
 }
 
+/// One artist as a Markdown page: the facts in front matter, so another
+/// program — or a later Kessler, reading it back — can take them apart
+/// again; then the same as a page to read, with the picture beside it.
 pub fn to_markdown(info: &ArtistInfo, picture: Option<&str>) -> String {
     let mut out = String::new();
     let quoted = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
@@ -393,6 +512,8 @@ pub fn to_markdown(info: &ArtistInfo, picture: Option<&str>) -> String {
     out.trim_end().to_string() + "\n"
 }
 
+/// A name as a file name: what a file system refuses, and what would make a
+/// hidden file, taken out.
 fn file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -406,6 +527,10 @@ fn file_name(name: &str) -> String {
     }
 }
 
+/// Every artist Kessler knows something about, as a Markdown page each in
+/// `to`, with their picture beside it. Returns how many were written.
+/// Nothing in `to` is overwritten but pages of the same name, which are
+/// this export's own from an earlier time.
 pub fn export_all(dir: &Path, to: &Path) -> Result<usize> {
     std::fs::create_dir_all(to)?;
     let mut written = 0;
@@ -452,11 +577,13 @@ fn wikidata_endpoint() -> String {
         .unwrap_or_else(|_| "https://www.wikidata.org/w/api.php".to_string())
 }
 
+/// Wikidata's SPARQL endpoint: what a radio station's page belongs to.
 fn sparql_endpoint() -> String {
     std::env::var("KESSLER_WIKIDATA_SPARQL_ENDPOINT")
         .unwrap_or_else(|_| "https://query.wikidata.org/sparql".to_string())
 }
 
+/// With `{lang}` where the language goes.
 fn wikipedia_endpoint() -> String {
     std::env::var("KESSLER_WIKIPEDIA_ENDPOINT")
         .unwrap_or_else(|_| "https://{lang}.wikipedia.org/api/rest_v1/page/summary/".to_string())
@@ -472,12 +599,15 @@ fn lastfm_endpoint() -> String {
         .unwrap_or_else(|_| "https://ws.audioscrobbler.com/2.0/".to_string())
 }
 
+/// MusicBrainz asks for one request a second from each client.
 fn musicbrainz_pause() {
     if std::env::var("KESSLER_MB_ARTIST_ENDPOINT").is_err() {
         std::thread::sleep(std::time::Duration::from_millis(1100));
     }
 }
 
+/// A name as names are compared here: lower case, letters and figures only,
+/// a leading „the" let go of.
 pub fn plain(name: &str) -> String {
     let lower: String = name
         .chars()
@@ -489,6 +619,12 @@ pub fn plain(name: &str) -> String {
     lower.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
+/// Everything the sources say about `name`, and a picture if one turned up.
+///
+/// `lang` is the window's language, `de` or `en`; `lastfm_key` the key the
+/// program scrobbles with, if it has one. A source that fails or knows
+/// nothing adds nothing and stops nothing; only when all of them fail is
+/// the answer an error.
 pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Found, bool, Pictures)> {
     let mut found = Found { asked: WIKIPEDIA_LANGS.iter().map(|l| l.to_string()).collect(), ..Found::default() };
     let mut recognised = false;
@@ -686,6 +822,9 @@ pub fn look_up(name: &str, lang: &str, lastfm_key: Option<&str>) -> Result<(Foun
     Ok((found, recognised, Pictures { square: picture, full }))
 }
 
+/// Who made the Wikimedia picture at `url` and under which licence, and the
+/// page it stands on — asked of the wiki it is kept in, Commons or a
+/// Wikipedia of its own. What cannot be asked leaves the source and the page.
 fn wikimedia_credit(url: &str) -> Credit {
     let Some((project, file)) = wikimedia_file(url) else {
         return Credit { from: "wikipedia".into(), ..Credit::default() };
@@ -704,6 +843,9 @@ fn wikimedia_credit(url: &str) -> Credit {
     credit
 }
 
+/// The wiki and the file name of a picture on Wikimedia's upload server:
+/// `…/wikipedia/commons/thumb/a/ab/Name.jpg/320px-Name.jpg` and
+/// `…/wikipedia/en/a/ab/Name.jpg` alike.
 fn wikimedia_file(url: &str) -> Option<(String, String)> {
     let rest = url.split("upload.wikimedia.org/wikipedia/").nth(1)?;
     let parts: Vec<&str> = rest.split('/').collect();
@@ -712,6 +854,7 @@ fn wikimedia_file(url: &str) -> Option<(String, String)> {
     (!file.is_empty()).then(|| (project, file.to_string()))
 }
 
+/// The author and licence out of the wiki's answer about a file.
 fn read_wikimedia(doc: &Json, credit: &mut Credit) {
     let Some(Json::Object(pages)) = doc.get("query").and_then(|q| q.get("pages")) else { return };
     let Some(meta) = pages.first().and_then(|(_, page)| page.list("imageinfo").first()).and_then(|info| info.get("extmetadata")) else {
@@ -722,6 +865,8 @@ fn read_wikimedia(doc: &Json, credit: &mut Credit) {
     credit.license = value("LicenseShortName");
 }
 
+/// Text out of a little HTML, as the wikis write an author: the tags dropped,
+/// the commonest entities read, the spaces made one.
 fn no_markup(html: &str) -> String {
     let mut out = String::new();
     let mut inside = false;
@@ -737,6 +882,8 @@ fn no_markup(html: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The id of the artist MusicBrainz means by `name`: the best-scored one
+/// whose name, or one of whose aliases, is this one.
 fn musicbrainz_search(name: &str) -> Result<Option<String>> {
     let query = format!("artist:\"{}\"", name.replace('"', ""));
     let url = format!(
@@ -770,8 +917,12 @@ fn best_musicbrainz_match(doc: &Json, name: &str) -> Option<String> {
     best.text("id").map(str::to_string)
 }
 
+/// How close in MusicBrainz's score two artists of one name stand for the
+/// search to be told apart by it no longer.
 const AMBIGUOUS_WITHIN: f64 = 5.0;
 
+/// The facts and links out of one MusicBrainz artist, into `found`; the
+/// Wikidata item, if it links one.
 fn read_musicbrainz(doc: &Json, found: &mut Found) -> Option<String> {
     found.kind = doc.text("type").map(kind_word).unwrap_or_default().to_string();
     found.disambiguation = doc.text("disambiguation").unwrap_or_default().to_string();
@@ -832,8 +983,13 @@ fn read_musicbrainz(doc: &Json, found: &mut Found) -> Option<String> {
     wikidata
 }
 
+/// How many of a group's members are asked where else they play: each is a
+/// question of its own, a second apart.
 const MEMBERS_FOLLOWED: usize = 6;
 
+/// The members of a group (`group`), or the groups a person is in, out of an
+/// artist's MusicBrainz relations — the current ones first, then by when
+/// they began, each name once.
 fn read_ties(doc: &Json, group: bool) -> Vec<Tie> {
     let wanted = if group { "backward" } else { "forward" };
     let mut ties: Vec<(String, Tie)> = Vec::new();
@@ -877,6 +1033,7 @@ fn read_ties(doc: &Json, group: bool) -> Vec<Tie> {
     ties.into_iter().map(|(_, t)| t).collect()
 }
 
+/// MusicBrainz's type, in the window's words.
 pub fn kind_word(kind: &str) -> &'static str {
     match kind.to_lowercase().as_str() {
         "person" => "person",
@@ -888,8 +1045,10 @@ pub fn kind_word(kind: &str) -> &'static str {
     }
 }
 
+/// The languages Wikipedia is asked in: the three the window speaks.
 const WIKIPEDIA_LANGS: [&str; 3] = ["de", "en", "ja"];
 
+/// The Wikipedia article titles a Wikidata item links, by language.
 fn wikipedia_titles(item: &str) -> Result<Vec<(String, String)>> {
     let url = format!(
         "{}?action=wbgetentities&ids={}&props=sitelinks&sitefilter=dewiki%7Cenwiki%7Cjawiki&format=json",
@@ -952,8 +1111,21 @@ fn read_summary(doc: &Json, lang: &str, title: &str) -> Option<Summary> {
     Some(Summary { extract, page, picture })
 }
 
+/// A station's article in each language (language, text, page), and its
+/// picture as fetched.
 pub type StationArticle = (Vec<(String, String, String)>, Option<Vec<u8>>);
 
+/// What Wikipedia says about the radio station whose page is `site`: the
+/// article's summary in every language the window speaks that has one, as
+/// (language, text, page).
+///
+/// Found by the page, not by the name: Wikidata keeps every station's
+/// official website (P856), and „nts.live" names NTS Radio where „nts 1"
+/// would name anything called NTS. Nothing found is an empty list, not an
+/// error.
+///
+/// And the article's picture, as fetched: for a station whose directory entry
+/// has no picture of its own, or one that cannot be shown.
 pub fn station_wikipedia(site: &str) -> Result<StationArticle> {
     let Some(item) = station_item(site)? else { return Ok((Vec::new(), None)) };
     let titles = wikipedia_titles(&item)?;
@@ -970,6 +1142,9 @@ pub fn station_wikipedia(site: &str) -> Result<StationArticle> {
     Ok((told, picture))
 }
 
+/// The Wikidata item whose official website is `site`, written any of the
+/// ways a site is written: with or without „www.", „https" or „http", the
+/// slash at the end, and the path.
 fn station_item(site: &str) -> Result<Option<String>> {
     let ways = site_ways(site);
     if ways.is_empty() {
@@ -993,6 +1168,8 @@ fn read_station_item(doc: &Json) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The ways a site may be written down in Wikidata. Only addresses with
+/// nothing in them that would break the query.
 fn site_ways(site: &str) -> Vec<String> {
     let site = site.trim();
     let rest = site.strip_prefix("https://").or_else(|| site.strip_prefix("http://")).unwrap_or(site);
@@ -1022,6 +1199,7 @@ fn site_ways(site: &str) -> Vec<String> {
     ways
 }
 
+/// Deezer's picture of the artist of exactly this name, if it has a real one.
 fn deezer_picture(name: &str) -> Result<Option<(String, String)>> {
     let url = format!("{}?q={}&limit=5", deezer_artist_endpoint(), encode(name));
     let doc = Json::parse(&fetch_text(&url)?)
@@ -1029,6 +1207,7 @@ fn deezer_picture(name: &str) -> Result<Option<(String, String)>> {
     Ok(read_deezer(&doc, name))
 }
 
+/// The picture of the artist of exactly this name, and their page there.
 fn read_deezer(doc: &Json, name: &str) -> Option<(String, String)> {
     let wanted = plain(name);
     doc.list("data")
@@ -1040,6 +1219,7 @@ fn read_deezer(doc: &Json, name: &str) -> Option<(String, String)> {
 }
 
 struct LastfmInfo {
+    /// The MusicBrainz artist its page is about, where it names one.
     mbid: String,
     bio: String,
     tags: Vec<String>,
@@ -1083,6 +1263,7 @@ fn read_lastfm(doc: &Json) -> Option<LastfmInfo> {
     })
 }
 
+/// The artists last.fm finds most like `name`, the likest first.
 fn lastfm_similar(name: &str, key: &str) -> Result<Vec<Kin>> {
     let url = format!(
         "{}?method=artist.getsimilar&artist={}&api_key={}&format=json&autocorrect=1&limit={}",
@@ -1118,6 +1299,8 @@ fn read_kin(doc: &Json) -> Vec<Kin> {
         .collect()
 }
 
+/// last.fm's biography as plain text: its markup gone, and the it ends every
+/// summary with — the link is in the panel already.
 fn without_markup(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut inside = false;
@@ -1149,6 +1332,8 @@ fn without_markup(html: &str) -> String {
 mod style_words {
     use super::*;
 
+    /// The style is MusicBrainz's genres where it has them, else the tags
+    /// that name a kind of music.
     #[test]
     fn the_style_is_genres_else_tags_that_name_one() {
         let mut info = ArtistInfo::default();
@@ -1186,6 +1371,9 @@ mod tests {
         assert_ne!(plain("Coil"), plain("Coil (band)"));
     }
 
+    /// Several of one name scored all but alike — as „hiromi" is, a singer
+    /// who died in 2010 at 100 and three others at 99 — is no answer: no
+    /// facts rather than another's. One clearly ahead still is.
     #[test]
     fn several_of_one_name_alike_are_no_answer() {
         let doc = json(
@@ -1199,12 +1387,14 @@ mod tests {
         assert_eq!(best_musicbrainz_match(&doc, "coil").as_deref(), Some("a"));
     }
 
+    /// last.fm's page names the MusicBrainz artist it is about.
     #[test]
     fn lastfm_names_its_musicbrainz_artist() {
         let doc = json(r#"{"artist":{"name":"Hiromi","mbid":" 0f2a6f8b-uehara ","bio":{"summary":"pianist"}}}"#);
         assert_eq!(read_lastfm(&doc).unwrap().mbid, "0f2a6f8b-uehara");
     }
 
+    /// The artist whose name it is, not merely the best-scored one.
     #[test]
     fn musicbrainz_is_taken_at_its_word_only_when_the_name_is_the_same() {
         let doc = json(
@@ -1244,6 +1434,8 @@ mod tests {
         assert_eq!(labels, vec!["discogs", "website"]);
     }
 
+    /// A group's members, current first; a person's groups, seen from the
+    /// other end.
     #[test]
     fn members_and_groups_are_read_from_either_end() {
         let group = json(
@@ -1329,6 +1521,7 @@ mod tests {
         assert_eq!(summary.picture.as_deref(), Some("https://upload.test/boc.jpg"));
     }
 
+    /// Only a real picture of exactly this artist.
     #[test]
     fn deezer_gives_a_picture_only_of_the_same_name() {
         let doc = json(
@@ -1343,6 +1536,9 @@ mod tests {
         );
     }
 
+    /// A Wikimedia picture's wiki and file are read off its address, a
+    /// thumbnail's or the file's own; the author and licence off the wiki's
+    /// answer, without their markup.
     #[test]
     fn wikimedia_says_who_made_a_picture() {
         assert_eq!(
@@ -1400,6 +1596,8 @@ mod tests {
         assert!(read_kin(&json(r#"{"error":6,"message":"not found"}"#)).is_empty());
     }
 
+    /// The paragraph follows the window's language when both were found,
+    /// and says which language it is in when only the other was.
     #[test]
     fn the_paragraph_is_in_the_window_s_language_when_there_is_one() {
         let told = |lang: &str, text: &str| Told { lang: lang.into(), text: text.into(), from: "wikipedia".into() };
@@ -1421,6 +1619,7 @@ mod tests {
         assert_eq!(old.about_in("en"), ("Ein Duo.", "wikipedia", None));
     }
 
+    /// The page says what the panel says, and its front matter is readable.
     #[test]
     fn an_artist_comes_out_as_a_page() {
         let mut info = ArtistInfo {
@@ -1452,6 +1651,7 @@ mod tests {
         assert_eq!(file_name(".hidden"), "hidden");
     }
 
+    /// Every artist on disk becomes a page, with the picture beside it.
     #[test]
     fn everything_gathered_is_exported() {
         let base = std::env::temp_dir().join(format!("kessler-export-{}", std::process::id()));
@@ -1468,6 +1668,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// What the person wrote survives on disk, and wins over what was found.
     #[test]
     fn their_own_words_are_kept_and_come_first() {
         let dir = std::env::temp_dir().join(format!("kessler-artist-{}", std::process::id()));

@@ -1,10 +1,14 @@
+//! last.fm: connecting an account and reporting what is heard.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// Whether an account is in the middle of being connected.
     pub fn is_connecting(&self) -> bool {
         self.connecting.is_some()
     }
 
+    /// Start connecting a Last.fm account: open the approval page and wait.
     pub fn connect_lastfm(&mut self) {
         if self.connecting.is_some() {
             return;
@@ -20,6 +24,10 @@ impl GuiApp {
         self.set_status(tr!("last.fm: im browser bestätigen…"));
     }
 
+    /// Forget the connected account: the session goes from the config and the
+    /// scrobbler stops. The key and the secret stay — they are the program's,
+    /// not the account's — so connecting again is one click. What was waiting
+    /// to be sent stays on disk and goes out with the next account connected.
     pub fn disconnect_lastfm(&mut self) {
         let who = self.config.lastfm.username.take();
         self.config.lastfm.session_key = None;
@@ -34,6 +42,9 @@ impl GuiApp {
         }
     }
 
+    /// Connect a different account in its place. Last.fm asks the browser
+    /// whoever is logged in there, so the page has to be told the other
+    /// account — the status line says so.
     pub fn switch_lastfm(&mut self) {
         self.disconnect_lastfm();
         self.connect_lastfm();
@@ -42,6 +53,7 @@ impl GuiApp {
         }
     }
 
+    /// The connected account's page on last.fm, in the browser.
     pub fn open_lastfm_profile(&mut self) {
         match self.config.lastfm.username.as_deref().filter(|u| !u.is_empty()) {
             Some(user) => {
@@ -52,6 +64,7 @@ impl GuiApp {
         }
     }
 
+    /// Pick up the answer, if it has come.
     pub(in crate::gui) fn poll_connecting(&mut self) {
         let Some(rx) = &self.connecting else { return };
         match rx.try_recv() {
@@ -79,6 +92,11 @@ impl GuiApp {
         }
     }
 
+    /// Tell Last.fm what is being listened to.
+    ///
+    /// Every frame, because that is the only thing in this program that knows
+    /// time is passing — but everything expensive happens on the scrobbler's
+    /// own thread, and the watcher itself is arithmetic.
     pub(in crate::gui) fn report_listening(&mut self) {
         if self.scrobbler.is_none() {
             return;

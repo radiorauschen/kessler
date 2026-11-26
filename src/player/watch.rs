@@ -1,8 +1,18 @@
+//! What the sound of an episode is, written down for the measurement.
+//!
+//! [`Watch`] stands between the decoder and the rest: it says what the file is
+//! as it opens — channels, rate, length — and again whenever that changes on
+//! the way through, with how far in. The device's own rate is said as it opens.
+//! Everything goes into one list, which the window takes and writes into
+//! `kessler-messung.log` while „messen" runs.
+
 use std::sync::Mutex;
 use std::time::Duration;
 
 use rodio::Source;
 
+/// One thing said, with when and how much memory the program held then —
+/// written down later, perhaps much later, once „messen" runs.
 #[derive(Debug)]
 pub struct Note {
     pub at: String,
@@ -10,10 +20,13 @@ pub struct Note {
     pub memory_mb: u64,
 }
 
+/// What was said and not yet taken.
 static NOTES: Mutex<Vec<Note>> = Mutex::new(Vec::new());
 
+/// How many are kept, where nobody takes them.
 const NOTES_MOST: usize = 200;
 
+/// Say something about the sound.
 pub fn note(said: String) {
     tracing::debug!("{said}");
     let note = Note { at: chrono::Local::now().format("%H:%M:%S").to_string(), said, memory_mb: memory_now_mb() };
@@ -25,6 +38,11 @@ pub fn note(said: String) {
     }
 }
 
+/// An address made short for the measurement: its host and the end of its
+/// path.
+///
+/// Without what follows `?` or `#`: a private feed or stream carries its key
+/// there, and the log is meant to be sent.
 pub fn short(url: &str) -> String {
     let bare = url.split("://").nth(1).unwrap_or(url);
     let bare = bare.split(['?', '#']).next().unwrap_or(bare);
@@ -33,10 +51,14 @@ pub fn short(url: &str) -> String {
     if last.is_empty() { host.to_string() } else { format!("{host}/…/{last}") }
 }
 
+/// Everything said since the last time.
 pub fn take_notes() -> Vec<Note> {
     std::mem::take(&mut *NOTES.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
+/// The memory the program holds now, in megabytes: what is resident, as
+/// the activity monitor shows it — the peak alone said when it rose, not
+/// whether it came down again.
 pub fn memory_now_mb() -> u64 {
     #[cfg(target_os = "macos")]
     {
@@ -61,10 +83,13 @@ pub fn memory_now_mb() -> u64 {
     0
 }
 
+/// A source that says what it is, and when that changes.
 pub struct Watch<S: Source> {
     inner: S,
     name: String,
     spec: (u16, u32),
+    /// Samples through so far, and the seconds they made before the last
+    /// change — for „how far in".
     samples: u64,
     seconds_before: f64,
 }
@@ -134,6 +159,10 @@ impl<S: Source> Source for Watch<S> {
     }
 }
 
+/// `source` kept at the rate and channels it began with, whatever it does on
+/// the way: a file that changes them part way — which is what played an episode
+/// too fast, a store taking the first ones for all — is converted back to them,
+/// each piece as it comes.
 pub fn steady<S: Source + Send + 'static>(source: S, name: &str) -> impl Source + Send + 'static {
     let watched = Watch::new(source, name);
     let (channels, rate) = (watched.channels(), watched.sample_rate());
@@ -144,6 +173,9 @@ pub fn steady<S: Source + Send + 'static>(source: S, name: &str) -> impl Source 
 mod tests {
     use super::*;
 
+    /// One piece at 44.1 kHz mono, then one at 22.05 kHz stereo — a file
+    /// that changes on the way. Said as it opens and as it changes, and
+    /// kept at what it began with.
     struct Changing {
         at: usize,
     }

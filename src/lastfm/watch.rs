@@ -1,34 +1,70 @@
+//! Watching the player, and deciding what counts as having listened to a track.
+//!
+//! Deliberately knows nothing about the network, the player or the window: it
+//! is fed what is playing and how far in, and it says what should be reported.
+//! That is what makes the rules — which are fussy, and Last.fm's rather than
+//! ours — something that can be tested without a sound card or a connection.
+
 use crate::db::models::Track;
 
+/// Last.fm's own conditions for a scrobble:
+///
+/// - the track is longer than 30 seconds,
+/// - and it has been played for at least half its length, or for four minutes,
+///   whichever comes first.
+///
+/// Written as constants because they are rules from somebody else's service,
+/// not choices this program gets to make.
 pub const MIN_LENGTH_SECS: f64 = 30.0;
 pub const ENOUGH_SECS: f64 = 240.0;
 pub const ENOUGH_FRACTION: f64 = 0.5;
 
+/// What the watcher has decided should be sent.
+///
+/// No `PartialEq`: a `Track` is not compared anywhere, and deriving it here
+/// would push the requirement down onto the model for the sake of two tests
+/// that can look at the fields they care about instead.
 #[derive(Debug, Clone)]
 pub enum Event {
+    /// A track has started: say so, so the profile shows it while it plays.
     NowPlaying(Box<Track>),
+    /// A track has been listened to. `started_at` is a unix timestamp of when
+    /// it began, which is what Last.fm files it under — not when it finished.
     Scrobble {
         track: Box<Track>,
         started_at: i64,
     },
 }
 
+/// What the player looked like at one moment.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Moment {
+    /// The track's database id, or `None` when nothing is loaded.
     pub track_id: Option<i64>,
+    /// How far into the track the player is, in seconds.
     pub position: f64,
+    /// Unix time now.
     pub now: i64,
 }
 
+/// One track's progress, as the watcher sees it.
 #[derive(Debug, Clone)]
 struct Playing {
     track: Track,
+    /// Unix time when this track started playing.
     started_at: i64,
+    /// The furthest into the track the player has been seen. Seeking backwards
+    /// must not undo credit already earned, and seeking *forwards* must not
+    /// grant it — see `listened`.
     furthest: f64,
+    /// How much of the track has actually been heard, in seconds. Counted from
+    /// how far the position moves, so skipping ahead does not pay.
     listened: f64,
+    /// Whether it has been reported as listened to already.
     scrobbled: bool,
 }
 
+/// Follows the player and says what to report.
 #[derive(Debug, Default)]
 pub struct Watch {
     playing: Option<Playing>,
@@ -40,6 +76,10 @@ impl Watch {
         Self::default()
     }
 
+    /// Feed it the player's current state; take back whatever should be sent.
+    ///
+    /// Called every frame, so it has to be cheap and it has to be idempotent:
+    /// the same moment twice says nothing the second time.
     pub fn observe(&mut self, moment: Moment, track: Option<&Track>) -> Vec<Event> {
         let mut events = Vec::new();
 
@@ -92,11 +132,19 @@ impl Watch {
         events
     }
 
+    /// What is being watched, for anything that wants to say so.
     #[cfg(test)]
     pub fn current(&self) -> Option<&Track> {
         self.playing.as_ref().map(|p| &p.track)
     }
 
+    /// Where the track being played stands, for the window to say out loud.
+    ///
+    /// The watcher already knows all of this — it has to, to do its job — and
+    /// it was the one thing about the program that happened entirely in
+    /// private: a scrobble goes out four minutes into a track and says so for
+    /// twelve seconds, which is a report nobody was looking at the moment it
+    /// appeared. This is the same knowledge as a standing line instead.
     pub fn standing(&self) -> Option<Standing> {
         let playing = self.playing.as_ref()?;
         if playing.scrobbled {
@@ -111,23 +159,30 @@ impl Watch {
     }
 }
 
+/// Where one track stands with Last.fm, as the window says it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Standing {
+    /// Listening; this many more seconds of it are wanted.
     Listening { left: f64 },
+    /// Enough was heard, and it has been handed to the scrobbler.
     Counted,
+    /// It cannot count, however long it plays.
     Never,
 }
 
+/// How much listening this track needs before it counts.
 fn wanted(track: &Track) -> f64 {
     ENOUGH_SECS.min(track.duration_secs * ENOUGH_FRACTION)
 }
 
+/// Whether any amount of listening could earn this track a scrobble.
 fn could_ever(track: &Track) -> bool {
     track.duration_secs > MIN_LENGTH_SECS
         && !track.artist.trim().is_empty()
         && !track.title.trim().is_empty()
 }
 
+/// Whether a track that has stopped still owes a scrobble.
 fn finished(done: Playing) -> Option<Event> {
     if done.scrobbled || !earned(&done.track, done.listened) {
         return None;
@@ -138,6 +193,9 @@ fn finished(done: Playing) -> Option<Event> {
     })
 }
 
+/// Has this much listening earned a scrobble?
+/// The rules live in [`could_ever`] and [`wanted`], so that what the window
+/// says about a track and what the scrobbler does with it cannot disagree.
 pub fn earned(track: &Track, listened: f64) -> bool {
     could_ever(track) && listened >= wanted(track)
 }
@@ -173,6 +231,7 @@ mod tests {
         }
     }
 
+    /// Play a track from a standing start, a second at a time.
     fn play(watch: &mut Watch, track: &Track, seconds: i64, from: i64) -> Vec<Event> {
         let mut events = Vec::new();
         for step in 0..=seconds {
@@ -188,6 +247,8 @@ mod tests {
         events
     }
 
+    /// What the window has to be able to say, from the same figures the
+    /// scrobbler decides on: how much longer, and then that it counted.
     #[test]
     fn the_standing_counts_down_and_then_says_it_counted() {
         let mut watch = Watch::new();
@@ -205,6 +266,7 @@ mod tests {
         assert_eq!(watch.standing(), Some(Standing::Counted));
     }
 
+    /// A track that can never count says so rather than counting down forever.
     #[test]
     fn a_track_that_cannot_count_says_so_from_the_first_second() {
         let mut watch = Watch::new();
@@ -220,6 +282,7 @@ mod tests {
         assert_eq!(watch.standing(), Some(Standing::Never));
     }
 
+    /// Carry on from where the track already is.
     fn play_on(watch: &mut Watch, track: &Track, seconds: std::ops::RangeInclusive<i64>) {
         for second in seconds {
             watch.observe(
@@ -242,6 +305,8 @@ mod tests {
         assert!(matches!(events[0], Event::NowPlaying(_)));
     }
 
+    /// Four minutes is enough however long the track is — a fifteen-minute
+    /// piece does not need seven and a half.
     #[test]
     fn a_long_track_scrobbles_after_four_minutes() {
         let mut watch = Watch::new();
@@ -264,6 +329,7 @@ mod tests {
         assert_eq!(scrobbles(&later), 1);
     }
 
+    /// How many of these are scrobbles.
     fn scrobbles(events: &[Event]) -> usize {
         events
             .iter()
@@ -290,6 +356,7 @@ mod tests {
         }
     }
 
+    /// It is sent once, not on every frame after the threshold.
     #[test]
     fn a_track_is_only_scrobbled_once() {
         let mut watch = Watch::new();
@@ -301,6 +368,7 @@ mod tests {
         );
     }
 
+    /// Skipping through a track is not listening to it.
     #[test]
     fn dragging_to_the_end_earns_nothing() {
         let mut watch = Watch::new();
@@ -323,6 +391,7 @@ mod tests {
         );
     }
 
+    /// A track given up on halfway through the requirement is not scrobbled.
     #[test]
     fn a_skipped_track_is_not_scrobbled() {
         let mut watch = Watch::new();
@@ -343,6 +412,8 @@ mod tests {
         );
     }
 
+    /// A track that earned its scrobble and then ends still gets it, even if
+    /// the threshold was crossed on the very last observation.
     #[test]
     fn a_finished_track_pays_out_when_it_ends() {
         let mut watch = Watch::new();
@@ -362,6 +433,7 @@ mod tests {
         );
     }
 
+    /// Anything under half a minute is never scrobbled, whatever happens.
     #[test]
     fn a_very_short_track_is_never_scrobbled() {
         let mut watch = Watch::new();
@@ -373,6 +445,7 @@ mod tests {
         );
     }
 
+    /// A file with no tags would be filed as nothing at all.
     #[test]
     fn a_track_without_a_name_is_not_reported() {
         let mut nameless = track(1, "", 300.0);
@@ -380,6 +453,7 @@ mod tests {
         assert!(!earned(&nameless, 1000.0));
     }
 
+    /// Stopping the player closes the book on what was playing.
     #[test]
     fn stopping_pays_out_what_was_earned() {
         let mut watch = Watch::new();

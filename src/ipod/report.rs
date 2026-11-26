@@ -1,3 +1,13 @@
+//! A report on what is on the iPod, as plain text, to be sent along when
+//! something on the device looks wrong.
+//!
+//! It says what the device itself will make of its database — whether the
+//! master playlist carries the indices the menus are built from, which names
+//! would stand twice under artists or albums, what is ticked, which files are
+//! missing or left over — and, with the library beside it, what the next sync
+//! would do about it. Names of artists and albums are in it; nothing else of
+//! the library, and no paths outside the device.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -7,6 +17,8 @@ use super::itunesdb::types::{IpodTrack, ItunesDb};
 use super::sync::SyncPlan;
 use super::IpodDevice;
 
+/// The index fields a master playlist should carry, with what the menu
+/// built from each is called.
 const INDICES: [(u32, &str); 5] = [
     (0x03, "titel"),
     (0x04, "alben"),
@@ -15,8 +27,11 @@ const INDICES: [(u32, &str); 5] = [
     (0x12, "komponist:innen"),
 ];
 
+/// How many names a list in the report shows before it says how many more.
 const SHOWN: usize = 40;
 
+/// The report, ready to be saved. `plan` is what a sync of the whole library
+/// would do now, where there is a library to plan with.
 pub fn write(device: &IpodDevice, info: &DeviceInfo, db: &ItunesDb, plan: Option<&SyncPlan>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "kessler {} — ipod-bericht", crate::VERSION_SHOWN);
@@ -122,6 +137,9 @@ fn section_database(out: &mut String, device: &IpodDevice, db: &ItunesDb) {
     out.push('\n');
 }
 
+/// What the device's menus show, worked out the way a 3G without indices
+/// does it: walking the master playlist and starting a new entry whenever
+/// the name changes. A name that comes back later stands in the menu twice.
 fn section_menus(out: &mut String, db: &ItunesDb) {
     let _ = writeln!(out, "## menüs");
     let Some(master) = db.master_playlist() else {
@@ -157,6 +175,11 @@ fn section_menus(out: &mut String, db: &ItunesDb) {
     out.push('\n');
 }
 
+/// Names that are one name to a person and several to the device: the same
+/// once case, accents and spaces are folded, different as written. With the
+/// indices they still stand side by side as separate entries. A spelling
+/// only tracks the library does not have use is marked: a sync leaves those
+/// tracks as they are.
 fn section_names(out: &mut String, tracks: &[IpodTrack], only_here: &BTreeSet<u32>) {
     let _ = writeln!(out, "## schreibweisen");
     for (word, name) in [
@@ -253,6 +276,7 @@ fn section_plan(out: &mut String, plan: &SyncPlan, db: &ItunesDb) {
     out.push('\n');
 }
 
+/// Up to [`SHOWN`] entries, set in, and how many more there are.
 fn list(out: &mut String, entries: &[String]) {
     for entry in entries.iter().take(SHOWN) {
         let _ = writeln!(out, "    {entry}");
@@ -274,6 +298,7 @@ fn walk(dir: &Path, each: &mut dyn FnMut(&Path)) {
     }
 }
 
+/// Now, as a date and time in UTC, without a crate for it.
 fn now() -> String {
     let secs = super::itunesdb::writer::now_unix();
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
@@ -332,6 +357,9 @@ mod tests {
         }
     }
 
+    /// An old database — artists coming back further down, a name in two
+    /// spellings, no indices — says so; written again by kessler, it does
+    /// not.
     #[test]
     fn the_report_names_what_would_stand_twice() {
         let root = crate::library::fixtures::scratch("ipod-report");
@@ -379,6 +407,7 @@ mod tests {
         assert!(!said.contains("„Qluster“ (nur"), "{said}");
     }
 
+    /// A retag names its fields: the device's and the library's.
     #[test]
     fn a_retag_says_which_field() {
         let device = track(1, "Qluster", "Echtzeit");

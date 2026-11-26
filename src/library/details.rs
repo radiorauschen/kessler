@@ -1,10 +1,27 @@
+//! Everything the program can say about one file, as lines to read.
+//!
+//! Two kinds of thing are gathered here and the difference matters. What the
+//! library knows — how often it has been played, when it arrived — comes out
+//! of the database and is already in hand. What the *file* says comes off the
+//! disk, and is read fresh each time the panel is opened: a tag edited by
+//! something else since the last scan would otherwise be reported wrong, and a
+//! panel whose whole purpose is to say what is actually in the file must not
+//! be the last place in the program to find out.
+//!
+//! Nothing here touches the network. What is on the disk is always there, and
+//! a panel that needs a connection to say how big a file is would be a worse
+//! panel than one that never asks.
+
 use std::path::Path;
 
 use crate::db::models::Track;
 
+/// One line of the panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
+    /// A heading over the lines that follow it.
     Section(String),
+    /// A name and what it says.
     Field { label: String, value: String },
 }
 
@@ -17,6 +34,7 @@ impl Line {
     }
 }
 
+/// Read everything there is to say about one track.
 pub fn read(track: &Track) -> Vec<Line> {
     let mut lines = Vec::new();
 
@@ -87,6 +105,14 @@ pub fn read(track: &Track) -> Vec<Line> {
     lines
 }
 
+/// Every tag in the file, in the order the file carries them.
+///
+/// Whatever is there, not a fixed list: the point of this panel is to show
+/// what the file actually says, including the fields nothing else in the
+/// program reads — a composer, a comment, a replaygain figure somebody's
+/// other player wrote. Unknown keys keep their own spelling rather than being
+/// dropped, because a key this program has never heard of is exactly the kind
+/// of thing somebody opens this panel to find.
 fn tags_of(path: &Path) -> Vec<(String, String)> {
     use lofty::file::TaggedFileExt;
     use lofty::tag::ItemValue;
@@ -115,6 +141,12 @@ fn tags_of(path: &Path) -> Vec<(String, String)> {
     out
 }
 
+/// What to call a tag in the panel.
+///
+/// German for the ones the program itself uses, so the panel reads like the
+/// rest of the window; the key's own name for everything else, because
+/// inventing a translation for a field nobody here understands would only
+/// hide which field it is.
 fn label_for(key: &lofty::prelude::ItemKey) -> String {
     use lofty::prelude::ItemKey;
     let known = match key {
@@ -177,6 +209,8 @@ mod tests {
         })
     }
 
+    /// The panel says where the file is, which is the one thing about a track
+    /// nothing else in the window ever shows.
     #[test]
     fn it_says_where_the_file_is() {
         let lines = read(&a_track());
@@ -187,6 +221,8 @@ mod tests {
         );
     }
 
+    /// A file that is not there any more says so rather than quietly reporting
+    /// the size it had at the last scan.
     #[test]
     fn a_missing_file_is_not_covered_up() {
         let lines = read(&a_track());
@@ -219,6 +255,8 @@ mod tests {
         assert_eq!(value(&read(&track), "gespielt").as_deref(), Some("9 mal"));
     }
 
+    /// Every section has something under it, or it has no business being a
+    /// section: a heading with nothing after it reads as a thing that failed.
     #[test]
     fn no_section_stands_empty() {
         let lines = read(&a_track());
@@ -232,6 +270,8 @@ mod tests {
         }
     }
 
+    /// The tags come off the disk, not out of the row — which is the whole
+    /// point: something else may have written the file since the last scan.
     #[test]
     fn the_tags_come_out_of_the_file() {
         use crate::library::fixtures;

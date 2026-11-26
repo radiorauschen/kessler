@@ -1,3 +1,12 @@
+//! The radio.
+//!
+//! Asleep until it is switched on: nothing here is read, held or fetched
+//! before the window opens the radio, and what it held is let go of when the
+//! window goes back to the library. The stations kept are a small file of
+//! their own beside the settings; a search asks the Radio Browser directory
+//! (radio-browser.info — free, no key) through curl, as everything else in
+//! kessler reaches the network.
+
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -9,12 +18,18 @@ pub mod platform;
 pub mod programme;
 pub mod spins;
 
+/// A station: what it is called, and where its stream is.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Station {
     pub name: String,
     pub url: String,
+    /// Its picture, as the directory names it — shown where the cover of what
+    /// plays goes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub favicon: String,
+    /// What the directory says about it, for „informationen" while the station
+    /// does not say whom it plays: where it is, in which language, what it
+    /// plays, and its own page.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub country: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -23,16 +38,28 @@ pub struct Station {
     pub tags: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub homepage: String,
+    /// Where it is, as the directory's two letters — short enough to stand
+    /// beside its name in a list of what a search found.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub countrycode: String,
+    /// How many kbit/s its stream says it carries, as the directory has it;
+    /// empty where it says nothing.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub bitrate: String,
+    /// How its stream is coded — „mp3", „aac", „ogg" — as the directory has
+    /// it: at one bitrate an AAC stream sounds a good deal better than an
+    /// MP3 one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub codec: String,
+    /// How many of the directory's users voted for it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub votes: u32,
+    /// The directory's own last look at it found nothing on the air: it is
+    /// set apart in a search, and found last.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub silent: bool,
+    /// The directory says it sends HLS, pieces rather than one stream — said in
+    /// the station's facts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hls: bool,
 }
@@ -41,6 +68,8 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// What stands beside a found station's name, each empty where the
+/// directory says nothing — see [`Station::found_facts`].
 pub struct FoundFacts<'a> {
     pub genre: &'a str,
     pub land: &'a str,
@@ -49,6 +78,7 @@ pub struct FoundFacts<'a> {
 }
 
 impl Station {
+    /// Its first genre, its land as two letters, its codec and its bitrate.
     pub fn found_facts(&self) -> FoundFacts<'_> {
         FoundFacts {
             genre: self.tags.split(',').map(str::trim).find(|t| !t.is_empty()).unwrap_or(""),
@@ -58,15 +88,22 @@ impl Station {
         }
     }
 
+    /// A station known only by the address of its stream, or of a `.pls` or
+    /// `.m3u` naming it — one the directory does not have, or has wrong. It
+    /// is called after its server until its stream says its own name.
     pub fn by_address(url: &str) -> Station {
         Station { name: address_name(url), url: url.trim().to_string(), ..Station::default() }
     }
 
+    /// Whether it is still called after its address, as [`Station::by_address`]
+    /// named it.
     pub fn named_by_address(&self) -> bool {
         self.name == address_name(&self.url)
     }
 }
 
+/// Whether what was typed in the search field is the address of a stream
+/// rather than words to look for.
 pub fn is_address(typed: &str) -> bool {
     let typed = typed.trim();
     (typed.starts_with("http://") || typed.starts_with("https://"))
@@ -74,6 +111,8 @@ pub fn is_address(typed: &str) -> bool {
         && typed.len() > "https://".len()
 }
 
+/// A station's server, as its name until it says one itself:
+/// `https://stream.example.org:8000/live.mp3` is „stream.example.org".
 fn address_name(url: &str) -> String {
     let rest = url.trim().split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
@@ -82,6 +121,8 @@ fn address_name(url: &str) -> String {
     host.strip_prefix("www.").unwrap_or(host).to_lowercase()
 }
 
+/// The stations as an `.m3u` playlist, each with its name, which any player
+/// reads and kessler reads back with [`read_playlist`].
 pub fn playlist(stations: &[Station]) -> String {
     let mut out = String::from("#EXTM3U\n");
     for station in stations {
@@ -91,6 +132,8 @@ pub fn playlist(stations: &[Station]) -> String {
     out
 }
 
+/// The stations an `.m3u` or a `.pls` names, each under the name it gives
+/// (`#EXTINF`, `TitleN=`), else after its address. Each once.
 pub fn read_playlist(text: &str) -> Vec<Station> {
     let text = text.trim_start_matches('\u{feff}');
     let mut stations: Vec<Station> = Vec::new();
@@ -141,6 +184,8 @@ pub fn read_playlist(text: &str) -> Vec<Station> {
     stations
 }
 
+/// Keep `stations` beside those kept, whether the radio is open or not;
+/// those kept already stay as they are. How many were new.
 pub fn add_kept(stations: Vec<Station>) -> usize {
     let read = std::fs::read_to_string(path()).ok().and_then(|text| toml::from_str::<Kept>(&text).ok());
     let mut kept = read.unwrap_or_default();
@@ -160,6 +205,8 @@ pub fn add_kept(stations: Vec<Station>) -> usize {
     added
 }
 
+/// The station kept at `url` under its address takes `name`, the one its
+/// stream says, in `radio.toml`. Whether it did.
 pub fn name_kept(url: &str, name: &str) -> bool {
     let read = std::fs::read_to_string(path()).ok().and_then(|text| toml::from_str::<Kept>(&text).ok());
     let mut kept = read.unwrap_or_default();
@@ -173,11 +220,14 @@ pub fn name_kept(url: &str, name: &str) -> bool {
     true
 }
 
+/// The stations kept, as they stand in `radio.toml`, whether the radio is
+/// open or not.
 pub fn kept_stations() -> Vec<Station> {
     let read = std::fs::read_to_string(path()).ok().and_then(|text| toml::from_str::<Kept>(&text).ok());
     read.unwrap_or_default().station
 }
 
+/// A song kept from the radio: who, what, on which station and when.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Song {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -189,18 +239,25 @@ pub struct Song {
     pub at: String,
 }
 
+/// A line a station sent about what it plays, heard at `at`. Mostly „artist -
+/// title"; a station that names its shows instead has no artist in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Aired {
     pub said: String,
     pub artist: Option<String>,
     pub title: String,
     pub at: chrono::DateTime<chrono::Local>,
+    /// Whether it was heard from its beginning — the first line after tuning
+    /// in is a song already under way — and whether it went to last.fm.
     pub from_start: bool,
     pub scrobbled: bool,
+    /// How long it stood paused: not heard, so not counted towards last.fm.
     pub paused_secs: i64,
 }
 
 impl Aired {
+    /// How long it has been heard by `now`: the time since it came, less the
+    /// pauses — those over and the one going on since `paused_since`, if any.
     pub fn heard_secs(&self, now: chrono::DateTime<chrono::Local>, paused_since: Option<chrono::DateTime<chrono::Local>>) -> i64 {
         let pausing = paused_since.map_or(0, |since| (now - since).num_seconds().max(0));
         ((now - self.at).num_seconds() - self.paused_secs - pausing).max(0)
@@ -218,8 +275,13 @@ impl Aired {
     }
 }
 
+/// How many lines a station's are kept: what was heard this evening, not
+/// a history.
 pub const AIRED_KEPT: usize = 40;
 
+/// The stations kept, in the order they were kept, and which of the
+/// stations offered from the start have been offered already — one let go
+/// of stays gone.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Kept {
     #[serde(default)]
@@ -228,30 +290,56 @@ struct Kept {
     offered: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     song: Vec<Song>,
+    /// Whether the example stations were asked for (menu → radio): the list
+    /// starts empty, and they come only then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     examples: bool,
 }
 
+/// What the directory will say, once it has.
 type Answer = mpsc::Receiver<Result<Vec<Station>, String>>;
 
+/// What the radio holds while it is open.
 #[derive(Debug)]
 pub struct Radio {
+    /// The stations kept — the column's list when nothing is searched for.
     pub kept: Vec<Station>,
+    /// The stations offered from the start that are in the list already, or
+    /// were and were let go of.
     offered: Vec<String>,
+    /// Whether the example stations are wanted — see `Kept::examples`.
     examples: bool,
+    /// The songs kept, the newest first.
     pub songs: Vec<Song>,
+    /// What the search field asked for last, and what came back.
     pub found: Vec<Station>,
+    /// The keyboard's row among the stations shown.
     pub cursor: usize,
+    /// The keyboard's row unmarked, as the library's is once one clicks
+    /// somewhere else: a click outside the stations' column lets go of
+    /// it, the arrows and a click on a station take it up again.
     pub resting: bool,
+    /// The query that is out, and since when it has stood still, so a
+    /// search goes out once the typing stops rather than at every letter.
     pub asked: String,
     pub waiting: Option<Answer>,
+    /// Stations offered from the start whose streams' addresses are the
+    /// directory's to know, not ours, being looked up.
     looking_up: Vec<(&'static str, Answer)>,
+    /// What Wikipedia says about stations, by their page, as read from
+    /// `radio-about/` or asked for; `None` while being asked.
     about: Vec<(String, Option<About>)>,
     asking_about: Vec<(String, mpsc::Receiver<Option<About>>)>,
+    /// The pictures being fetched from stations' own pages, by station, for the
+    /// log.
     pub site_pictures: Vec<(String, mpsc::Receiver<Result<(), String>>)>,
+    /// „ähnliche sender", asked for by a right click: listed in place of those
+    /// kept until put away.
     pub similar: Option<Similar>,
 }
 
+/// Stations like one, as the directory knows them: the station, and those
+/// found once they have come.
 #[derive(Debug)]
 pub struct Similar {
     pub to: String,
@@ -265,6 +353,10 @@ impl Similar {
     }
 }
 
+/// What Wikipedia says about a station, in each language the window speaks that
+/// has an article, kept beside the settings under
+/// `radio-about/` so it is asked once. Found nothing is kept too, with the
+/// day it was asked, and asked again after `ABOUT_AGAIN_DAYS`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct About {
     #[serde(default)]
@@ -281,6 +373,8 @@ pub struct AboutText {
 }
 
 impl About {
+    /// The text in `lang`, else in English, else in whichever there is —
+    /// with the language it is in.
     pub fn in_lang(&self, lang: &str) -> Option<&AboutText> {
         self.told
             .iter()
@@ -290,6 +384,7 @@ impl About {
     }
 }
 
+/// How long „nothing found" holds before Wikipedia is asked again.
 const ABOUT_AGAIN_DAYS: i64 = 30;
 
 fn about_path(site: &str) -> PathBuf {
@@ -297,10 +392,16 @@ fn about_path(site: &str) -> PathBuf {
     crate::config::Config::config_dir().join("radio-about").join(format!("{name}.toml"))
 }
 
+/// Where the picture of a station's Wikipedia article is kept.
 fn about_picture_path(site: &str) -> PathBuf {
     about_path(site).with_extension("picture")
 }
 
+/// The picture to show for `station`: its own from the directory when it is one
+/// that can be shown and not a speck, else the icon its own page names, else
+/// its Wikipedia article's, else a speck after all. NTS has none in the
+/// directory, and Wikipedia keeps most stations' logos to itself; an `.svg`, or
+/// a page where a picture should be, cannot be shown.
 pub fn picture_path(station: &Station) -> Option<PathBuf> {
     if let Some(own) = own_picture(&station.url) {
         return Some(own);
@@ -315,16 +416,21 @@ pub fn picture_path(station: &Station) -> Option<PathBuf> {
         .or(logo)
 }
 
+/// Where the picture chosen by hand for the station at `url` is kept.
 fn own_picture_path(url: &str) -> PathBuf {
     let name = crate::lastfm::sign::md5_hex(url.as_bytes());
     crate::config::Config::config_dir().join("radio-logos").join(format!("own-{name}"))
 }
 
+/// The picture chosen by hand for the station at `url`, if there is one.
 pub fn own_picture(url: &str) -> Option<PathBuf> {
     let path = own_picture_path(url);
     shown_size(&path).map(|_| path)
 }
 
+/// Take the picture at `from` for the station at `url`: copied beside the
+/// settings, so it stays when the file it came from moves. A file that is
+/// not a picture kessler can show is refused, and said why.
 pub fn choose_picture(url: &str, from: &std::path::Path) -> Result<(), String> {
     let bytes = std::fs::read(from).map_err(|e| e.to_string())?;
     image::load_from_memory(&bytes).map_err(|_| "kein bild, das kessler zeigen kann".to_string())?;
@@ -335,34 +441,53 @@ pub fn choose_picture(url: &str, from: &std::path::Path) -> Result<(), String> {
     std::fs::write(&path, bytes).map_err(|e| e.to_string())
 }
 
+/// Let go of the picture chosen for the station at `url`: its own, or the
+/// directory's, is shown again.
 pub fn forget_picture(url: &str) {
     let _ = std::fs::remove_file(own_picture_path(url));
 }
 
+/// The smaller side of the picture at `path`, if it is one that can be
+/// shown.
 fn shown_size(path: &std::path::Path) -> Option<u32> {
     let (w, h) = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_dimensions().ok()?;
     Some(w.min(h))
 }
 
+/// How large a picture must be to stand for a station without help: at 56
+/// points a favicon of 16 pixels is a blur.
 const LARGE_ENOUGH: u32 = 48;
 
+/// Where the icon a station's page names is kept, or an empty file when the
+/// page named none.
 fn site_picture_path(site: &str) -> PathBuf {
     let name = crate::lastfm::sign::md5_hex(site.as_bytes());
     crate::config::Config::config_dir().join("radio-logos").join(format!("site-{name}"))
 }
 
+/// Where the picture on `site` that bears the station's name is kept, or an
+/// empty file when there was none — see [`pictures_named_for`].
 fn named_picture_path(site: &str, name: &str) -> PathBuf {
     let key = format!("{site}\n{}", crate::db::sort_key(name));
     let name = crate::lastfm::sign::md5_hex(key.as_bytes());
     crate::config::Config::config_dir().join("radio-logos").join(format!("named-{name}"))
 }
 
+/// The name a station's picture would be filed under: its letters and
+/// figures, small, without what stands in brackets after it — „Jazz Sakura
+/// (asia dream radio)" is `jazzsakura`. None for one too short to tell a
+/// file by.
 fn filed_as(name: &str) -> Option<String> {
     let name = name.split(['(', '[']).next().unwrap_or(name);
     let squashed: String = name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     (squashed.chars().count() >= 4).then_some(squashed)
 }
 
+/// The pictures on a page whose file bears the station's name: a site of
+/// several stations — one network's page of all its channels — names no
+/// icon for each, but files each one's logo under its name
+/// (`JazzSakuraLogo2019.jpeg`). Addresses as the page would load them, the
+/// first found first.
 fn pictures_named_for(page: &str, site: &str, name: &str) -> Vec<String> {
     let Some(filed) = filed_as(name) else { return Vec::new() };
     let mut found: Vec<String> = Vec::new();
@@ -388,6 +513,8 @@ fn pictures_named_for(page: &str, site: &str, name: &str) -> Vec<String> {
     found
 }
 
+/// `address` as a page at `page` would load it: whole already, from the
+/// site's root, or beside the page.
 fn resolved(page: &str, address: &str) -> String {
     if address.starts_with("http://") || address.starts_with("https://") {
         return address.to_string();
@@ -408,6 +535,13 @@ fn resolved(page: &str, address: &str) -> String {
     format!("{scheme}://{folder}/{address}")
 }
 
+/// Fetch the picture filed under the station's name on `site` (see
+/// [`pictures_named_for`]) and the icon `site` names for itself, on a
+/// thread of its own, once each:
+/// the one for phones' home screens first (square, and large), then the one
+/// it shows when shared, then its favicons. The first that can be shown
+/// and is large enough is kept. Whether one was found, or why not, comes
+/// back for the log.
 pub fn fetch_site_picture(site: &str, name: &str) -> Option<mpsc::Receiver<Result<(), String>>> {
     let path = site_picture_path(site);
     let named = named_picture_path(site, name);
@@ -457,6 +591,8 @@ fn keep(path: &std::path::Path, bytes: &[u8]) {
     let _ = std::fs::write(path, bytes);
 }
 
+/// The pictures a page names for itself, the most fitting first, as
+/// addresses; and the places such pictures are kept by custom.
 fn icons_named(page: &str, site: &str) -> Vec<String> {
     let origin = {
         let rest = site.split_once("://").map_or(site, |(_, r)| r);
@@ -519,6 +655,7 @@ fn icons_named(page: &str, site: &str) -> Vec<String> {
     urls
 }
 
+/// The value of attribute `name` in `tag`, quoted or not.
 fn attribute(tag: &str, lower: &str, name: &str) -> Option<String> {
     let mut from = 0;
     while let Some(found) = lower[from..].find(name) {
@@ -540,6 +677,7 @@ fn attribute(tag: &str, lower: &str, name: &str) -> Option<String> {
     None
 }
 
+/// What was kept about `site`, unless it is an old „nothing".
 fn read_about(site: &str) -> Option<About> {
     let text = std::fs::read_to_string(about_path(site)).ok()?;
     let about: About = toml::from_str(&text).ok()?;
@@ -552,6 +690,8 @@ fn read_about(site: &str) -> Option<About> {
     Some(about)
 }
 
+/// Ask Wikipedia about `site` on a thread of its own, and keep the answer.
+/// Not reached is `None` and kept nowhere: asked again next time.
 fn ask_about(site: &str) -> mpsc::Receiver<Option<About>> {
     let (tell, answer) = mpsc::channel();
     let site = site.to_string();
@@ -585,6 +725,9 @@ fn ask_about(site: &str) -> mpsc::Receiver<Option<About>> {
     answer
 }
 
+/// In the list from the start, as a demonstration, and let go of like any
+/// other. NTS's two channels at the addresses NTS hands to players, with where
+/// they are and their page.
 const DEMO: [(&str, &str); 2] = [
     ("nts 1", "https://stream-relay-geo.ntslive.net/stream?client=direct"),
     ("nts 2", "https://stream-relay-geo.ntslive.net/stream2?client=direct"),
@@ -602,12 +745,17 @@ fn demo_station(name: &str, url: &str) -> Station {
     }
 }
 
+/// Also there from the start, but looked up in the directory: the name they are
+/// kept under, and what to ask for. One not found is asked for again at the
+/// next opening. Cashmere Radio. Kept where somebody has it already.
 const DEMO_LOOKED_UP: [(&str, &str); 3] = [
     ("montez press radio", "montez press radio"),
     ("kzsu stanford", "kzsu"),
     ("cashmere radio", "cashmere radio"),
 ];
 
+/// Where a station's picture is kept, once fetched: beside the settings,
+/// named after where it came from.
 pub fn logo_path(station: &Station) -> Option<PathBuf> {
     if station.favicon.is_empty() {
         return None;
@@ -616,6 +764,8 @@ pub fn logo_path(station: &Station) -> Option<PathBuf> {
     Some(crate::config::Config::config_dir().join("radio-logos").join(name))
 }
 
+/// Fetch a station's picture if it has one and it is not kept yet, on a
+/// thread of its own; the window shows it once it is there.
 pub fn fetch_logo(station: &Station) {
     let Some(path) = logo_path(station) else { return };
     if path.exists() {
@@ -646,6 +796,9 @@ pub fn fetch_logo(station: &Station) {
         .ok();
 }
 
+/// Put the example stations in the list at the next opening: those let go
+/// of come back, those still kept stay once. Until asked for, the list
+/// starts empty — none of them is there unless somebody wants it.
 pub fn offer_again() {
     let read = std::fs::read_to_string(path()).ok().and_then(|text| toml::from_str::<Kept>(&text).ok());
     let mut kept = read.unwrap_or_default();
@@ -657,11 +810,14 @@ pub fn offer_again() {
     }
 }
 
+/// Where the stations kept are written.
 fn path() -> PathBuf {
     crate::config::Config::config_dir().join("radio.toml")
 }
 
 impl Radio {
+    /// Open the radio: the stations kept, and those offered from the start
+    /// that have not been offered yet.
     pub fn open() -> Self {
         let read = std::fs::read_to_string(path()).ok().and_then(|text| toml::from_str::<Kept>(&text).ok());
         let Kept { station: kept, offered, song: songs, examples } = read.unwrap_or_default();
@@ -690,6 +846,8 @@ impl Radio {
         radio
     }
 
+    /// Ask the directory for the demonstration's stations it has not found
+    /// yet, unless they are being asked for already.
     fn look_up_missing(&mut self) {
         for (name, query) in DEMO_LOOKED_UP {
             if !self.was_offered(name) && !self.looking_up.iter().any(|(asked, _)| *asked == name) {
@@ -702,6 +860,7 @@ impl Radio {
         self.offered.iter().any(|o| o == name)
     }
 
+    /// Put a station offered from the start into the list, once ever.
     fn offer(&mut self, station: Station) {
         self.offered.push(station.name.clone());
         if !self.keeps(&station) {
@@ -709,10 +868,12 @@ impl Radio {
         }
     }
 
+    /// Whether `station` is among those kept.
     pub fn keeps(&self, station: &Station) -> bool {
         self.kept.iter().any(|kept| kept.url == station.url)
     }
 
+    /// Keep `station`, or let go of it if it is kept already.
     pub fn toggle_kept(&mut self, station: &Station) {
         if self.keeps(station) {
             self.kept.retain(|kept| kept.url != station.url);
@@ -722,6 +883,8 @@ impl Radio {
         self.save();
     }
 
+    /// Move the station kept at `from` to stand before the one at `to` (`to`
+    /// may be one past the last), as dragged. The keyboard's row goes with it.
     pub fn move_kept(&mut self, from: usize, to: usize) {
         if let Some(at) = moved(&mut self.kept, from, to) {
             self.cursor = at;
@@ -729,6 +892,10 @@ impl Radio {
         }
     }
 
+    /// The station kept at `url` under a name of one's own, in the lists and
+    /// in `radio.toml`. Not its address, so its stream's own name never
+    /// takes its place again (see [`Station::named_by_address`]). Whether it
+    /// was kept.
     pub fn rename(&mut self, url: &str, name: &str) -> bool {
         let mut renamed = false;
         for station in self.kept.iter_mut().filter(|s| s.url == url) {
@@ -744,6 +911,8 @@ impl Radio {
         renamed
     }
 
+    /// The station at `url`, known by its address, under the name its stream
+    /// says — in the lists shown; `radio.toml` is [`name_kept`]'s.
     pub fn named(&mut self, url: &str, name: &str) {
         for station in self.kept.iter_mut().chain(self.found.iter_mut()) {
             if station.url == url && station.named_by_address() {
@@ -760,11 +929,14 @@ impl Radio {
         }
     }
 
+    /// Whether a song like `aired` is kept.
     pub fn keeps_song(&self, aired: &Aired) -> bool {
         let artist = aired.artist.as_deref().unwrap_or("");
         self.songs.iter().any(|s| s.artist == artist && s.title == aired.title)
     }
 
+    /// Keep what `station` played, or let go of it if it is kept already.
+    /// Whether it is kept now.
     pub fn toggle_song(&mut self, aired: &Aired, station: &str) -> bool {
         let artist = aired.artist.clone().unwrap_or_default();
         let kept = if self.keeps_song(aired) {
@@ -779,11 +951,13 @@ impl Radio {
         kept
     }
 
+    /// Let go of a kept song.
     pub fn forget_song(&mut self, song: &Song) {
         self.songs.retain(|s| s != song);
         self.save();
     }
 
+    /// Ask the directory for `query`, unless it is what was asked last.
     pub fn ask(&mut self, query: &str) {
         let query = query.trim();
         if query == self.asked {
@@ -803,6 +977,8 @@ impl Radio {
         self.waiting = Some(search(query, Reading::Words));
     }
 
+    /// Take in what has come back. An error is handed on, for the status
+    /// line; whether anything changed comes back too, for a repaint.
     pub fn take_answers(&mut self) -> Result<bool, String> {
         let mut changed = false;
         let mut told = Vec::new();
@@ -854,6 +1030,10 @@ impl Radio {
         Ok(changed)
     }
 
+    /// What Wikipedia says about the station whose page is `site`: kept, or
+    /// asked for now (once while the radio is open; a station not reached
+    /// is asked again at the next opening). `None` while it is being asked
+    /// or when nothing was found.
     pub fn about(&mut self, site: &str) -> Option<&About> {
         if site.is_empty() {
             return None;
@@ -868,14 +1048,18 @@ impl Radio {
         self.about.iter().find(|(s, _)| s == site).and_then(|(_, a)| a.as_ref()).filter(|a| !a.told.is_empty())
     }
 
+    /// Whether Wikipedia is still being asked about `site`.
     pub fn asking_about(&self, site: &str) -> bool {
         self.asking_about.iter().any(|(s, _)| s == site)
     }
 
+    /// Whether an answer is still out.
     pub fn busy(&self) -> bool {
         self.waiting.is_some() || !self.looking_up.is_empty() || self.similar.as_ref().is_some_and(Similar::waiting)
     }
 
+    /// „ähnliche sender": the directory asked for stations like `station`,
+    /// listed in place of those kept once they come.
     pub fn find_similar(&mut self, station: &Station) {
         let (tell, answer) = mpsc::channel();
         let station_asked = station.clone();
@@ -891,6 +1075,8 @@ impl Radio {
 
 }
 
+/// Move what stands at `from` in `list` to before `to` (one past the last
+/// for the end); where it stands now, or `None` if it stays where it was.
 fn moved<T>(list: &mut Vec<T>, from: usize, to: usize) -> Option<usize> {
     if from >= list.len() || to > list.len() || to == from || to == from + 1 {
         return None;
@@ -901,12 +1087,15 @@ fn moved<T>(list: &mut Vec<T>, from: usize, to: usize) -> Option<usize> {
     Some(to)
 }
 
+/// How a search is read: as a station's name only — the demonstration's, looked
+/// up by name — or as words, a land among them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reading {
     Name,
     Words,
 }
 
+/// Ask the Radio Browser directory for `query`, on a thread of its own.
 fn search(query: &str, reading: Reading) -> Answer {
     let (tell, answer) = mpsc::channel();
     let query = query.to_string();
@@ -919,8 +1108,16 @@ fn search(query: &str, reading: Reading) -> Answer {
     answer
 }
 
+/// How many stations „ähnliche sender" shows.
 const SIMILAR_SHOWN: usize = 8;
 
+/// Stations like `station`. Nobody keeps who listens to which station alongside
+/// which — the directory counts votes and plays per station, last.fm knows no
+/// stations — so „like" is what the directory's users said of them: those with
+/// its genres, asked for genre by genre (its first three), ranked by how many
+/// of its genres they share, then by whether they speak its language and stand
+/// in its land, then by how liked they are. Without genres, its language and
+/// land stand in for them.
 fn ask_similar(station: &Station) -> Result<Vec<Station>, String> {
     let tags: Vec<String> = station.tags.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).take(3).collect();
     let mut asks: Vec<Vec<(&str, String)>> = tags.iter().map(|tag| vec![("tag", tag.clone()), ("tagExact", "true".to_string())]).collect();
@@ -957,6 +1154,8 @@ fn ask_similar(station: &Station) -> Result<Vec<Station>, String> {
     }
 }
 
+/// The stations found, the most like `station` first, itself and its
+/// copies left out.
 fn similar_ranked(station: &Station, entries: Vec<(Station, Standing)>) -> Vec<Station> {
     let tags_of = |s: &Station| s.tags.split(',').map(folded).filter(|t| !t.is_empty()).collect::<Vec<_>>();
     let own = tags_of(station);
@@ -989,6 +1188,7 @@ fn similar_ranked(station: &Station, entries: Vec<(Station, Standing)>) -> Vec<S
     stations
 }
 
+/// Where the directory is asked; `KESSLER_RADIO_BROWSER` for a stand-in.
 fn directory() -> String {
     std::env::var("KESSLER_RADIO_BROWSER")
         .ok()
@@ -996,9 +1196,17 @@ fn directory() -> String {
         .unwrap_or_else(|| "https://all.api.radio-browser.info".to_string())
 }
 
+/// How many the directory is asked for: more than are shown, so that the
+/// ranking below has something to choose from.
 const ASKED_FOR: usize = 100;
+/// How many of them the column shows.
 const FOUND_SHOWN: usize = 40;
 
+/// Ask the directory for `query`, best first. Read as words, a land named among
+/// them — „japan", „japanisch", „日本" — narrows the search to the stations
+/// there, and the rest is looked for both in the names and in the genres the
+/// directory's users gave them, so „jazz japan" finds Japan's jazz stations
+/// whatever they are called.
 fn ask_directory(query: &str, reading: Reading) -> Result<Vec<Station>, String> {
     let (rest, land) = match reading {
         Reading::Name => (query.trim().to_string(), None),
@@ -1034,6 +1242,7 @@ fn ask_directory(query: &str, reading: Reading) -> Result<Vec<Station>, String> 
     }
 }
 
+/// One question to the directory, its answer as it came.
 fn ask_by(asked: &[(&str, String)]) -> Result<String, String> {
     let mut command = crate::net::curl();
     command
@@ -1055,6 +1264,11 @@ fn ask_by(asked: &[(&str, String)]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// What was typed, read: the words without the land, and the land's code (ISO
+/// 3166, as the directory keeps it) if one was named. Two words are tried
+/// before one, so „south korea" is not „korea"; a German adjective's ending
+/// does not matter; a Japanese name may stand inside a word, as Japanese writes
+/// without spaces.
 fn understood(query: &str) -> (String, Option<&'static str>) {
     let mut words: Vec<String> = folded(query).split(' ').filter(|w| !w.is_empty()).map(str::to_string).collect();
     let is = |said: &str| {
@@ -1085,6 +1299,9 @@ fn understood(query: &str) -> (String, Option<&'static str>) {
     (words.join(" "), None)
 }
 
+/// The lands a search knows by name, in the window's three languages, with what
+/// they are called as an adjective — folded as `folded` folds. Not the short
+/// codes, nor words that are also ordinary ones.
 const LANDS: &[(&str, &[&str])] = &[
     ("JP", &["japan", "japanisch", "japanese", "nippon", "日本", "にほん"]),
     ("DE", &["germany", "deutschland", "deutsch", "german", "ドイツ"]),
@@ -1138,6 +1355,17 @@ const LANDS: &[(&str, &[&str])] = &[
     ("LB", &["lebanon", "libanon", "レバノン"]),
 ];
 
+/// What the directory found, best first: how well the name answers what was
+/// typed — all of it, its start, the start of one of its words, somewhere in it
+/// — and how much the station is liked, by the directory's figures: its votes,
+/// and how often it was played lately (`clickcount`, the last day;
+/// `clicktrend`, how that is changing). On a log scale, so that a name that is
+/// exactly what was typed still beats a popular one that only has it inside,
+/// but a station with thousands of votes beats a nameless copy with none.
+/// Letters found only inside a word come after all the rest, however liked. A
+/// genre given to the station counts as a word of its name, a little below one.
+/// One name the directory lists several times over is shown once, its best
+/// entry.
 fn ranked(query: &str, entries: Vec<(Station, Standing)>) -> Vec<Station> {
     let asked = folded(query);
     let mut found: Vec<(Rank, Station)> = entries
@@ -1161,11 +1389,15 @@ fn ranked(query: &str, entries: Vec<(Station, Standing)>) -> Vec<Station> {
     stations
 }
 
+/// A name as searched for: small, letters and figures, one space between
+/// words.
 fn folded(name: &str) -> String {
     let spaced: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
     spaced.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
+/// Where a station found stands: whether its name has what was typed as a
+/// word or the start of one, then its score. Best is greatest.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Rank {
     named: bool,
@@ -1178,6 +1410,7 @@ impl Rank {
     }
 }
 
+/// The directory's figures for one station.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct Standing {
     votes: f64,
@@ -1206,6 +1439,8 @@ impl Standing {
     }
 }
 
+/// The stations in a directory answer, those the player can read, with
+/// their figures, in its order.
 fn entries_in(answer: &str) -> Vec<(Station, Standing)> {
     let Some(json) = crate::json::Json::parse(answer) else { return Vec::new() };
     let mut stations: Vec<(Station, Standing)> = Vec::new();
@@ -1246,6 +1481,7 @@ fn entries_in(answer: &str) -> Vec<(Station, Standing)> {
 #[cfg(test)]
 mod tests {
 
+    /// A pause is not heard: the time it stood, over or going on, comes off.
     #[test]
     fn a_pause_is_not_heard() {
         let mut song = Aired::new("thou - blew");

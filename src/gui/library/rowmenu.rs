@@ -1,5 +1,12 @@
+//! The menu a right click opens, and what lands when something is dropped.
+
 use super::*;
 
+/// What letting go would do, while files are held over the window.
+///
+/// The same veil the menu uses, and one line of type in the middle of it. A
+/// window that accepts a drop and says nothing about it is a window you have
+/// to try things on to find out.
 pub(super) fn dropping(app: &mut GuiApp, ui: &Ui, window: Rect) {
     if app.hovering == 0 {
         return;
@@ -55,6 +62,7 @@ pub(super) fn dropping(app: &mut GuiApp, ui: &Ui, window: Rect) {
         });
 }
 
+/// Ask the file manager to show a file, and say so if it cannot be.
 pub(super) fn show_file(app: &mut GuiApp, path: Option<std::path::PathBuf>) -> crate::error::Result<()> {
     if let Some(path) = path {
         if let Err(why) = crate::gui::reveal::show(&path) {
@@ -64,6 +72,10 @@ pub(super) fn show_file(app: &mut GuiApp, path: Option<std::path::PathBuf>) -> c
     Ok(())
 }
 
+/// The little menu a right-click on a track row opens.
+///
+/// It exists because the alternative is a row of buttons nobody needs to see
+/// while they are listening. Two entries, both of which are also a key.
 pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
     let Some(menu) = app.row_menu.as_ref() else {
         return;
@@ -556,6 +568,9 @@ pub(super) fn row_menu(app: &mut GuiApp, ui: &Ui, window: Rect) {
     }
 }
 
+/// Five stars in a row, the menu's last: as many lit as the rating, or as
+/// far as the pointer is while it is over them. A click on a star rates to
+/// it; on the star the rating already ends at, takes the rating away.
 fn star_row(ui: &mut Ui, row: f32, rating: u8, palette: &Palette) -> Option<u8> {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row), Sense::hover());
     let probe = text::line(ui, "★", Role::Content, palette.ink);

@@ -1,9 +1,16 @@
+//! The running window, worked from the command line — `kessler next`,
+//! `kessler toggle`, `kessler now` — by way of the same MPRIS registration
+//! the media keys use. For the key bindings of a tiling window manager and the
+//! status bars drawn beside it: `playerctl` does the same, and this needs
+//! nothing installed.
+
 use zbus::zvariant::{OwnedValue, Value};
 
 const NAME: &str = "org.mpris.MediaPlayer2.kessler";
 const PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
 
+/// What a command is called on the command line, and what MPRIS calls it.
 pub const COMMANDS: [(&str, &str); 6] = [
     ("play", "Play"),
     ("pause", "Pause"),
@@ -18,6 +25,7 @@ fn proxy() -> Result<zbus::blocking::Proxy<'static>, String> {
     zbus::blocking::Proxy::new(&connection, NAME, PATH, PLAYER).map_err(|e| e.to_string())
 }
 
+/// Why it did not work, said plainly where it is that kessler is not running.
 fn said(error: zbus::Error) -> String {
     let text = error.to_string();
     if text.contains("ServiceUnknown") || text.contains("NameHasNoOwner") || text.contains("was not provided") {
@@ -27,6 +35,7 @@ fn said(error: zbus::Error) -> String {
     }
 }
 
+/// Send one of [`COMMANDS`] to the running window.
 pub fn send(command: &str) -> Result<(), String> {
     let (_, method) = COMMANDS
         .iter()
@@ -35,6 +44,8 @@ pub fn send(command: &str) -> Result<(), String> {
     proxy()?.call_method(*method, &()).map(|_| ()).map_err(said)
 }
 
+/// What is playing, as one line — „künstler:in — titel" — or nothing when
+/// nothing is, for a status bar to show.
 pub fn now() -> Result<Option<String>, String> {
     let proxy = proxy()?;
     let status: String = proxy.get_property("PlaybackStatus").map_err(said)?;

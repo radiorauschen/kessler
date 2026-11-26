@@ -1,3 +1,9 @@
+//! The library browser: three columns, no rules between them.
+//!
+//! Every row is drawn by hand rather than with egui's widgets, because the
+//! widgets bring exactly what this design removes — fills, strokes, rounding,
+//! hover plates. What is left is text on a ground, plus one rule.
+
 use eframe::egui::{self, Color32, Rect, Response, Sense, Ui, Vec2};
 
 use crate::db::models::{SortField, SortOrder};
@@ -59,14 +65,40 @@ pub(super) use switch::paint_underline;
 pub(super) use field_art::{field_rate, field_tick, grey_for as field_grey, on_the_second, FieldArt, FieldPicture, Reading, FIELD_RATES};
 pub(super) use picture::{live_mark, picture_step, scope_step, to_tick, EXPOSED_RATE, SECOND_RATE};
 
+/// Space between two cells of the track list. The widths themselves belong to
+/// the columns, in `columns.rs`.
 const CELL_GAP: f32 = 20.0;
 
+/// How long the volume rule is.
 const VOLUME_WIDTH: f32 = 92.0;
 
+/// The air between a column's head and the first row under it.
+///
+/// A head and a row were one row apart like any two rows, so the head read as
+/// the first entry of the list rather than as its name. Six points is not a
+/// gap you notice; it is a gap that stops you having to work out which line is
+/// the label.
 pub(super) const HEAD_AIR: f32 = 6.0;
 
+/// The air that separates one block of rows in a column from the next.
+///
+/// Half a row: enough that the lists read as their own block between the two
+/// pinned rows and the names, and not so much that the column looks broken in
+/// two. This design separates with whitespace or with nothing — there is no
+/// rule to draw here, and a heading over three rows would cost more lines than
+/// it saves.
 pub(super) const BLOCK_AIR: f32 = 8.0;
 
+/// The corner a rule's ends are cut with: half its own thickness.
+///
+/// Which is the most a two-point bar can be given — the end becomes a
+/// half-circle and no more, so the rounding is not a number somebody picked
+/// but the only one that fits. It follows the rule when it
+/// thickens under the pointer, because a bar that gets taller and keeps its
+/// old corner starts to look square again.
+///
+/// Square with a face whose ends are square — see
+/// [`super::theme::square_ends`].
 fn capped(height: f32) -> u8 {
     if super::theme::square_ends() {
         return 0;
@@ -74,8 +106,14 @@ fn capped(height: f32) -> u8 {
     (height / 2.0).round().clamp(0.0, 255.0) as u8
 }
 
+/// How much a square-ended rule's corners are broken: half a point, a pixel
+/// on a sharp screen — not rounded, only less hard.
 const RULE_CORNER_CUT: f32 = 0.5;
 
+/// A rule — the timeline, the volume, the knob on them, a list's extent
+/// mark — and what of it is filled: its ends
+/// cut as [`capped`] says, and with a square-ended face its corners broken by
+/// [`RULE_CORNER_CUT`] rather than left sharp.
 fn paint_rule(ui: &Ui, rect: Rect, colour: Color32) {
     if !super::theme::square_ends() {
         ui.painter().rect_filled(rect, capped(rect.height()), colour);
@@ -100,6 +138,11 @@ fn paint_rule(ui: &Ui, rect: Rect, colour: Color32) {
     ui.painter().add(egui::Shape::convex_polygon(points, colour, egui::Stroke::NONE));
 }
 
+/// A knob: a disc, or with a square-ended face an upright bar.
+///
+/// The bar keeps its width all the way and only its height swells, from
+/// the line's own `line` thickness to [`BAR_TALL`]: it slides out of the
+/// rule above and below, rather than growing out of a point.
 fn knob_at(ui: &Ui, at: egui::Pos2, radius: f32, line: f32, colour: Color32) {
     if super::theme::square_ends() {
         let rest = line / 2.0;
@@ -111,18 +154,53 @@ fn knob_at(ui: &Ui, at: egui::Pos2, radius: f32, line: f32, colour: Color32) {
     }
 }
 
+/// The knob that appears under the pointer on a rule, so that there is
+/// something to take hold of rather than a hair to hit.
+///
+/// One size for both rules — the volume and the timeline are the same control
+/// twice over, and a reader who has learnt one has learnt the other.
 const KNOB: f32 = 5.0;
 
-const BAR_WIDE: f32 = 4.0;
+/// The bar a square-ended face has for a knob: narrow, and a little taller
+/// than the disc it stands for.
+const BAR_WIDE: f32 = 3.5;
 
 const BAR_TALL: f32 = 12.0;
 
+/// How thick a rule is when nobody is pointing at it, and when somebody is.
 const RULE_THIN: f32 = 2.0;
 
 const RULE_THICK: f32 = 4.0;
 
+/// How long a rule takes to swell under the pointer, and to go down again.
+///
+/// Short enough to feel like an answer rather than an animation: much past a
+/// sixth of a second and the line is still arriving after the eye has moved
+/// on, much under and it may as well have jumped.
 const SWELL_TIME: f32 = 0.13;
 
+/// How long the knob takes: a little longer than its rule, so it is seen
+/// sliding out of the line after the line has begun to swell rather than in
+/// the same breath.
+const KNOB_SWELL_TIME: f32 = 0.17;
+
+/// The knob's size on a rule, on its own slightly slower clock — see
+/// [`KNOB_SWELL_TIME`].
+fn knob_swell(ui: &Ui, which: &'static str, hot: bool) -> f32 {
+    let t = ui.ctx().animate_bool_with_time_and_easing(
+        egui::Id::unique(("knob-swell", which)),
+        hot,
+        KNOB_SWELL_TIME,
+        egui::emath::easing::cubic_out,
+    );
+    rule_swell(t).1
+}
+
+/// How far a rule is out of its resting state, 0 … 1.
+///
+/// `cubic_out` because this is a reply to a pointer: it has to leave at once
+/// and may take its time settling. egui turns the curve round on the way back,
+/// so the line sinks the way it rose.
 fn swell(ui: &Ui, which: &'static str, hot: bool) -> f32 {
     ui.ctx().animate_bool_with_time_and_easing(
         egui::Id::unique(("swell", which)),
@@ -132,14 +210,31 @@ fn swell(ui: &Ui, which: &'static str, hot: bool) -> f32 {
     )
 }
 
+/// What a rule looks like that far out: how thick the line is, and how big the
+/// knob on it is.
+///
+/// The two are one movement, which is the whole trick. The knob does not
+/// appear on the line — at rest it *is* the line, a disc exactly as wide as
+/// the line is thick and therefore invisible in it, and it swells out of it as
+/// the line thickens. A snake that has swallowed an egg — that is exactly the
+/// silhouette: one body, one bulge, no second object arriving
+/// out of nowhere.
 fn rule_swell(t: f32) -> (f32, f32) {
     let thickness = RULE_THIN + (RULE_THICK - RULE_THIN) * t;
     let knob = thickness / 2.0 + (KNOB - thickness / 2.0) * t;
     (thickness, knob)
 }
 
+/// How narrow the search field may become, and how tall.
+///
+/// How *wide* it is is no longer written down: it is as wide as the controls
+/// at the other end of the masthead, so that the two ends weigh the same. See
+/// `masthead`.
 pub(in crate::gui) const MIN_FIELD: f32 = 118.0;
 
+/// How tall the search field is: 28 points, and 22 on the line „super kompakt"
+/// sets in the band beside the window's buttons. Set once a frame — see
+/// `render`.
 pub(in crate::gui) fn field_height() -> f32 {
     f32::from_bits(FIELD_HEIGHT_NOW.load(std::sync::atomic::Ordering::Relaxed))
 }
@@ -156,31 +251,71 @@ fn set_field_height(height: f32) {
 
 pub(in crate::gui) const FIELD_PAD_X: f32 = 10.0;
 
+/// How far a soft edge reaches when a line of text runs past its cell.
 const EDGE_FADE: f32 = 22.0;
 
+/// How big a transport key in the corner is drawn. Here rather than beside
+/// it, because the layout has to leave room for the keys before they are
+/// drawn.
 const KEY_SIZE: f32 = 22.0;
 
+/// What a row says when the file behind it is no longer on the disk.
+///
+/// One word, in the lower case everything else here is in, and the same word
+/// wherever it appears — the track column and the queue — so it reads as a
+/// state of the row rather than as two different messages.
 const GONE: &str = "fehlt";
 
+/// How a row is currently standing.
 #[derive(Debug, Clone, Copy, Default)]
 struct RowState {
     selected: bool,
+    /// Selected *and* this column has the keyboard.
     focused: bool,
     playing: bool,
+    /// The "all" row and other rows that are present but not the point.
     muted: bool,
+    /// The file behind this row was looked for and was not there.
     gone: bool,
+    /// Already played: a queue row behind the needle. Quieter than muted —
+    /// still there to be read, but the least thing in its column.
     spent: bool,
+    /// The figure at the end is a word that does something — „merken",
+    /// „entfernen" — set in the ink whatever the row's state, as every such
+    /// word is.
     offering: bool,
+    /// The arrow before the name though nothing of it plays: „alle",
+    /// „zuletzt" and „kompilationen" while they are the view chosen, as that
+    /// is what the columns are showing.
     arrow: bool,
+    /// Pointed at from elsewhere, and so wearing the hover plate though the
+    /// pointer is not on it: a chapter while the hand is on its stretch of the
+    /// timeline.
     pointed: bool,
+    /// Nothing to do on it: no plate under the pointer, which would offer a
+    /// click that does nothing — a show in a station's programme.
     still: bool,
 }
 
 impl RowState {
+    /// Whether the row wears its marker: only where the hand is, the chosen row
+    /// of the column with the keyboard. The plates say where the hand is — the
+    /// light one under the pointer, the darker one under the keyboard and the
+    /// click — and the weight says what is chosen. Until then the other
+    /// columns' chosen rows kept a fainter marker of their own, and a third
+    /// plate said much the same as the other two.
     fn plated(self) -> bool {
         self.selected && self.focused
     }
 
+    /// Weight says what is chosen — the artist whose albums are showing, the
+    /// album whose tracks are, the track playing. Until then a plate set it
+    /// regular, as saying it already; in a face whose weights are not one
+    /// width, Muto's, the name grew and shrank as the hand went over it.
+    ///
+    /// It applies to the name only — the artist, the album, the title. Setting
+    /// a track number or a running time in bold does not make the row easier to
+    /// find, it just makes the column of figures look uneven.
     fn role(self) -> Role {
         if self.selected || self.playing {
             Role::ContentBold
@@ -216,6 +351,15 @@ impl RowState {
         }
     }
 
+    /// Marked, the playing row's figures — arrow, number, time — are the marked
+    /// rows' own colour, and only its title says it plays: three colours in one
+    /// block of marked rows read as three kinds of row. Unmarked, the receded
+    /// accent finds it in the column.
+    ///
+    /// Marked means plated, the keyboard's marker behind it — not merely
+    /// chosen: a chosen row in a column without the keyboard wears no plate,
+    /// and the playing one there would have its artist in the queue in the
+    /// second tone beside a title in the accent.
     fn secondary(self, p: &Palette) -> Color32 {
         let tone = self.secondary_tone(p);
         if self.plated() {
@@ -240,6 +384,10 @@ impl RowState {
     }
 }
 
+/// What is actually painted behind a row's text.
+///
+/// The marquee needs to know, because the soft edge it fades text into has to
+/// be the same colour as whatever the row is sitting on.
 fn behind(ui: &Ui, state: RowState, hovered: bool, palette: &Palette) -> Color32 {
     if state.plated() {
         marker_colour(palette)
@@ -250,6 +398,17 @@ fn behind(ui: &Ui, state: RowState, hovered: bool, palette: &Palette) -> Color32
     }
 }
 
+/// How far one notch of a mouse wheel scrolls, in points.
+///
+/// A wheel says only „one line" and leaves the length of a line to the program;
+/// egui makes it 40 points, whatever the rows are. On a Mac that feels right —
+/// the system's own scrolling is like it, and a trackpad sends points of its
+/// own anyway — but on Linux, where a notch moves about three lines everywhere
+/// else, 40 points was not two of kessler's rows and a long list crawled. So
+/// there five rows — a browser on the same machine moves about as far a notch,
+/// as the rows are tall; on a Mac 40 as before. `[ui] scroll_speed` —
+/// „langsam", „normal", „schnell" — takes two thirds of that or two thirds
+/// more. A trackpad's points are not touched.
 fn wheel_step(speed: &str, row: f32, mac: bool) -> f32 {
     let normal = if mac { 40.0 } else { 5.0 * row };
     let factor = match speed {
@@ -260,6 +419,10 @@ fn wheel_step(speed: &str, row: f32, mac: bool) -> f32 {
     (normal * factor).round()
 }
 
+/// How much farther a trackpad's or a TrackPoint's own distances go: on Linux
+/// they come as a few points a step, read one to one they crawled where every
+/// other program moves twice as far; on a Mac the system's own scrolling
+/// already feels right. `[ui] scroll_speed` scales it as it scales the wheel.
 pub(in crate::gui) fn touch_factor(speed: &str, mac: bool) -> f32 {
     if mac {
         return 1.0;
@@ -279,13 +442,26 @@ fn set_wheel_step(ctx: &egui::Context, speed: &str, row: f32) {
     }
 }
 
+/// How long after the last turn of the wheel a list counts as still being
+/// scrolled, and how long the hover then takes to go or to come back, in
+/// seconds.
 const SCROLL_SETTLES: f64 = 0.1;
 const HOVER_FADE: f32 = 0.08;
 
+/// The hover's plate, as strong as it is shown just now: gone while a list
+/// is being scrolled, back as soon as it stops.
+///
+/// Scrolling under a still pointer moved the plate from row to row with every
+/// line that passed under it, and the list looked restless. It goes quickly and
+/// comes back quickly, so it is there again for the click that follows.
 fn hover_colour(ui: &Ui, palette: &Palette) -> Color32 {
     palette.ground.lerp_to_gamma(palette.hover, hover_shown(ui.ctx()))
 }
 
+/// Whether the pointer is on `rect` and the list under it stands still:
+/// what a row offers under the pointer — „merken", „folgen" — goes with
+/// the hover's plate while the list is scrolled, instead of jumping from
+/// row to row with every line that passes.
 pub(super) fn pointer_rests_on(ui: &Ui, rect: Rect) -> bool {
     ui.rect_contains_pointer(rect) && hover_shown(ui.ctx()) > 0.5
 }
@@ -310,10 +486,25 @@ pub(super) fn hover_shown(ctx: &egui::Context) -> f32 {
     ctx.animate_bool_with_time(egui::Id::unique("hover-shown"), still, HOVER_FADE)
 }
 
+/// How strong a selected row's marker is.
+///
+/// All three columns keep their selection visible — you need to see what the
+/// track list is a list *of*. But only the column holding the keyboard shows it
+/// at full strength; in the others the marker sits back towards the ground.
+/// Without that, three identical markers are on the screen at once and none of
+/// them says where j and k will go next.
 fn marker_colour(palette: &Palette) -> Color32 {
     palette.marked()
 }
 
+/// The marker behind a row: the whole row, held clear of the rows above and
+/// below.
+///
+/// The row is allocated wider than its text by [`Metrics::marker_pad_x`] at
+/// each side, and the text is inset by that much — so the marker has the same
+/// air left and right, and neither end of it is clipped by the scroll area it
+/// lives in. Growing the marker past the row instead would put the padding
+/// outside the clip on the right, and only on the right.
 fn marker_rect(rect: Rect, m: Metrics) -> Rect {
     Rect::from_min_max(
         egui::pos2(rect.left(), rect.top() + m.marker_inset_y),
@@ -321,6 +512,7 @@ fn marker_rect(rect: Rect, m: Metrics) -> Rect {
     )
 }
 
+/// Where a row's text goes: the row, minus the marker's air.
 fn content_rect(rect: Rect, m: Metrics) -> Rect {
     Rect::from_min_max(
         egui::pos2(rect.left() + m.marker_pad_x, rect.top()),
@@ -328,6 +520,9 @@ fn content_rect(rect: Rect, m: Metrics) -> Rect {
     )
 }
 
+/// Paint the highlighter stroke behind a selected row — coming and going
+/// over [`HOVER_FADE`], as quickly as the hover, so a click does not snap
+/// the plate in. `id` is the row's own.
 fn paint_marker(ui: &Ui, rect: Rect, id: egui::Id, state: RowState, m: Metrics, palette: &Palette) {
     let shown = ui.ctx().animate_bool_with_time(id.with("plate"), state.plated(), HOVER_FADE);
     if shown <= 0.0 {
@@ -337,6 +532,10 @@ fn paint_marker(ui: &Ui, rect: Rect, id: egui::Id, state: RowState, m: Metrics, 
         .rect_filled(marker_rect(rect, m), theme::ROW_RADIUS, marker_colour(palette).gamma_multiply(shown));
 }
 
+/// `to`, reached over [`HOVER_FADE`] from whatever the row with `id` was
+/// last drawn in: a name turning to the accent as it starts to play, or to
+/// the ink as it is chosen, crosses over rather than snapping. A row drawn
+/// for the first time — scrolled into sight — stands in its colour at once.
 fn eased_colour(ui: &Ui, id: egui::Id, to: Color32) -> Color32 {
     #[derive(Clone, Copy)]
     struct Fade {
@@ -365,6 +564,7 @@ fn eased_colour(ui: &Ui, id: egui::Id, to: Color32) -> Color32 {
     shown
 }
 
+/// The faintest possible hover: it says "clickable", not "button".
 fn paint_hover(
     ui: &Ui,
     rect: Rect,
@@ -379,6 +579,12 @@ fn paint_hover(
     }
 }
 
+/// The first column: the artists, or the radio's stations while it is open.
+/// Everything switched off: in the middle of where the columns would stand,
+/// where to switch them on again — a click on it opens the menu there. Not the
+/// keys that do it at once (`1` `1` …): to somebody new to the window they said
+/// nothing. How much of the room's height the drawing over „alles ist
+/// ausgeschaltet" takes, and the least it is drawn at.
 const DRAWING_SHARE: f32 = 0.55;
 const DRAWING_LEAST: f32 = 120.0;
 
@@ -429,10 +635,23 @@ fn first_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) ->
     }
 }
 
+/// Where a column sliding in or out stands, from 0 (away) to 1 (open), with
+/// `on` saying which way it is going.
+///
+/// egui's own `animate_bool` moved at one pace from start to stop, which
+/// read as stiff, and moved on by at most one usual frame per frame drawn,
+/// so a frame that took longer held the column back and it stuttered. This
+/// one goes by the clock — however few frames there are, it is where it
+/// should be — and eases out: off at speed, settling into place. Turned
+/// round half way, it sets off from where it is, over the part of the way
+/// that is left. `snap` puts it at its end at once.
 fn slide(ctx: &egui::Context, id: egui::Id, on: bool, snap: bool) -> f32 {
     slide_for(ctx, id, on, snap, theme::FOURTH_SLIDE)
 }
 
+/// Where the foot's words stood when it was last drawn: where the
+/// library's words end at the left, where what the status says (or the
+/// clock) begins at the right — for the columns over them, see `render`.
 #[derive(Clone, Copy, Default)]
 pub(super) struct FootInk {
     pub(super) left_ends: Option<f32>,
@@ -443,12 +662,54 @@ pub(super) fn foot_ink_id() -> egui::Id {
     egui::Id::unique("foot-ink")
 }
 
+/// The ground under what the status says at the foot, where the columns run
+/// down to the window's edge: a field of the ground, soft at its edge, from a
+/// little before the words to the window's corner, coming and going with
+/// them — so a list under it fades away there instead of the column moving up
+/// out of the way each time a word appears. Placed by where the words began
+/// last frame: they are drawn after it.
+fn foot_ground(ui: &Ui, window: Rect, top: f32, palette: &Palette) {
+    let ink: FootInk = ui.data(|d| d.get_temp(foot_ink_id())).unwrap_or_default();
+    let kept = egui::Id::unique("foot-ground-from");
+    if let Some(begins) = ink.right_begins {
+        ui.data_mut(|d| d.insert_temp(kept, begins));
+    }
+    let shown = ui.ctx().animate_bool_with_time(egui::Id::unique("foot-ground"), ink.right_begins.is_some(), FOOT_GROUND_FADE);
+    let Some(begins) = ui.data(|d| d.get_temp::<f32>(kept)) else { return };
+    if shown <= 0.0 {
+        return;
+    }
+    let field = Rect::from_min_max(
+        egui::pos2(begins - FOOT_GROUND_PAD, top - FOOT_GROUND_PAD),
+        egui::pos2(window.right() + FOOT_GROUND_SOFT, window.bottom() + FOOT_GROUND_SOFT),
+    );
+    let ground = palette.ground.gamma_multiply(shown);
+    let shadow = egui::epaint::Shadow { offset: [0, 0], blur: FOOT_GROUND_SOFT as u8, spread: (FOOT_GROUND_SOFT / 2.0) as u8, color: ground };
+    ui.painter().with_clip_rect(window).add(shadow.as_shape(field, egui::CornerRadius::same(FOOT_GROUND_SOFT as u8)));
+}
+
+/// How far the ground under the foot's words reaches past them.
+const FOOT_GROUND_PAD: f32 = 10.0;
+
+/// How soft its edge is: thinning over this much, half inside, half out.
+const FOOT_GROUND_SOFT: f32 = 40.0;
+
+/// How long it takes to come and go.
+const FOOT_GROUND_FADE: f32 = 0.18;
+
+/// How far clear of the foot's words a column has to stand to run down
+/// past them.
 const FOOT_CLEAR: f32 = 12.0;
 
+/// [`slide`] over `secs` for the whole way: the station's rule draws itself in
+/// to the dot the way the columns open, only slower, so it can be watched.
 fn slide_for(ctx: &egui::Context, id: egui::Id, on: bool, snap: bool, secs: f32) -> f32 {
     slide_to(ctx, id, if on { 1.0 } else { 0.0 }, snap, secs, egui::emath::easing::cubic_out)
 }
 
+/// The ground laid over `area` right after the view changed, and taken away
+/// over the time egui fades the menu in: the new view comes up out of the
+/// ground rather than standing there at once. `[ui] view_fade`.
 fn view_fade(app: &GuiApp, ui: &Ui, area: Rect, palette: &Palette) {
     let view = app.view_shown();
     let id = egui::Id::unique("view-fade");
@@ -474,6 +735,9 @@ fn view_fade(app: &GuiApp, ui: &Ui, area: Rect, palette: &Palette) {
     ui.ctx().request_repaint();
 }
 
+/// A window without a title bar grows from its edges and corners, as the bar's
+/// frame would let it: a few points along each, the pointer saying so, and a
+/// press there hands the resizing to the window system.
 fn grow_from_the_edges(ui: &Ui, window: Rect) {
     use egui::{CursorIcon, ResizeDirection as D};
     const EDGE: f32 = 5.0;
@@ -500,6 +764,17 @@ fn grow_from_the_edges(ui: &Ui, window: Rect) {
     }
 }
 
+/// The window's three buttons drawn by kessler, where `[ui] window_buttons`
+/// asks for them: plain circles where the Mac's own stand (hidden then, see
+/// `macwindow`), in the scheme's colours. „einfarbig": all three in the third
+/// tone, coming up to the accent under the pointer; „drei farben": the
+/// accent, the heads' colour and the second tone, as the Mac's red, yellow
+/// and green. Under the pointer they say what they do, in the face's own ×,
+/// − and + (or lines drawn here where it has none), fading in and out with
+/// the colour; in a window in the back they step back to the third tone.
+/// Close puts the window away as the Mac's red button does here, the middle
+/// one lays it in the Dock, the last makes it full screen (with `alt`, as big
+/// as the screen).
 fn own_window_buttons(app: &mut GuiApp, ui: &Ui, palette: &Palette, window: Rect) {
     use crate::gui::glyphs::Mark;
     let style = app.config.ui.window_buttons.clone();
@@ -556,8 +831,11 @@ fn own_window_buttons(app: &mut GuiApp, ui: &Ui, palette: &Palette, window: Rect
     }
 }
 
+/// How long the window's own buttons take to come up to their colour under the
+/// pointer, and to go back — see `own_window_buttons`.
 const BUTTONS_FADE: f32 = 0.18;
 
+/// ×, − or + as lines, for a face that has not got them.
 fn drawn_button_mark(ui: &Ui, i: usize, centre: egui::Pos2, across: f32, ink: Color32) {
     let painter = ui.painter();
     let stroke = egui::Stroke::new((across / 9.0).max(1.0), ink);
@@ -579,8 +857,13 @@ fn drawn_button_mark(ui: &Ui, i: usize, centre: egui::Pos2, across: f32, ink: Co
     }
 }
 
+/// Between the clock at the foot and what the status says beside it.
 const FOOT_CLOCK_GAP: f32 = 24.0;
 
+/// The clock at the foot's right end, where `[ui] foot_clock` asks for one:
+/// „uhr", the time; „datum", the date before it — as the language writes
+/// them, faint as the library's counts at the other end. Drawn again when
+/// the minute turns, and no oftener. Where it begins, `right` for none.
 fn foot_clock(app: &GuiApp, ui: &Ui, palette: &Palette, right: f32, top: f32) -> f32 {
     if app.config.ui.columns_to_edge {
         return right;
@@ -600,6 +883,9 @@ fn foot_clock(app: &GuiApp, ui: &Ui, palette: &Palette, right: f32, top: f32) ->
     x
 }
 
+/// Ask the columns of every view to ease to the widths they are given from
+/// now on, as `0` sets them all even again: from what they were, over the
+/// time the side's columns slide in.
 pub(in crate::gui) fn ease_columns_from_now(ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     ctx.data_mut(|d| d.insert_temp(columns_eased_id(), now));
@@ -609,6 +895,10 @@ fn columns_eased_id() -> egui::Id {
     egui::Id::unique("columns-eased-since")
 }
 
+/// A row's column widths as drawn: `target` itself, except for the moment
+/// after [`ease_columns_from_now`], when they go there from where they were
+/// last drawn, eased out as a slide is. `key` tells one row's widths from
+/// another's — the library's, the radio's, the podcasts'.
 pub(super) fn eased_widths(ctx: &egui::Context, key: &str, target: Vec<f32>) -> Vec<f32> {
     let last_id = egui::Id::unique(("columns-last", key));
     let from_id = egui::Id::unique(("columns-from", key));
@@ -640,6 +930,9 @@ pub(super) fn eased_widths(ctx: &egui::Context, key: &str, target: Vec<f32>) -> 
     drawn
 }
 
+/// [`slide_for`] to any point between 0 and 1, not only to the two ends: the
+/// search field opens part of the way under the pointer and all of it for
+/// typing.
 fn slide_to(ctx: &egui::Context, id: egui::Id, to: f32, snap: bool, secs: f32, ease: fn(f32) -> f32) -> f32 {
     #[derive(Clone, Copy)]
     struct Slide {
@@ -693,13 +986,10 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
 
     let shares = {
         let c = &app.config.ui;
-        let as_share = |share: Option<f32>, points: Option<f32>| {
-            share.or_else(|| points.map(|p| p / room))
-        };
         theme::Shares {
-            artists: as_share(c.artists_share, c.artists_width),
-            albums: as_share(c.albums_share, c.albums_width),
-            queue: as_share(c.queue_share, c.queue_width),
+            artists: c.artists_share,
+            albums: c.albums_share,
+            queue: c.queue_share,
             side: c.side_share,
             even: c.merged_even,
         }
@@ -882,7 +1172,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
         let reach = |ui: &Ui, n: usize, width: f32| -> f32 {
             let from = ui.cursor().min.x;
             let under = ink.left_ends.is_some_and(|end| from < end + FOOT_CLEAR)
-                || ink.right_begins.is_some_and(|begin| from + width > begin - FOOT_CLEAR);
+                || (!to_edge && ink.right_begins.is_some_and(|begin| from + width > begin - FOOT_CLEAR));
             let down = slide_for(ui.ctx(), egui::Id::unique(("column-down", n)), !under, false, theme::FOURTH_SLIDE);
             let deeper_now = deeper * down;
             ui.ctx().data_mut(|d| d.insert_temp(column_at_edge_id(), to_edge && down >= 0.99));
@@ -1036,9 +1326,7 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             if app.merged() && app.config.ui.merged_even {
                 app.config.ui.merged_even = false;
                 app.config.ui.artists_share = Some(columns.artists / full_width);
-                app.config.ui.artists_width = None;
                 app.config.ui.queue_share = Some(queue_full / full_width);
-                app.config.ui.queue_width = None;
                 app.config.ui.side_share = Some(side_full / full_width);
             }
             let names = app.names_layout().count();
@@ -1060,20 +1348,17 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
                         m.albums_width + m.column_gap * 2.0 + queue_width
                     };
                     app.config.ui.artists_share = share(width, beside);
-                    app.config.ui.artists_width = None;
                 }
                 i if i == names - 1 => {
                     app.config.ui.albums_share = share(
                         width,
                         m.artists_width + m.column_gap * 2.0 + queue_width,
                     );
-                    app.config.ui.albums_width = None;
                 }
                 i if i == names + 1 => {
                     let pair = queue_width + side_width;
                     let queue = width.clamp(theme::MIN_NAME_COLUMN, pair - theme::MIN_NAME_COLUMN);
                     app.config.ui.queue_share = Some(queue / full_width);
-                    app.config.ui.queue_width = None;
                     app.config.ui.side_share = Some((pair - queue) / full_width);
                 }
                 _ => {
@@ -1081,7 +1366,6 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
                     let wanted = share(full_width - taken_left - side_part, queue_others + side_part);
                     if queue_width > 0.5 {
                         app.config.ui.queue_share = wanted;
-                        app.config.ui.queue_width = None;
                     } else {
                         app.config.ui.side_share =
                             share(full_width - taken_left, queue_others);
@@ -1098,14 +1382,11 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             let even = Some(theme::fit_column(each, others, full_width) / full_width);
             {
                 app.config.ui.artists_share = even;
-                app.config.ui.artists_width = None;
                 if !app.merged() {
                     app.config.ui.albums_share = even;
-                    app.config.ui.albums_width = None;
                 }
             }
             app.config.ui.queue_share = even;
-            app.config.ui.queue_width = None;
             if side {
                 app.config.ui.side_share = even;
             }
@@ -1145,6 +1426,9 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
             let probe = text::line(ui, "x", Role::Label, palette.faint);
             let top = window.bottom() - m.margin_x - text::baseline(&probe);
             let right = window.right() - m.margin_x;
+            if app.config.ui.columns_to_edge {
+                foot_ground(ui, window, top, &palette);
+            }
             let clock_from = foot_clock(app, ui, &palette, right, top);
             let status_right = if clock_from < right { clock_from - FOOT_CLOCK_GAP } else { right };
             let said_from = header_status(app, ui, &palette, window.left() + m.margin_x, status_right, top, true, library_at_foot);
@@ -1193,10 +1477,21 @@ pub fn render(app: &mut GuiApp, ui: &mut Ui) {
     }
 }
 
+/// How far a narrow window's strip of columns, with its line of arrows,
+/// reaches down into the foot's band.
 const NARROW_INTO_FOOT: f32 = 24.0;
 
+/// How far into the foot's band a column goes that has the foot's words under
+/// it — see `render`.
 const FOOT_WORDS_NEARER: f32 = 28.0;
 
+/// The columns as a strip that slides, for a window too narrow to hold them
+/// side by side.
+///
+/// One column is read at a time and fills the window, as on an iPod; under it a
+/// line names the columns on either side, with an arrow, and takes you there.
+/// The strip itself is drawn wider than the window and pushed left — everything
+/// outside is clipped by the window, so no column has to know it is off-screen.
 fn sliding_columns(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -1262,6 +1557,8 @@ fn sliding_columns(
     column_steps(app, ui, line, &order, index, m, palette);
 }
 
+/// The columns of the sliding strip, left to right: where each one takes the
+/// keyboard, and what the line under the strip calls it.
 fn strip_order(app: &GuiApp, names: usize) -> Vec<(Column, &'static str)> {
     let mut order: Vec<(Column, &'static str)> = Vec::new();
     {
@@ -1287,6 +1584,10 @@ fn strip_order(app: &GuiApp, names: usize) -> Vec<(Column, &'static str)> {
     order
 }
 
+/// The line under the sliding strip: the column to the left with an arrow
+/// pointing there, at the left margin, and the one to the right at the right
+/// margin. A click takes you there, as `h` and `l` do. Labels, in the mid tone,
+/// brightening under the pointer: a way on, not a pair of buttons.
 fn column_steps(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -1304,6 +1605,8 @@ fn column_steps(
     }
 }
 
+/// The line itself, for any strip of named columns — the library's, and the
+/// radio's: which neighbour was clicked, if one was.
 pub(super) fn strip_steps(
     ui: &mut Ui,
     line: Rect,
@@ -1341,6 +1644,21 @@ pub(super) fn strip_steps(
     go
 }
 
+/// The gap between two columns, as something you can take hold of.
+///
+/// Nothing is drawn until the pointer is in the gap, and then it is a thin
+/// rounded bar down the middle of it — the width the columns are already keeping
+/// apart, made visible for as long as it is useful. It is not a border: the
+/// moment the pointer leaves, the window has no lines in it again.
+///
+/// While it is being dragged, returns the new width for the column on its left
+/// and whether the drag has just ended, which is when the setting is worth
+/// writing to disk.
+///
+/// `left` and `right` are the rectangles the two columns actually occupied.
+/// The line goes halfway between their facing edges — measured, not worked out
+/// a second time from the margins, because those two answers turned out not to
+/// agree on every machine.
 fn divider(
     ui: &mut Ui,
     id: usize,
@@ -1348,8 +1666,15 @@ fn divider(
     right: Rect,
     palette: &Palette,
 ) -> Option<Handle> {
+    /// How much of the gap answers the pointer. Wider than the line by a good
+    /// margin: the line is a mark, the gap is the target.
     const GRAB: f32 = 11.0;
+    /// A little thinner than the extent mark, rounded the same way, and in the
+    /// marker's own grey — the tone the chosen row stands on — so it reads as
+    /// part of the columns it moves rather than as a line drawn across them.
     const LINE: f32 = 2.0;
+    /// How far the line stays clear of the top and bottom of the columns, so it
+    /// reads as belonging to the gap rather than crossing the whole window.
     const INSET_Y: f32 = 20.0;
     const FADE_SECS: f32 = 0.12;
 
@@ -1420,8 +1745,17 @@ fn divider(
     ))
 }
 
+/// What a hand on a divider asked for.
 enum Handle {
+    /// Pulled to here. The flag is the frame the drag ended on, which is the
+    /// one worth writing a settings file for.
     Width(f32, bool),
+    /// Pressed without pulling: share the row out evenly again.
+    ///
+    /// The same thing the menu's „spaltenbreiten zurücksetzen" does, within
+    /// reach of the hand that made the mess — except that it goes to an even
+    /// split rather than to the opening widths, because a click on the line
+    /// between two columns is a question about those two columns.
     Reset,
 }
 
@@ -1453,6 +1787,8 @@ mod tests {
         assert_eq!(masthead::clock_words(at, true, false, Lang::Ja), "午後2:07");
     }
 
+    /// The cover's size chooses the heading's lines: two beside one smaller
+    /// than three lines are tall, three beside a taller one or none.
     #[test]
     fn the_cover_chooses_two_lines_or_three() {
         use super::tracks::{three_lines_tall, two_lines_beside};
@@ -1465,6 +1801,8 @@ mod tests {
         assert!(!two_lines_beside(None), "without a cover, three");
     }
 
+    /// A record's heading says its bitrate once, or the span where its
+    /// tracks differ; tracks without one do not count.
     #[test]
     fn a_record_says_its_bitrate_or_its_span() {
         let track = |bitrate: Option<u32>| crate::db::models::Track {
@@ -1501,6 +1839,8 @@ mod tests {
         assert_eq!(said(&[]), None);
     }
 
+    /// Records in the track list are the runs of one artist and one title,
+    /// folded as the library folds names — a capital does not split one.
     #[test]
     fn a_record_is_a_run_of_its_own_tracks() {
         let track = |artist: &str, album: &str| crate::db::models::Track {
@@ -1555,6 +1895,18 @@ mod tests {
 
     use super::*;
 
+    /// What a narrow masthead gives up, and in what order.
+    ///
+    /// The bug this guards is the one that was actually on screen: at 360
+    /// points the search field was drawn *over* the transport, because it kept
+    /// its full width and is painted last.
+    /// A pointer over the search field takes it back from the picture, and
+    /// nothing else has to be true for that.
+    ///
+    /// The rule looks obvious written out, which is the reason to write it
+    /// out: the version that reads just as reasonably — clear the field once
+    /// somebody *clicks* it — is a field you have to click twice, and that is
+    /// not visible in the code that would have it.
     #[test]
     fn a_pointer_over_the_field_takes_it_back() {
         assert!(!picture_has_the_field(false, false, false, false));
@@ -1566,6 +1918,11 @@ mod tests {
         assert!(!picture_has_the_field(true, false, false, true));
     }
 
+    /// The marker used to be grown outwards from the row. That put its
+    /// right-hand padding outside the scroll area's clip rectangle, so the air
+    /// showed on the left and was cut off on the right — which is exactly how
+    /// it looked. Keeping the marker inside the row and insetting the text
+    /// instead makes both sides the same by construction.
     #[test]
     fn the_marker_has_the_same_air_on_both_sides() {
         for m in [
@@ -1591,6 +1948,9 @@ mod tests {
         }
     }
 
+    /// What the mark has to get right: it never leaves its column, it never
+    /// shrinks to nothing however long the library is, and it reaches the
+    /// bottom exactly when the list does.
     #[test]
     fn the_extent_mark_stays_inside_its_column() {
         let visible = 654.0;
@@ -1618,6 +1978,8 @@ mod tests {
         assert!((top + length - visible).abs() < 0.01);
     }
 
+    /// Without the modes the header keeps the transport's three keys, ending
+    /// where the five did, the same gap apart.
     #[test]
     fn the_header_keeps_three_keys_without_the_modes() {
         let all = header_cells(1000.0, 800.0, 50.0, true);
@@ -1630,6 +1992,9 @@ mod tests {
         assert_eq!(three[0].left(), all[0].left() + (all[4].right() - all[2].right()));
     }
 
+    /// The five keys stand on one line, ending at the corner, in two groups:
+    /// back, play and on, then repeat and shuffle further off, with the
+    /// play key the only wide one.
     #[test]
     fn the_keys_line_up_in_the_corner() {
         let cells = key_cells(1000.0, 800.0, 50.0);
@@ -1644,6 +2009,8 @@ mod tests {
         assert_eq!(1000.0 - cells[0].left(), RING_CELL * 4.0 + 50.0 + apart.iter().sum::<f32>());
     }
 
+    /// Every place reads back as itself, and the places that have been taken
+    /// out open on the nearest one that is left.
     #[test]
     fn the_play_key_says_what_pressing_it_does() {
         use crate::player::PlaybackState;
@@ -1658,11 +2025,9 @@ mod tests {
             let mut ui = crate::config::UiConfig::default();
             place.store(&mut ui);
             assert_eq!(PlayingAt::of(&ui), place, "{}", place.key());
-            assert!(!ui.header_playing);
         }
         let old = |at: &str| crate::config::UiConfig {
             playing_at: at.into(),
-            header_playing: true,
             ..Default::default()
         };
         for gone in ["kopfzeile", "kopfzeile 2", "fusszeile", "zeile", "cover", ""] {
@@ -1671,6 +2036,7 @@ mod tests {
         assert_eq!(PlayingAt::of(&old("kompakt 2")), PlayingAt::Compact);
     }
 
+    /// The head counts what is still to come, not the evening so far.
     #[test]
     fn the_queue_counts_what_is_left() {
         assert_eq!(queue_to_come(82, None), 82);
@@ -1696,6 +2062,8 @@ mod tests {
         assert_eq!(view.role(), Role::ContentBold);
     }
 
+    /// The playing row's second tone is the receded accent, chosen or
+    /// marked; a marked row's figures are those of any other row.
     #[test]
     fn the_playing_row_keeps_its_accent_when_marked() {
         let p = super::super::theme::Theme::RunebendingDunkel.palette();
@@ -1709,6 +2077,7 @@ mod tests {
         assert_eq!(marked_not_playing.secondary_tone(&p), p.faint);
     }
 
+    /// The plates say where the hand is, the weight what is chosen.
     #[test]
     fn the_hand_has_the_plate_and_the_choice_the_weight() {
         let chosen = RowState { selected: true, ..Default::default() };
@@ -1724,6 +2093,13 @@ mod tests {
         assert_eq!(RowState::default().role(), Role::Content);
     }
 
+    /// The two left heads, in both states the column can be in.
+    ///
+    /// The window opens with the numbers shown, so it opens with the arrow at
+    /// „nr" — which is where one looks for it, and where the figures under
+    /// it are actually counting up. Switch that column off and the order moves
+    /// to „titel" rather than vanishing, which is the whole point of the rule:
+    /// never two arrows on this side, never none.
     #[test]
     fn the_shelf_order_always_has_exactly_one_head() {
         for numbered in [true, false] {
@@ -1739,6 +2115,14 @@ mod tests {
         assert!(TrackColumn::DEFAULT.contains(&TrackColumn::Number));
     }
 
+    /// The egg in the snake.
+    ///
+    /// At rest the knob is not hidden, not scaled to nothing, not skipped: it
+    /// is exactly as wide as the line is thick, which is the same thing as
+    /// being the line. That is what makes it swell *out* of the rule instead
+    /// of appearing on top of it, and it is the one number in this that a
+    /// later hand could quietly break — a knob that starts at zero pops, a
+    /// knob that starts wider than the line is a dot sitting on it.
     #[test]
     fn the_knob_starts_as_the_line_and_swells_out_of_it() {
         let (thin, at_rest) = rule_swell(0.0);
@@ -1759,6 +2143,13 @@ mod tests {
         }
     }
 
+    /// A hover plate sits square on its word.
+    ///
+    /// The one this replaced was grown from the type's box, and a box in this
+    /// face keeps room under the baseline for descenders *and* a line gap
+    /// under that — so the plate carried three points more air below the word
+    /// than above it. Three points at eleven point type: nothing anybody can
+    /// name, everything anybody can see.
     #[test]
     fn a_hover_plate_sits_square_on_its_word() {
         let ink_middle = 40.0;
@@ -1776,6 +2167,11 @@ mod tests {
         assert_eq!(plate.height(), 24.0);
     }
 
+    /// The scope and the clock wake on one grid: run both for a minute of
+    /// frames, each frame asking for the sooner of the two, and there are as
+    /// many frames as the scope's alone — at every rate in the menu, on a
+    /// screen of 60 and of 120 a second, with egui taking a frame of the
+    /// screen's off every wait as it does.
     #[test]
     fn the_clock_does_not_add_frames_to_the_scope() {
         use super::picture::on_grid;
@@ -1795,6 +2191,8 @@ mod tests {
         }
     }
 
+    /// Woken a hair before a tick, the frame does not ask for that tick
+    /// again a millisecond on.
     #[test]
     fn a_frame_just_before_a_tick_waits_for_the_next() {
         let wait = super::picture::on_grid(0.0499, 0.05, 0.0).as_secs_f64();

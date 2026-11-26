@@ -1,9 +1,18 @@
+//! The podcasts' columns — see [`crate::podcast`] and `app::podcasts`. The
+//! podcasts followed, or what the search field found; the episodes of the one
+//! chosen, or the newest of all of them; the episode looked at, with its
+//! chapters; and the queue, where there is room for it.
+
 use super::*;
 use crate::podcast::{Chapter, Episode, Show};
 
+/// Where the chapter pointed at is kept, the timeline's and the list's, so each
+/// can show the other's.
 pub(super) const ON_THE_RULE: &str = "chapter-on-the-rule";
 pub(super) const IN_THE_LIST: &str = "chapter-in-the-list";
 
+/// Which chapter of the episode playing the hand is on, at `key`; `None`
+/// where it is on none.
 pub(super) fn point_at_chapter(ctx: &egui::Context, key: &str, chapter: Option<usize>) {
     let frame = ctx.cumulative_frame_nr();
     ctx.data_mut(|d| match chapter {
@@ -16,6 +25,8 @@ pub(super) fn point_at_chapter(ctx: &egui::Context, key: &str, chapter: Option<u
     });
 }
 
+/// The chapter pointed at, at `key` — as of this frame or the last, as the
+/// two are drawn one after the other; one not told again since is let go.
 pub(super) fn pointed_chapter(ctx: &egui::Context, key: &str) -> Option<usize> {
     let frame = ctx.cumulative_frame_nr();
     ctx.data(|d| d.get_temp::<(usize, u64)>(egui::Id::unique(key)))
@@ -23,52 +34,89 @@ pub(super) fn pointed_chapter(ctx: &egui::Context, key: &str) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// How near its end the episodes' list has to be scrolled for more of it,
+/// in points — as the library's „zuletzt".
 const MORE_WITHIN: f32 = 600.0;
 
+/// How far from square an episode's picture may be and still be set as one.
 const SQUARE_WITHIN: f32 = 0.05;
 
+/// How tall a picture on an episode's page is at most, by the column's width:
+/// a picture far taller than wide stands narrower rather than running on.
 const PICTURE_MOST_TALL: f32 = super::artist_col::INFO_PICTURE_MOST_TALL;
 
+/// What a click in the view asks for, done once it is drawn.
 enum Asked {
     Choose(Option<Show>),
     Follow(Show),
     Look(Episode, Show),
     Play(Episode, Show),
     Chapter(Episode, Show, f64),
+    /// The list's end in view: more of it.
     More,
+    /// „ältere folgen laden": the podcast's older episodes, read again.
     Older(Show),
+    /// „heruntergeladen", the episodes fetched.
     Fetched,
+    /// An episode's file let go of.
     Forget(Episode),
+    /// „herunterladen": episodes fetched without playing, and kept.
     FetchToKeep(Vec<(Episode, Show)>),
+    /// An episode archived, or taken out of the archive.
     Archive(Episode),
+    /// An episode into the podcasts' queue, or out of it.
     Queue(Episode, Show),
+    /// One queued played now.
     PlayQueued(Episode, Show),
+    /// The podcasts' queue emptied.
     ClearQueue,
+    /// A played row of the queue taken out.
     Unspend(String),
+    /// A row of the queue clicked.
     LookQueued(Episode, Show),
+    /// The archived shown greyed, or left out.
     ShowArchived,
+    /// New episodes looked for now.
     CheckNow,
+    /// The podcasts' order one step on.
     TurnOrder,
+    /// „gemerkt" chosen.
     Starred,
+    /// An episode kept on purpose, or not; heard, or not.
     Star(Episode, Show),
+    /// „offen" chosen.
     Open,
+    /// An episode passed on.
     Share(Episode, Show),
     Heard(Episode, bool),
+    /// The sleep timer one step on.
     Sleep,
+    /// The episode playing held, or on again.
     TogglePause,
+    /// The menu a right click on an episode opens, where it was clicked.
     Menu(usize, egui::Pos2),
+    /// The same on a podcast, by its place among those listed.
     PodcastMenu(usize, egui::Pos2),
+    /// Episodes picked up from the list, or a row of the queue.
     Lift(Vec<(Episode, Show)>),
     LiftQueued(usize),
+    /// What is carried put down in the queue, at this place.
     Drop(usize),
+    /// One more picked, or one picked less (the command key held).
     PickAlso(Episode, Show),
+    /// All from the one looked at to this one (shift held).
     PickThrough(Vec<(Episode, Show)>),
+    /// What to do to the episodes picked.
     ArchivePicked,
     QueuePicked,
     ForgetPicked,
     Unpick,
 }
 
+/// The view's columns, side by side across `full_width`.
+/// The podcasts' row. `base`, how tall the columns are above the foot;
+/// `reach`, how far down column `n` of `width`, starting where the layout
+/// stands, may go — into the foot where nothing is written under it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn podcast_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, full_width: f32, narrow: bool, base: f32, reach: &dyn Fn(&Ui, usize, f32) -> f32) {
     let gap = m.column_gap;
@@ -264,11 +312,16 @@ pub(super) fn podcast_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
     }
 }
 
+/// The line under a podcast's makers: who is behind it, where that is
+/// someone else, and how often it comes — in the facts' colour.
 fn facts_of(feed: &crate::podcast::Feed) -> String {
     let rhythm = crate::podcast::feed::rhythm(&feed.episodes, chrono::Local::now().date_naive());
     feed.publisher().into_iter().chain(rhythm).collect::<Vec<_>>().join(" · ")
 }
 
+/// A podcast's page: its picture, its name, who makes it, how often it comes,
+/// its site and what it is about — in the third column for the podcast chosen,
+/// under „informationen" for the one playing.
 fn show_page(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, show: &Show, feed: &crate::podcast::Feed) {
     let side = (width - m.marker_pad_x * 2.0).clamp(40.0, 176.0);
     let (area, _) = ui.allocate_exact_size(Vec2::new(width, side), Sense::hover());
@@ -294,6 +347,8 @@ fn show_page(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
     links_block(ui, width, &feed.about_links, m, palette);
 }
 
+/// The links in a description, under it, each a click away in the browser: by
+/// their own words, or by their address made short.
 fn links_block(ui: &mut Ui, width: f32, links: &[(String, String)], m: Metrics, palette: &Palette) {
     if links.is_empty() {
         return;
@@ -311,8 +366,12 @@ fn links_block(ui: &mut Ui, width: f32, links: &[(String, String)], m: Metrics, 
     }
 }
 
+/// How much of what a podcast is about its head shows until „mehr".
 const HEAD_ABOUT_CHARS: usize = 180;
 
+/// A podcast's head over its episodes: its picture, and beside it its name, who
+/// makes it, how often it comes and its site; under them the start of what it
+/// is about, all of it after „mehr".
 fn show_head(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, show: &Show, feed: &crate::podcast::Feed) {
     let side = (m.row + text::SMALL_LINE * 2.0) * 1.6;
     let top = ui.cursor().min;
@@ -387,6 +446,9 @@ fn show_head(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f3
     ui.add_space(BLOCK_AIR * 2.0);
 }
 
+/// „informationen", `i`, in the queue's place: the page of the podcast playing,
+/// the episode playing over it; while none plays, the podcast chosen's.
+/// Whether „schliessen" in its head was clicked.
 fn podcast_info_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> bool {
     let panel = &app.podcasts;
     let close = heading(ui, tr!("informationen"), "", None, Some(tr!("schliessen")), m, palette).clicked();
@@ -415,8 +477,13 @@ fn podcast_info_body(app: &GuiApp, panel: &crate::gui::app::podcasts::PodcastPan
     });
 }
 
+/// Where the narrow window's strip stands, kept between frames.
 const STRIP_AT: &str = "podcast-strip-at";
 
+/// The podcasts in a window too narrow for their columns side by side: one
+/// column at a time, slid along, the neighbours named with an arrow at the foot
+/// — as the library's and the radio's. The podcasts, the episodes, the episode,
+/// and the queue or the log where it is open; `h` and `l` step too.
 fn podcast_strip(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, room: f32, height: f32, asked: &mut Option<Asked>) {
     let gap = crate::gui::theme::SLIDE_GAP;
     let mut names: Vec<&'static str> = vec![tr!("podcasts"), tr!("folgen"), tr!("folge")];
@@ -493,10 +560,12 @@ fn podcast_strip(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, r
     }
 }
 
+/// One step along the narrow window's strip of podcast columns: `h`, `l`.
 pub fn step_podcast_strip(ctx: &egui::Context, way: isize) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("podcast-strip-step"), way));
 }
 
+/// The podcasts followed, „alle" over them; or what the search found.
 fn shows_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, asked: &mut Option<Asked>) {
     let panel = &app.podcasts;
     let found = app.podcasts_found();
@@ -571,7 +640,12 @@ fn shows_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width:
         if panel.kept.show.is_empty() {
             prose(ui, width, tr!("noch keinem podcast gefolgt — oben im suchfeld einen namen suchen oder eine feed-adresse einfügen"), Role::Label, palette.faint, m);
         }
+        let register = app.config.ui.podcast_letters && matches!(app.config.ui.podcast_order.as_str(), "a-z" | "z-a");
+        let mut last_letter: Option<String> = None;
         for (i, show) in app.shows_in_order().iter().enumerate() {
+            if register {
+                super::names::register_head(ui, width, &super::names::plain_letter(&show.title), &mut last_letter, m, palette);
+            }
             let chosen = panel.chosen.as_ref().is_some_and(|c| c.feed == show.feed);
             let new = panel.new_by_show.get(&show.feed).copied().unwrap_or(0);
             show_row(ui, ("podcast-show", i), i, width, show, true, false, chosen, here, app.sounding_podcast(&show.feed), new, None, m, palette, asked, &panel.follow);
@@ -579,6 +653,11 @@ fn shows_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width:
     });
 }
 
+/// What a search found, in the first column, in two blocks kept well apart:
+/// „in deinen podcasts" — „folgen", how many episodes match, a view as „alle"
+/// is, then the podcasts followed the search found something in, each with
+/// how many of its episodes match — and „neue podcasts", what the directory
+/// found. Each under a head in the columns' heads' tone with its count.
 #[allow(clippy::too_many_arguments)]
 fn found_shows(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, followed: &[crate::gui::app::podcasts::FoundShow], directory: &[Show], asked: &mut Option<Asked>) {
     let panel = &app.podcasts;
@@ -620,6 +699,11 @@ fn found_shows(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: 
     }
 }
 
+/// One podcast in the first column, with the word at its end that the radio's
+/// stations have: under the pointer „folgen" for one found, „entfernen" for one
+/// followed; a found one followed says „gefolgt" while the pointer is
+/// elsewhere. A click on the word follows or lets go, anywhere else on the row
+/// chooses the podcast.
 #[allow(clippy::too_many_arguments)]
 fn show_row(
     ui: &mut Ui,
@@ -680,6 +764,7 @@ fn show_row(
     }
 }
 
+/// The episodes of the podcast chosen, or the newest of all followed.
 fn episodes_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, asked: &mut Option<Asked>) {
     let panel = &app.podcasts;
     let chosen = panel.chosen.clone();
@@ -842,7 +927,13 @@ fn episodes_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wid
     }
 }
 
+/// The podcasts' own queue, laid out as the music's: what it has played,
+/// faint, then the episode playing, then what comes after it; „entfernen" at a
+/// row's end under the pointer and „leeren" at the head's. A click looks at
+/// one, a double click plays it.
 fn episode_queue_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, asked: &mut Option<Asked>) {
+    /// How many played rows stay in sight above the one playing, as in the
+    /// music's queue; the rest are there further up.
     const SPENT_SHOWN: usize = 5;
     let panel = &app.podcasts;
     let queue: Vec<(Episode, Show)> = panel.kept.queue.iter().map(crate::podcast::Fetched::episode).collect();
@@ -984,6 +1075,8 @@ fn episode_queue_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette
     }
 }
 
+/// The episode looked at: what it is, „abspielen", what it is about, and its
+/// chapters. Without one, what the podcast chosen is about.
 fn episode_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, asked: &mut Option<Asked>) {
     let panel = &app.podcasts;
     still_heading(ui, tr!("folge"), "", m, palette);
@@ -1161,6 +1254,10 @@ fn episode_column(app: &GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
     });
 }
 
+/// One chapter in the third column, numbered as a record's tracks are: its
+/// number in the track list's number column — the same number the timeline
+/// shows for it, and in the ink while the hand is on its stretch there, the
+/// arrow before the one playing, its title, and where it starts at the end.
 #[allow(clippy::too_many_arguments)]
 fn chapter_row(ui: &mut Ui, id: egui::Id, width: f32, number: usize, title: &str, start: &str, state: RowState, m: Metrics, palette: &Palette) -> Response {
     use crate::gui::columns::TrackColumn;
@@ -1195,14 +1292,24 @@ fn chapter_row(ui: &mut Ui, id: egui::Id, width: f32, number: usize, title: &str
     response
 }
 
+/// How much of the ground lies over an archived episode's picture.
 const ARCHIVED_VEIL: f32 = 0.6;
 
+/// How far in from the picture's top right corner the plate stands, in
+/// points.
 const NEW_INSET: f32 = 2.0;
 
+/// The word set closer than the small face's own tracking, which is for
+/// heads standing alone: in a corner the letters want to hold together.
 const NEW_TRACKING: f32 = 0.35;
 
+/// The air round the word on its plate, the same on every side, in points.
 const NEW_PLATE_PAD: f32 = 2.5;
 
+/// The episode is new: „neu" in the ground on a small plate of the accent,
+/// its corners the window's, tucked into the picture's top right corner. Cut
+/// to the letters' ink, not their box, which keeps room below for a
+/// descender the word has none of: the same air on all four sides.
 fn new_mark(ui: &Ui, picture: Rect, palette: &Palette) {
     let painter = ui.painter().with_clip_rect(picture);
     let g = text::line_tracked(ui, tr!("neu"), Role::Label, palette.ground, -Role::Label.tracking() * (1.0 - NEW_TRACKING));
@@ -1219,8 +1326,10 @@ fn new_mark(ui: &Ui, picture: Rect, palette: &Palette) {
     painter.galley(text::ink_centred(&g, plate), g, palette.ground);
 }
 
+/// How long ago an episode came out, for the heads over the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Age {
+    /// Begun and not finished — „offen" only.
     Begun,
     Today,
     ThisWeek,
@@ -1228,6 +1337,7 @@ enum Age {
 }
 
 impl Age {
+    /// Today, in the last seven days, or before; one without a day is older.
     fn of(episode: &Episode, today: chrono::NaiveDate) -> Age {
         let Some(day) = local_day(episode) else {
             return Age::Older;
@@ -1251,6 +1361,8 @@ impl Age {
     }
 }
 
+/// How tall an episode's row is: the room of its three lines, the side of its
+/// picture, and the row's whole height.
 fn episode_row_measure(ui: &Ui, with_show: bool, m: Metrics) -> EpisodeLines {
     let small = text::SMALL_LINE;
     let step = m.row * crate::gui::theme::head_line();
@@ -1262,14 +1374,23 @@ fn episode_row_measure(ui: &Ui, with_show: bool, m: Metrics) -> EpisodeLines {
     EpisodeLines { side, height: side + m.marker_pad_x * 2.0 + m.marker_inset_y, to_show, to_facts }
 }
 
+/// Where an episode's lines stand in its row — see [`episode_row_measure`].
 #[derive(Clone, Copy)]
 struct EpisodeLines {
+    /// The picture's side.
     side: f32,
+    /// The whole row.
     height: f32,
+    /// From the title's row down to the podcast's.
     to_show: f32,
+    /// From the title's row down to the day's.
     to_facts: f32,
 }
 
+/// One episode in the second column, set as a record's head is in the track
+/// list: its podcast's picture small, and beside it the title in the bold face
+/// and its facts under it in the second tone, with air round them. A click
+/// looks at it, a double click plays it.
 #[allow(clippy::too_many_arguments)]
 fn episode_row(
     app: &GuiApp,
@@ -1401,14 +1522,20 @@ fn episode_row(
     (response, word_clicked)
 }
 
+/// How much taller an episode's picture is than its three lines.
 const EPISODE_PICTURE: f32 = 1.12;
 
+/// The day an episode came out, as the window writes days.
+///
+/// From the date read once with the feed, not from its words on every frame.
 fn day_of(episode: &Episode) -> Option<String> {
     let day = local_day(episode)?;
     let today = chrono::Local::now().date_naive();
     Some(said_day(day, today))
 }
 
+/// A day as the episodes say it: „heute" and „gestern" in words, from the
+/// day before that on as a date.
 fn said_day(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
     match (today - day).num_days() {
         0 => tr!("heute").to_string(),
@@ -1417,16 +1544,22 @@ fn said_day(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
     }
 }
 
+/// The day an episode came out, where the window is.
 fn local_day(episode: &Episode) -> Option<chrono::NaiveDate> {
     let at = crate::podcast::when(episode);
     (at > 0).then(|| chrono::DateTime::from_timestamp(at, 0)).flatten().map(|d| d.with_timezone(&chrono::Local).date_naive())
 }
 
+/// One line of a group on an episode's page: something it does, or how
+/// something stands.
 enum Entry {
     Action(String, Box<Asked>),
     Said(String),
 }
 
+/// Groups of actions under small heads, side by side, each its own column
+/// of words one under another, as wide as its longest word and a share of
+/// what is left; one group under another where they do not all fit.
 fn action_groups(ui: &mut Ui, width: f32, groups: Vec<(&str, Vec<Entry>)>, m: Metrics, palette: &Palette, asked: &mut Option<Asked>) {
     let wants: Vec<f32> = groups
         .iter()
@@ -1489,6 +1622,17 @@ fn action_groups(ui: &mut Ui, width: f32, groups: Vec<(&str, Vec<Entry>)>, m: Me
     }
 }
 
+/// A title — wrapped where it is long —, a name under it in the plain cut
+/// and the second tone, and facts under that small and faint: each line a
+/// heading's step under the one before, baseline to baseline, as a record's
+/// head sets its title, artist and facts.
+/// A name in the plain cut and the second tone on a row's line, and under it
+/// facts in the small face, a heading's step baseline to baseline — a
+/// record's artist and facts, without its title.
+///
+/// The name can be clicked — it leads to what it names — and says so as every
+/// word that does something does: the second tone at rest, the ink and a hand
+/// under the pointer. Whether it was clicked.
 fn name_and_facts(ui: &mut Ui, width: f32, name: &str, facts: &str, m: Metrics, palette: &Palette) -> bool {
     let room = (width - m.marker_pad_x * 2.0).max(60.0);
     let step = m.row * crate::gui::theme::head_line();
@@ -1546,6 +1690,10 @@ fn title_lines(ui: &mut Ui, width: f32, title: &str, name: &str, facts: &str, m:
     }
 }
 
+/// What an episode says about itself, as prose, with what can be clicked in
+/// it — the times its notes give and the addresses they name — in the second
+/// tone, the ink and a hand under the pointer, as every action is; what is
+/// clicked is handed back.
 fn marked_prose(ui: &mut Ui, width: f32, text: &str, times: bool, m: Metrics, palette: &Palette) -> Option<crate::podcast::marks::Mark> {
     use crate::podcast::marks::{marks_in, Mark};
     let marks: Vec<_> = marks_in(text).into_iter().filter(|(_, mark)| times || matches!(mark, Mark::Link(_))).collect();

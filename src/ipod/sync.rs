@@ -1,3 +1,15 @@
+//! Copying tracks from the local library onto an iPod.
+//!
+//! Deliberately **additive**: tracks already on the device are kept, whether or
+//! not they are still in the library. Nothing is deleted from an iPod. Removing
+//! tracks means deleting files a user may have no other copy of, and that is
+//! not something to get subtly wrong on the first version.
+//!
+//! The order of operations matters. Files are copied first and the database is
+//! rewritten last, via a temporary file that is renamed into place — so an
+//! interrupted sync leaves the old, working database intact and at worst a few
+//! unreferenced files on the device.
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +21,15 @@ use super::itunesdb::types::{IpodTrack, ItunesDb};
 use super::itunesdb::writer;
 use super::IpodDevice;
 
+/// Identity used to decide whether a library track is already on the device.
+///
+/// Paths are useless here — the same song has a different path on each side —
+/// and file hashes would mean reading every byte of both libraries.
+///
+/// The fourth component is *duration*, not file size. A FLAC transcoded to MP3
+/// on its way to the iPod arrives at a completely different size, and matching
+/// on size would copy it again on every single sync. Duration survives the
+/// conversion. Whole seconds, because encoders disagree in the milliseconds.
 fn fingerprint(artist: &str, album: &str, title: &str, seconds: u64) -> String {
     format!(
         "{}\u{1}{}\u{1}{}\u{1}{}",
@@ -37,30 +58,72 @@ fn ipod_fingerprint(track: &IpodTrack) -> String {
     )
 }
 
+/// What a sync would do, worked out before anything is touched.
 #[derive(Debug, Default)]
 pub struct SyncPlan {
+    /// Library tracks that are not on the device yet.
     pub to_copy: Vec<Track>,
+    /// Library tracks already present, matched by fingerprint.
     pub already_present: usize,
+    /// Tracks on the device that the library does not have. These are kept.
     pub device_only: usize,
+    /// Their ids on the device, for the report.
     pub device_only_ids: Vec<u32>,
+    /// Of those, the ones whose names the library spells another way — case,
+    /// accents, spaces — with the spelling they get: artist, album artist,
+    /// album, genre. Nothing else of theirs is touched.
     pub respell: Vec<(u32, [String; 4])>,
+    /// Library tracks whose file has gone missing since the last scan.
     pub missing_files: Vec<PathBuf>,
+    /// Tracks in a format this iPod cannot play. Copying them would waste
+    /// space on files the device never lists.
     pub incompatible: Vec<Track>,
+    /// Bytes the copy would add to the device.
     pub bytes_to_copy: u64,
+    /// Playlists the sync writes on the device because the one there is not
+    /// what it should be, or is not there at all.
     pub lists: Vec<DeviceList>,
+    /// Tracks already on the device whose tags the library has changed since:
+    /// the device's track id and the library's track, whose tags it gets.
     pub retag: Vec<(u32, Track)>,
+    /// Tracks written by an older Kessler, found again, and the library id
+    /// their persistent id will carry from now on — see [`KESSLER_MARK`].
     pub rekey: Vec<(u32, i64)>,
+    /// Sound Check for the library's tracks, by library id, where their
+    /// loudness is known — see [`soundcheck`]. Written with a copy, and a
+    /// track already on the device whose value differs is retagged for it.
     pub soundcheck: std::collections::HashMap<i64, u32>,
+    /// Of `retag`, how many only for Sound Check — their tags are as they
+    /// were.
     pub sound_only: usize,
+    /// The device's own playlists, by name, that go: every one but the
+    /// library's and those Kessler keeps. Only a sync of the whole library
+    /// fills this in.
     pub drop_lists: Vec<String>,
+    /// Episodes of podcasts kessler put on the device that are no longer
+    /// among the ones wanted there — heard, archived, their file let go of:
+    /// the device's ids of them. They go from the database and their files
+    /// from the disk — see [`plan_podcasts`]. The one thing a sync deletes.
     pub drop_tracks: Vec<u32>,
+    /// The device's database is not in the order its menus need — written
+    /// by an older kessler, or by someone else — and is written again even with
+    /// nothing to copy, so the 3G lists each artist and record once (see
+    /// `writer::index_mhod`).
     pub reorder: bool,
 }
 
+/// A playlist Kessler keeps on the device by itself — „zuletzt hinzugefügt".
+///
+/// Written whole each time it changes, in place of the one of the same name:
+/// the device's copy is a picture of the library's newest tracks, not a list
+/// anybody edits there. `also_named` are the names it may have been written
+/// under before — the other language's — so a window switched to English does
+/// not leave a second list behind on the device.
 #[derive(Debug, Clone)]
 pub struct DeviceList {
     pub name: String,
     pub also_named: Vec<String>,
+    /// In the order they are to stand, newest first.
     pub tracks: Vec<Track>,
 }
 
@@ -81,6 +144,12 @@ impl SyncPlan {
             && !self.reorder
     }
 
+    /// Take only the first few tracks of the plan.
+    ///
+    /// For the first write to a device nobody has written to before: copy one
+    /// album, unplug it, look at the screen. A plan that has been cut short is
+    /// still a whole plan — the byte count follows it, or the interface would
+    /// promise a gigabyte and copy a song.
     pub fn first(mut self, most: usize) -> Self {
         if self.to_copy.len() <= most {
             return self;
@@ -90,6 +159,7 @@ impl SyncPlan {
         self
     }
 
+    /// Distinct source formats among the tracks this device cannot play.
     pub fn incompatible_formats(&self) -> Vec<String> {
         let mut formats: Vec<String> = self
             .incompatible
@@ -102,14 +172,27 @@ impl SyncPlan {
     }
 }
 
+/// The high half of the persistent id of a track Kessler copies: the low
+/// half is the library's own id for it. So a track can be found again on the
+/// device after its tags have changed in the library — by who it is, not by
+/// what it is called. („KESS" in ASCII.)
 pub const KESSLER_MARK: u64 = 0x4B45_5353_0000_0000;
 
+/// The high half older Kessler versions stamped their copies with, the low
+/// half being the device's track id — which says nothing about the library.
+/// Such a track, found again by its tags, is re-stamped with [`KESSLER_MARK`].
 const OLD_MARK: u64 = 0xC7A7_E01D_0000_0000;
 
 const MARK_MASK: u64 = 0xFFFF_FFFF_0000_0000;
 
+/// The high half of the persistent id of a podcast's episode kessler
+/// copies („KPOD"): what tells the episodes it put there, and may take off
+/// again, from everything else on the device.
 pub const PODCAST_MARK: u64 = 0x4B50_4F44_0000_0000;
 
+/// The episodes kessler put on the device that are not in `list` any more
+/// go: into [`SyncPlan::drop_tracks`]. Only its own, by [`PODCAST_MARK`] —
+/// an episode somebody else put there is nobody's to delete.
 pub fn plan_podcasts(plan: &mut SyncPlan, list: &DeviceList, device_db: &ItunesDb) {
     let wanted: HashSet<String> = list.tracks.iter().map(library_fingerprint).collect();
     plan.drop_tracks = device_db
@@ -120,10 +203,14 @@ pub fn plan_podcasts(plan: &mut SyncPlan, list: &DeviceList, device_db: &ItunesD
         .collect();
 }
 
+/// The library id a device track carries, if Kessler copied it.
 fn library_id_of(track: &IpodTrack) -> Option<i64> {
     (track.dbid & MARK_MASK == KESSLER_MARK).then_some((track.dbid & 0xFFFF_FFFF) as i64)
 }
 
+/// Which of `library` a device track is: by the library id kessler stamped
+/// it with, else by its tags and length. For plays heard on the iPod — see
+/// `playcounts`.
 pub fn library_index(track: &IpodTrack, library: &[Track]) -> Option<usize> {
     if let Some(id) = library_id_of(track) {
         if let Some(at) = library.iter().position(|t| t.id == id) {
@@ -134,10 +221,14 @@ pub fn library_index(track: &IpodTrack, library: &[Track]) -> Option<usize> {
     library.iter().position(|t| library_fingerprint(t) == wanted)
 }
 
+/// A name as it is compared when looking for a retagged track: lower case,
+/// letters and figures only.
 fn plain(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
+/// Whether two titles are one title spelt two ways: the same once plain, or
+/// a few letters apart — a typo put right, a „(remastered)" taken off.
 fn near(a: &str, b: &str) -> bool {
     let (a, b) = (plain(a), plain(b));
     if a == b || (!a.is_empty() && !b.is_empty() && (a.starts_with(&b) || b.starts_with(&a))) {
@@ -162,6 +253,13 @@ fn edit_distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// The library's tags as the device stores them — with nothing where the
+/// library has nothing, rather than the stand-ins it shows in the window (the
+/// file's name), which would overwrite a real name on the device. A name as it
+/// goes onto the device: trimmed, each run of spaces one space, and nothing
+/// left that cannot be seen. The iPod groups by the exact text, so „mr oizo "
+/// with a space at its end, or with a zero-width character a tag editor left in
+/// it, stood beside „mr oizo" as an artist of its own.
 fn tidy(text: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     let seen: String = text
@@ -171,6 +269,16 @@ fn tidy(text: &str) -> String {
     seen.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// One spelling for every name, as the library's own columns show it.
+///
+/// The library takes „Qluster" and „qluster" — or „Amon Düül" and „Amon Duul" —
+/// for one artist (`crate::db::sort_key`), and shows her under the spelling
+/// most of her tracks carry. The iPod compares names as written: every spelling
+/// stood in its menus as an artist of its own, her records split between them
+/// (found with the report). So a name goes onto the device the way the library
+/// shows it — the most frequent spelling, ties alphabetically, as
+/// `Database::get_artists` chooses — for artists (and album artists, which are
+/// the same names), albums and genres. The files keep theirs.
 pub struct Spellings {
     chosen: std::collections::HashMap<(u8, String), String>,
 }
@@ -218,6 +326,7 @@ impl Spellings {
             .unwrap_or(written)
     }
 
+    /// The track with its names spelled the one way.
     pub fn applied(&self, track: &Track) -> Track {
         let mut track = track.clone();
         track.artist = self.spell(NAMES, &track.artist);
@@ -247,10 +356,16 @@ fn device_tags(track: &Track) -> (String, String, String, String, String, u32, u
     )
 }
 
+/// Whether the device's entry says something other than the library does.
+/// A field the library leaves empty is not held against the device: an
+/// empty genre in the library is no reason to take one off the iPod.
 fn tags_differ(device: &IpodTrack, library: &Track) -> bool {
     !tag_changes(device, library).is_empty()
 }
 
+/// The fields [`tags_differ`] finds: each one's name, as the device has it,
+/// and as the library would write it. For the report, so a retag that comes
+/// back after every sync says which field will not settle.
 pub fn tag_changes(device: &IpodTrack, library: &Track) -> Vec<(&'static str, String, String)> {
     let (title, artist, album, album_artist, genre, year, number, disc) = device_tags(library);
     let mut changes = Vec::new();
@@ -281,10 +396,14 @@ pub fn tag_changes(device: &IpodTrack, library: &Track) -> Vec<(&'static str, St
     changes
 }
 
+/// Spaces and nothing else: no name, but an entry of its own in the device's
+/// menus beside the empty one. The library's empty field clears it.
 fn blank(text: &str) -> bool {
     !text.is_empty() && text.trim().is_empty()
 }
 
+/// Give a device track the library's tags, field by field, leaving what the
+/// library has nothing for — see [`tags_differ`].
 fn take_tags(device: &mut IpodTrack, library: &Track) {
     let (title, artist, album, album_artist, genre, year, number, disc) = device_tags(library);
     let text = |into: &mut String, mine: String| {
@@ -308,6 +427,19 @@ fn take_tags(device: &mut IpodTrack, library: &Track) {
     device.date_modified = Some(library.date_modified.and_utc().timestamp());
 }
 
+/// Work out what would be copied, without touching the device.
+///
+/// `generation` decides which formats are usable; tracks in anything else are
+/// set aside rather than copied.
+///
+/// A library track is looked for on the device three ways, in order: by the
+/// library id Kessler stamped its copy with; by its tags and length (the
+/// fingerprint); and — for one whose tags have changed since it was copied — by
+/// its length and most of its tags, when exactly one track on the device that
+/// nothing else has claimed fits. The last is done after the first two for
+/// every track, so a record's other songs have already claimed theirs. A track
+/// found by either of the last two whose tags differ is retagged on the device
+/// rather than copied again.
 pub fn plan(
     library: &[Track],
     device_db: &ItunesDb,
@@ -317,6 +449,9 @@ pub fn plan(
     plan_in(library, library, device_db, generation, soundcheck)
 }
 
+/// [`plan`] for some of the library — a selection, an artist — with the
+/// names spelled as the `whole` of it spells them, so sending one record
+/// does not write a spelling the next whole sync would take back.
 pub fn plan_in(
     library: &[Track],
     whole: &[Track],
@@ -407,6 +542,11 @@ pub fn plan_in(
     plan
 }
 
+/// The tracks nothing in the library claims whose names the library spells
+/// another way, with the library's spelling — or, for a name the library does
+/// not have, the name tidied. „Ground Zero" and „ground zero" were two artists
+/// in the device's menus as long as one of them was a track only the device
+/// has.
 fn respelled(spellings: &Spellings, tracks: &[IpodTrack], claimed: &[bool]) -> Vec<(u32, [String; 4])> {
     tracks
         .iter()
@@ -425,6 +565,9 @@ fn respelled(spellings: &Spellings, tracks: &[IpodTrack], claimed: &[bool]) -> V
         .collect()
 }
 
+/// The library's tracks that are on the device already, by their ids — what a
+/// sync would leave be. For the mark beside a title in the library while a
+/// device is plugged in.
 pub fn on_device(library: &[Track], device_db: &ItunesDb) -> HashSet<i64> {
     let (found, _) = match_library(library, &device_db.tracks);
     library
@@ -434,6 +577,8 @@ pub fn on_device(library: &[Track], device_db: &ItunesDb) -> HashSet<i64> {
         .collect()
 }
 
+/// Each library track's device track, if it has one, and which device
+/// tracks were claimed — see [`plan`] for how they are found.
 fn match_library(library: &[Track], tracks: &[IpodTrack]) -> (Vec<Option<usize>>, Vec<bool>) {
     use std::collections::HashMap;
     let mut by_fingerprint: HashMap<String, usize> = HashMap::new();
@@ -490,10 +635,14 @@ fn match_library(library: &[Track], tracks: &[IpodTrack]) -> (Vec<Option<usize>>
     (found, claimed)
 }
 
+/// Name the device's own playlists for removal: every one but the library
+/// (the master) and the ones Kessler keeps, which are written anew anyway.
+/// Podcasts are the device's business and stay.
 pub fn plan_dropping_lists(plan: &mut SyncPlan, device_db: &ItunesDb, keep: &[DeviceList]) {
     plan.drop_lists = foreign_lists(device_db, keep);
 }
 
+/// The device's playlists that are neither the library nor one of `keep`.
 pub fn foreign_lists(device_db: &ItunesDb, keep: &[DeviceList]) -> Vec<String> {
     device_db
         .playlists
@@ -504,6 +653,12 @@ pub fn foreign_lists(device_db: &ItunesDb, keep: &[DeviceList]) -> Vec<String> {
         .collect()
 }
 
+/// Add `list` to the plan unless the device already holds it as it should be.
+///
+/// Current means: a playlist of its name is there, and it lists exactly the
+/// tracks it should, in order, every one of which is already on the device.
+/// A track of it that the plan is about to copy makes it out of date by
+/// definition — the copy is new, so the list on the device cannot have it.
 pub fn plan_list(
     plan: &mut SyncPlan,
     list: DeviceList,
@@ -516,6 +671,10 @@ pub fn plan_list(
     }
 }
 
+/// Whether the device's copy of `list` is what it should be.
+///
+/// `converts`: whether what this device cannot play is converted on the way,
+/// so that it too belongs on the device.
 pub fn list_is_current(
     list: &DeviceList,
     device_db: &ItunesDb,
@@ -541,6 +700,8 @@ pub fn list_is_current(
         .is_some_and(|p| p.track_ids == wanted)
 }
 
+/// Each device track's id by its fingerprint, the first one where there are
+/// two of the same.
 fn device_ids<'a>(tracks: impl Iterator<Item = &'a IpodTrack>) -> std::collections::HashMap<String, u32> {
     let mut ids = std::collections::HashMap::new();
     for track in tracks {
@@ -549,6 +710,9 @@ fn device_ids<'a>(tracks: impl Iterator<Item = &'a IpodTrack>) -> std::collectio
     ids
 }
 
+/// Put `lists` into the device's playlists, each in place of any of its
+/// names, by the tracks the device now holds. One that was there keeps its id,
+/// so the device sees the same list with new contents.
 fn write_lists(db: &mut ItunesDb, lists: &[DeviceList]) {
     if lists.is_empty() {
         return;
@@ -587,6 +751,7 @@ fn write_lists(db: &mut ItunesDb, lists: &[DeviceList]) {
     }
 }
 
+/// Progress reported while a sync runs.
 #[derive(Debug, Clone)]
 pub enum SyncProgress {
     BackedUp(PathBuf),
@@ -608,13 +773,21 @@ pub enum SyncProgress {
     Done {
         copied: usize,
         failed: usize,
+        /// Playlists written — see [`DeviceList`].
         lists: usize,
+        /// Tracks given the library's tags, and playlists taken off.
         retagged: usize,
         dropped: usize,
+        /// Stopped before every track was across: what was copied is in the
+        /// database, the rest is not.
         stopped: bool,
     },
 }
 
+/// Apply a plan to a device.
+///
+/// Refuses outright if the hardware requires a database signature Kessler
+/// cannot produce, or if the tracks would not fit.
 pub fn apply(
     device: &IpodDevice,
     info: &DeviceInfo,
@@ -841,6 +1014,11 @@ pub fn apply(
     Ok(())
 }
 
+/// The files in the device's music folders that its database does not list —
+/// what a sync broke off before the database was written left behind, or
+/// another program's leftovers — with their sizes. Nothing on a device
+/// without a database: everything there would be unlisted. Hidden files
+/// (the Mac's `._` companions) are left alone.
 pub fn unlisted_files(device: &IpodDevice) -> Result<Vec<(PathBuf, u64)>> {
     if !device.has_database() {
         return Ok(Vec::new());
@@ -876,6 +1054,8 @@ pub fn unlisted_files(device: &IpodDevice) -> Result<Vec<(PathBuf, u64)>> {
     Ok(found)
 }
 
+/// Take the unlisted files off the device — see [`unlisted_files`] — and say
+/// how many went and how many bytes they were.
 pub fn remove_unlisted(device: &IpodDevice) -> Result<(usize, u64)> {
     let mut gone = (0, 0);
     for (path, size) in unlisted_files(device)? {
@@ -887,13 +1067,18 @@ pub fn remove_unlisted(device: &IpodDevice) -> Result<(usize, u64)> {
     Ok(gone)
 }
 
+/// What taking tracks off the device came to.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Removed {
     pub tracks: usize,
     pub bytes: u64,
+    /// Files that stayed on the device although their entries went.
     pub files_left: usize,
 }
 
+/// Take tracks out of a database — out of the library and out of every
+/// playlist — and say how many went, which files they were, as the device
+/// stores them, and how many bytes.
 fn drop_tracks(db: &mut ItunesDb, ids: &HashSet<u32>) -> (usize, Vec<PathBuf>, u64) {
     let before = db.tracks.len();
     let mut files = Vec::new();
@@ -913,6 +1098,11 @@ fn drop_tracks(db: &mut ItunesDb, ids: &HashSet<u32>) -> (usize, Vec<PathBuf>, u
     (before - db.tracks.len(), files, bytes)
 }
 
+/// Take tracks off the device, by the device's own ids.
+///
+/// The database is backed up first and written before any file goes: a
+/// failure half way leaves files nothing lists, which cost space, rather
+/// than entries whose file is gone, which the iPod stumbles over.
 pub fn remove(device: &IpodDevice, info: &DeviceInfo, ids: &[u32]) -> Result<Removed> {
     if let Err(why) = info.writable() {
         return Err(KesslerError::Ipod(why));
@@ -941,6 +1131,16 @@ pub fn remove(device: &IpodDevice, info: &DeviceInfo, ids: &[u32]) -> Result<Rem
     Ok(Removed { tracks, bytes, files_left })
 }
 
+/// Give the device a new name.
+///
+/// The name an iPod goes by — under settings → about, and in iTunes — is the
+/// name of its master playlist, so that is what changes. The volume keeps its
+/// own label: renaming a mounted disk unmounts it on the Mac and wants root on
+/// Linux, and a FAT label could not hold most names anyway.
+///
+/// Written like every other change: the device's own play counts folded in
+/// first, the old database put aside, the new one read back before it goes
+/// in.
 pub fn rename(device: &IpodDevice, info: &DeviceInfo, name: &str) -> Result<()> {
     if let Err(why) = info.writable() {
         return Err(KesslerError::Ipod(why));
@@ -967,6 +1167,7 @@ pub fn rename(device: &IpodDevice, info: &DeviceInfo, name: &str) -> Result<()> 
     Ok(())
 }
 
+/// Copy the current database aside, timestamped, and return where it went.
 pub fn backup_database(device: &IpodDevice) -> Result<PathBuf> {
     let source = device.itunesdb_path();
     let dir = source
@@ -987,8 +1188,11 @@ pub fn backup_database(device: &IpodDevice) -> Result<PathBuf> {
     Ok(destination)
 }
 
+/// How many backups of the database stay on the device. Each is as large as
+/// the database — megabytes for a full disk — and one is left at every sync.
 const BACKUPS_KEPT: usize = 10;
 
+/// Take all but the newest `keep` of kessler's backups out of `dir`.
 fn prune_backups(dir: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let mut backups: Vec<(i64, PathBuf)> = entries
@@ -1005,6 +1209,15 @@ fn prune_backups(dir: &Path, keep: usize) {
     }
 }
 
+/// Write the database through a temporary file, then rename it into place.
+///
+/// A rename within the same directory is atomic on every filesystem an iPod
+/// uses, so the device never sees a partially written database.
+///
+/// The iPod classic and the nano 3G and 4G get it signed — see `hash58`.
+///
+/// A shuffle gets its `iTunesSD` written from the same database right after
+/// — see `itunessd` — since that, not the database, is what it plays from.
 fn write_database(device: &IpodDevice, info: &DeviceInfo, db: &ItunesDb) -> Result<()> {
     let generation = info.generation;
     let final_path = device.itunesdb_path();
@@ -1046,6 +1259,20 @@ fn write_database(device: &IpodDevice, info: &DeviceInfo, db: &ItunesDb) -> Resu
     Ok(())
 }
 
+/// Where ffmpeg is, if it is anywhere Kessler can find it.
+///
+/// `PATH` first, and then the handful of places a package manager actually
+/// puts it. The second half is not belt and braces. **A macOS application
+/// launched from the Finder inherits almost no `PATH`** — `/usr/bin:/bin:` and
+/// the two sbins, nothing else — so Homebrew's `/opt/homebrew/bin` is
+/// invisible to it. The same build found ffmpeg when run from a terminal and
+/// not when double-clicked, and what that looked like from the outside was the
+/// conversion feature simply not existing: the offer to convert is only made
+/// when there is something to convert *with*, so it silently never appeared.
+///
+/// Looked for once and remembered: finding it means running it, and the menu
+/// asks every frame it is open. An ffmpeg installed while the program runs is
+/// found at the next start.
 pub fn transcoder() -> Option<PathBuf> {
     static FOUND: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     FOUND.get_or_init(look_for_transcoder).clone()
@@ -1061,6 +1288,10 @@ fn look_for_transcoder() -> Option<PathBuf> {
     found_among(Path::new("ffmpeg"), &known)
 }
 
+/// The first of these that answers `-version`.
+///
+/// Apart from [`transcoder`] so the search can be tested without depending on
+/// what happens to be installed on the machine running the tests.
 fn found_among(on_path: &Path, known: &[&str]) -> Option<PathBuf> {
     let runs = |what: &Path| -> bool {
         std::process::Command::new(what)
@@ -1080,6 +1311,10 @@ fn found_among(on_path: &Path, known: &[&str]) -> Option<PathBuf> {
         .find(|at| at.is_file() && runs(at))
 }
 
+/// macOS's own converter, which every Mac has: Core Audio reads FLAC (and WAV,
+/// AIFF, Apple Lossless) and writes AAC, which every iPod since the third
+/// generation plays. So on a Mac nothing has to be installed to put a FLAC on
+/// an iPod. It does not read Ogg Vorbis; that still needs ffmpeg.
 pub fn afconvert() -> Option<PathBuf> {
     if !cfg!(target_os = "macos") {
         return None;
@@ -1088,12 +1323,16 @@ pub fn afconvert() -> Option<PathBuf> {
     at.is_file().then_some(at)
 }
 
+/// Whether there is anything to convert with.
 pub fn transcoder_available() -> bool {
     afconvert().is_some() || transcoder().is_some()
 }
 
+/// The start of the scratch folders' names in the system's temporary folder.
 pub const SCRATCH_PREFIX: &str = "kessler-transcode-";
 
+/// What a file the device cannot play is converted to, as chosen under menu →
+/// ipod: AAC at a bit rate, Apple Lossless, or MP3 at 320 kbit/s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Aac(u32),
@@ -1102,8 +1341,10 @@ pub enum Target {
 }
 
 impl Target {
+    /// Every choice, by its name in the config file and the menu.
     pub const NAMES: [&'static str; 5] = ["aac 256", "aac 320", "aac 192", "alac", "mp3 320"];
 
+    /// The choice a name stands for; AAC at 256 kbit/s for anything else.
     pub fn from_name(name: &str) -> Self {
         match name.trim() {
             "aac 320" => Self::Aac(320),
@@ -1115,10 +1356,17 @@ impl Target {
     }
 }
 
+/// What a file of this format becomes on the way to a device that plays
+/// AAC and Apple Lossless, here, as `target` asks: `aac`, `alac` or `mp3` —
+/// or nothing, when nothing here can read it.
 pub fn converts_to(format: &str, target: Target) -> Option<&'static str> {
     choose(format, target, true, true, afconvert().is_some(), transcoder().is_some())
 }
 
+/// What `target` becomes for a device that plays `m4a` and `alac` or not,
+/// with the converters there are. afconvert reads no Vorbis or Opus; a device
+/// that plays no Apple Lossless gets AAC; one that plays no AAC, MP3; and MP3
+/// needs ffmpeg, without which AAC it is.
 fn choose(format: &str, target: Target, m4a: bool, alac: bool, afconvert: bool, ffmpeg: bool) -> Option<&'static str> {
     let vorbis = matches!(format.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus");
     let apple = afconvert && !vorbis;
@@ -1136,6 +1384,8 @@ fn choose(format: &str, target: Target, m4a: bool, alac: bool, afconvert: bool, 
     }
 }
 
+/// The targets for a set of formats, for a line in the window: „aac",
+/// „aac, mp3".
 pub fn conversion_word(formats: &[String], target: Target) -> String {
     let mut words: Vec<&str> = formats.iter().filter_map(|f| converts_to(f, target)).collect();
     words.sort();
@@ -1143,6 +1393,9 @@ pub fn conversion_word(formats: &[String], target: Target) -> String {
     words.join(", ")
 }
 
+/// Convert one file for the device, by whichever converter takes it —
+/// see [`choose`]: afconvert for AAC and Apple Lossless where it can, ffmpeg
+/// for the rest.
 fn convert_for_device(track: &Track, scratch: &Path, generation: Generation, target: Target) -> Result<PathBuf> {
     let apple = afconvert().is_some() && !matches!(track.format.to_ascii_lowercase().as_str(), "ogg" | "oga" | "opus");
     let kbps = match target {
@@ -1163,6 +1416,9 @@ fn convert_for_device(track: &Track, scratch: &Path, generation: Generation, tar
     }
 }
 
+/// The bit rate and sample rate of a converted copy, for its line in the
+/// database: AAC and MP3 at the rate they were made at, Apple Lossless by its
+/// size over its length; at 44.1 kHz where it was made so.
 fn converted_rates(on_device: &Path, made: &Path, track: &Track, target: Target) -> (u32, u32) {
     let m4a = made.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4a"));
     if !m4a {
@@ -1179,6 +1435,8 @@ fn converted_rates(on_device: &Path, made: &Path, track: &Track, target: Target)
     }
 }
 
+/// The form a copy on the device is in: `mp3`, `alac` or `aac`, and its bit
+/// rate. Apple Lossless by its kind's word, else by a rate no AAC has.
 fn device_form(track: &IpodTrack) -> (&'static str, u32) {
     let ending = track
         .path
@@ -1194,6 +1452,11 @@ fn device_form(track: &IpodTrack) -> (&'static str, u32) {
     }
 }
 
+/// The device's converted copies — of library tracks this model cannot play
+/// as they are — that are not in the form now chosen: AAC at another rate,
+/// AAC where Apple Lossless is chosen, and so on. Each with the library track
+/// it is a copy of, for „neu umwandeln": converted again, and the old copy
+/// taken off.
 pub fn stale_conversions(library: &[Track], device_db: &ItunesDb, generation: Generation, target: Target) -> Vec<(u32, Track)> {
     let (found, _) = match_library(library, &device_db.tracks);
     let (apple, ffmpeg) = (afconvert().is_some(), transcoder().is_some());
@@ -1221,6 +1484,9 @@ pub fn stale_conversions(library: &[Track], device_db: &ItunesDb, generation: Ge
     stale
 }
 
+/// The scratch folders a sync left behind — the program quit or stopped
+/// mid-way — that are older than an hour: none of this run's, which takes
+/// minutes at most per track. Asked once at the start.
 pub fn sweep_scratch() {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
     for entry in entries.flatten() {
@@ -1240,6 +1506,11 @@ pub fn sweep_scratch() {
     }
 }
 
+/// Convert to AAC at `kbps` or to Apple Lossless (`lossless`) with afconvert,
+/// then write the library's tags into it — afconvert carries the sound across
+/// and nothing else. At 44.1 kHz whatever the source's rate, and Apple
+/// Lossless in 16 bits: the older iPods go no higher, and a 96 kHz or 24-bit
+/// FLAC would otherwise be refused or silent.
 fn transcode_with_afconvert(track: &Track, scratch: &Path, lossless: bool, kbps: u32) -> Result<PathBuf> {
     std::fs::create_dir_all(scratch)?;
     let stem = track
@@ -1277,6 +1548,7 @@ fn transcode_with_afconvert(track: &Track, scratch: &Path, lossless: bool, kbps:
     Ok(destination)
 }
 
+/// Write the library's tags for `track` into a freshly converted file.
 fn tag_like(path: &Path, track: &Track) -> std::result::Result<(), lofty::error::LoftyError> {
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
@@ -1310,6 +1582,7 @@ fn tag_like(path: &Path, track: &Track) -> std::result::Result<(), lofty::error:
     file.save_to_path(path, WriteOptions::default())
 }
 
+/// What ffmpeg makes.
 #[derive(Debug, Clone, Copy)]
 enum Codec {
     Aac(u32),
@@ -1317,6 +1590,13 @@ enum Codec {
     Mp3,
 }
 
+/// Convert one file with ffmpeg in `scratch`, keeping its tags: MP3 at 320
+/// kbit/s, AAC at a bit rate, or Apple Lossless in 16 bits — the last two at
+/// 44.1 kHz, as afconvert makes them.
+///
+/// Shelling out to ffmpeg rather than linking an encoder: the alternative is
+/// bundling LAME, and a music library manager should not ship a codec when
+/// every machine that plays music already has one available.
 fn transcode_with_ffmpeg(source: &Path, scratch: &Path, codec: Codec) -> Result<PathBuf> {
     std::fs::create_dir_all(scratch)?;
 
@@ -1376,6 +1656,7 @@ fn transcode_with_ffmpeg(source: &Path, scratch: &Path, codec: Codec) -> Result<
     Ok(destination)
 }
 
+/// Pick a free `iPod_Control/Music/F##/XXXX.ext` for a new file.
 fn allocate_path(
     device: &IpodDevice,
     source: &Path,
@@ -1415,12 +1696,16 @@ fn four_letter_name(mut value: u32) -> String {
     name
 }
 
+/// Turn a library track into its on-device form.
+/// Sound Check's number for a track gain in dB, held down so a quiet track
+/// with a high peak is not turned up past full scale.
 pub fn soundcheck(gain_db: f64, peak: f64) -> u32 {
     let ceiling = if peak > 0.0 { -20.0 * peak.log10() } else { gain_db };
     let gain = gain_db.min(ceiling);
     (1000.0 * 10f64.powf(-gain / 10.0)).round().clamp(1.0, u32::MAX as f64) as u32
 }
 
+/// Sound Check for every library track whose loudness is known.
 pub fn soundcheck_table(db: &crate::db::Database) -> std::collections::HashMap<i64, u32> {
     db.loudness_rows()
         .map(|rows| {
@@ -1431,6 +1716,8 @@ pub fn soundcheck_table(db: &crate::db::Database) -> std::collections::HashMap<i
         .unwrap_or_default()
 }
 
+/// The words iTunes writes for a file's kind (`mhod` 6), as libgpod's users
+/// fill them in too; every track that came from iTunes has one.
 fn filetype_word(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("mp3") => "MPEG audio file",
@@ -1508,6 +1795,8 @@ mod limit_tests {
         }
     }
 
+    /// A plan cut short has to be honest about what it will now copy — the
+    /// figure the person reads before saying yes.
     #[test]
     fn a_shortened_plan_counts_its_own_bytes() {
         let plan = SyncPlan {
@@ -1534,6 +1823,8 @@ mod limit_tests {
 mod tests {
     use super::*;
 
+    /// A database from before the indices is written again once, even with
+    /// nothing to copy; written, it is in order and left alone.
     #[test]
     fn a_database_out_of_order_is_written_again_once() {
         let mut db = ItunesDb {
@@ -1560,6 +1851,7 @@ mod tests {
         assert!(after.is_empty());
     }
 
+    /// Only the newest backups stay; anything else in the folder is left.
     #[test]
     fn old_backups_are_taken_away() {
         let dir = std::env::temp_dir().join(format!("kessler-backups-{}", std::process::id()));
@@ -1580,6 +1872,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A track with its names untidy in the library is the same track as
+    /// its tidied copy on the device, so it is neither copied again nor
+    /// leaves its playlist out of date.
     #[test]
     fn an_untidy_name_is_found_tidied_on_the_device() {
         assert_eq!(
@@ -1588,6 +1883,8 @@ mod tests {
         );
     }
 
+    /// A master playlist in order over a track list that is not — as older
+    /// kessler wrote them — is written again, once.
     #[test]
     fn a_track_list_out_of_the_master_order_is_written_again() {
         let mut db = ItunesDb {
@@ -1601,6 +1898,8 @@ mod tests {
         assert!(!plan(&[], &again, G, &Default::default()).reorder);
     }
 
+    /// A device whose track numbers do not rise down the list is written again,
+    /// and the written one has them rising.
     #[test]
     fn track_numbers_rise_down_the_list() {
         let mut db = ItunesDb {
@@ -1619,6 +1918,7 @@ mod tests {
         assert!(plan(&[], &swapped, G, &Default::default()).reorder);
     }
 
+    /// A copied track says what kind of file it is, as iTunes's do.
     #[test]
     fn a_copied_track_names_its_kind() {
         assert_eq!(filetype_word(Path::new("iPod_Control/Music/F01/ABCD.mp3")), "MPEG audio file");
@@ -1626,6 +1926,7 @@ mod tests {
         assert_eq!(filetype_word(Path::new("x/ABCD.flac")), "");
     }
 
+    /// A device whose tracks kessler wrote unticked is written again.
     #[test]
     fn unticked_tracks_are_written_again() {
         let mut db = ItunesDb { tracks: vec![device_track(1, "Can", "Rare Two", "a", 1)], ..Default::default() };
@@ -1635,6 +1936,8 @@ mod tests {
         assert!(plan(&[], &db, G, &Default::default()).reorder);
     }
 
+    /// What goes onto the device is trimmed and has nothing invisible left,
+    /// so one artist is one name there.
     #[test]
     fn names_go_onto_the_device_tidied() {
         assert_eq!(tidy("Mr Oizo "), "Mr Oizo");
@@ -1698,6 +2001,9 @@ mod tests {
 
     const G: Generation = Generation::Third;
 
+    /// An episode goes onto the device under its own mark; once it is no
+    /// longer among the ones wanted, it — and only it — goes again: a
+    /// library track, and an episode somebody else put there, stay.
     #[test]
     fn an_episode_is_marked_and_goes_when_it_is_heard() {
         let mut episode = library_track(-7, "the show", "the show", "episode one", 10);
@@ -1726,6 +2032,13 @@ mod tests {
         assert!(!plan.is_empty());
     }
 
+    /// ffmpeg is looked for where it lives, not only where `PATH` points.
+    ///
+    /// The bug this exists for was invisible from the inside: run from a
+    /// terminal the search succeeded, run from a double-clicked application it
+    /// did not, and the only symptom was that the offer to convert never
+    /// appeared. A macOS bundle inherits `/usr/bin:/bin` and the two sbins and
+    /// nothing else, so everything a package manager installs is out of sight.
     #[test]
     fn the_transcoder_is_looked_for_off_the_path_too() {
         let dir = std::env::temp_dir().join("kessler-ffmpeg-search");
@@ -1783,6 +2096,8 @@ mod tests {
         assert_eq!(plan(&library, &device, G, &Default::default()).already_present, 1);
     }
 
+    /// The library's tracks on the device are named by their library ids,
+    /// found as a sync finds them; the rest are not.
     #[test]
     fn on_device_names_what_a_sync_would_leave_be() {
         let library = vec![
@@ -1930,6 +2245,9 @@ mod tests {
         assert_eq!(converted.sample_rate, 44_100);
     }
 
+    /// The newest tracks as a playlist on the device: written when it is not
+    /// there, left alone when it is right, written again in place — same id,
+    /// new contents — when the library has moved on.
     #[test]
     fn the_newest_tracks_are_kept_as_a_playlist_on_the_device() {
         let dir = std::env::temp_dir().join(format!("kessler-list-{}", std::process::id()));
@@ -2005,6 +2323,9 @@ mod tests {
         std::fs::write(&t.path, b"x").unwrap();
     }
 
+    /// An album name put right in the library: the track is found on the
+    /// device by its length and the rest of its tags, and retagged there
+    /// rather than copied a second time.
     #[test]
     fn a_retagged_track_is_retagged_on_the_device_not_copied_again() {
         let mut was = library_track(1, "Boards of Canada", "Music Has the Rigth", "Roygbiv", 3_000);
@@ -2028,6 +2349,8 @@ mod tests {
         assert!(!tags_differ(&on_device, &was));
     }
 
+    /// Sound Check: its number, and a track whose loudness has become known
+    /// since it was copied is retagged for it, not copied again.
     #[test]
     fn sound_check_reaches_the_tracks_already_there() {
         assert_eq!(soundcheck(-6.0, 0.5), 3981);
@@ -2050,6 +2373,8 @@ mod tests {
         plan(std::slice::from_ref(track), device, Generation::Third, loud)
     }
 
+    /// Removed tracks go from the library and from every list, and their
+    /// files are named so they can be deleted.
     #[test]
     fn removed_tracks_leave_the_lists_too() {
         let a = library_track(1, "A", "B", "One", 3_000);
@@ -2064,6 +2389,10 @@ mod tests {
         assert!(device.playlists.iter().any(|p| p.track_ids == vec![8]));
     }
 
+    /// A device without a database — fresh from the Finder's restore — is an
+    /// iPod all the same, reads as an empty library, and gets its database (and
+    /// the folder for it) when first written, with no backup of nothing (as
+    /// libgpod's `itdb_init_ipod`).
     #[test]
     fn a_device_without_a_database_is_an_empty_ipod() {
         let root = crate::library::fixtures::scratch("fresh-ipod");
@@ -2083,6 +2412,9 @@ mod tests {
         assert!(std::fs::read_dir(&itunes).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("backup")));
     }
 
+    /// Taking a track off a shuffle writes its iTunesSD anew from the database,
+    /// without the track: the shuffle plays from that file, not from the
+    /// database.
     #[test]
     fn a_shuffle_gets_its_itunessd_with_the_database() {
         let a = library_track(1, "A", "B", "One", 3_000);
@@ -2104,6 +2436,9 @@ mod tests {
         assert!(!itunes.join("iTunesPState").exists());
     }
 
+    /// One song twice in the library — two releases, other year and
+    /// number — and once on the device: left as it is while one of the two
+    /// agrees with it, instead of retagged back and forth every sync.
     #[test]
     fn one_song_in_two_releases_does_not_flip_the_device() {
         let a = library_track(1, "Toukaseibunshi", "Cryptogramm", "Cryptogramm", 3_000);
@@ -2118,6 +2453,8 @@ mod tests {
         assert!(planned.retag.is_empty(), "in either order");
     }
 
+    /// An album or genre of spaces alone is cleared by the library's empty
+    /// one; a real one the library lacks stays.
     #[test]
     fn a_name_of_spaces_is_cleared() {
         let mut a = library_track(1, "A", "", "One", 3_000);
@@ -2132,6 +2469,9 @@ mod tests {
         assert_eq!((track.album.as_str(), track.genre.as_str()), ("", "Noise"));
     }
 
+    /// A track only the device has keeps everything but how its names are
+    /// spelled: those the library has go as the library spells them, the rest
+    /// tidied. Nothing to change, nothing planned.
     #[test]
     fn a_track_only_on_the_device_is_spelled_as_the_library_does() {
         let a = library_track(1, "Ground Zero", "Consume Next", "One", 3_000);
@@ -2153,6 +2493,10 @@ mod tests {
         assert!(plan(&[a], &db, Generation::Shuffle2, &Default::default()).respell.is_empty());
     }
 
+    /// One artist in two spellings goes onto the device in one, the library's:
+    /// the iPod would list each spelling as an artist of its own. A track
+    /// already there in the other spelling is retagged; a selection is spelled
+    /// as the whole library is.
     #[test]
     fn one_name_goes_over_in_one_spelling() {
         let mut a = library_track(1, "Qluster", "Echtzeit", "One", 3_000);
@@ -2179,6 +2523,9 @@ mod tests {
         assert_eq!(alone.to_copy[0].artist, "Qluster");
     }
 
+    /// Renamed, the iPod is the same iPod under another name: its master list
+    /// is called so, everything on it stays where it was, and the old database
+    /// is kept aside.
     #[test]
     fn a_renamed_ipod_keeps_everything_but_its_name() {
         let a = library_track(1, "A", "B", "One", 3_000);
@@ -2206,6 +2553,8 @@ mod tests {
         assert_eq!(kept, 1);
     }
 
+    /// A converted file gets the library's tags: afconvert brings the sound
+    /// and nothing else.
     #[test]
     fn a_converted_file_is_tagged_like_the_library() {
         use lofty::file::TaggedFileExt;
@@ -2225,6 +2574,8 @@ mod tests {
         assert_eq!(tag.track(), Some(6));
     }
 
+    /// A title taken apart — „u" and its dots — is written composed, and one
+    /// on the device in either form is not brought up to date again.
     #[test]
     fn a_name_taken_apart_is_written_composed_and_not_again() {
         let apart = "Fu\u{0308}r Felix";
@@ -2243,6 +2594,10 @@ mod tests {
         assert!(tag_changes(&device, &library).iter().all(|(field, ..)| *field != "titel"));
     }
 
+    /// What a file becomes is what was chosen, as far as the device plays it
+    /// and something here makes it: afconvert reads everything but Vorbis,
+    /// ffmpeg everything; Apple Lossless only where the device plays it, MP3
+    /// only with ffmpeg, MP3 alone for a device without AAC.
     #[test]
     fn the_target_is_what_was_chosen_as_far_as_it_goes() {
         let aac = Target::Aac(256);
@@ -2271,6 +2626,8 @@ mod tests {
         assert_eq!(Target::from_name("was"), Target::Aac(256));
     }
 
+    /// A track Kessler copied carries its library id, and is found by it
+    /// however much its tags have changed.
     #[test]
     fn a_kessler_copy_is_found_by_its_library_id() {
         let mut track = library_track(42, "Artist", "Album", "Title", 3_000);
@@ -2285,6 +2642,8 @@ mod tests {
         assert_eq!(plan.retag.len(), 1);
     }
 
+    /// A play heard on the iPod finds its library track by the id kessler
+    /// stamped the copy with, and a copy from elsewhere by its tags.
     #[test]
     fn a_device_track_finds_its_library_track() {
         let a = library_track(7, "Artist", "Album", "Title", 3_000);
@@ -2302,6 +2661,8 @@ mod tests {
         assert_eq!(library_index(&foreign, &[a, b]), None);
     }
 
+    /// A song of the same length on the same record is another song, and is
+    /// not mistaken for this one while that one has its own.
     #[test]
     fn another_song_of_the_same_length_is_not_taken_for_this_one() {
         let a = library_track(1, "Artist", "Album", "First Song", 3_000);
@@ -2314,6 +2675,7 @@ mod tests {
         assert!(plan.retag.is_empty());
     }
 
+    /// The library leaving a field empty takes nothing off the device.
     #[test]
     fn an_empty_field_in_the_library_is_not_a_change() {
         let mut track = library_track(1, "Artist", "Album", "Title", 3_000);
@@ -2328,6 +2690,7 @@ mod tests {
         assert_eq!(device.year, 1998);
     }
 
+    /// A whole sync takes off every playlist but the library and Kessler's own.
     #[test]
     fn the_old_playlists_are_named_for_removal() {
         use super::super::itunesdb::types::IpodPlaylist;

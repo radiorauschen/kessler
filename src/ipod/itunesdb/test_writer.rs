@@ -1,3 +1,12 @@
+//! Builds synthetic iTunesDB files for the parser tests.
+//!
+//! Writing the format by hand is the only way to test the parser without a
+//! physical iPod: it pins down every offset the reader depends on. When the
+//! real writer lands in the next phase it can be checked against these same
+//! fixtures.
+
+/// A chunk being assembled. Fields are poked in at absolute offsets, which
+/// keeps the test code readable next to the offset tables in `parser.rs`.
 struct Builder {
     buf: Vec<u8>,
 }
@@ -36,12 +45,14 @@ impl Builder {
         self
     }
 
+    /// Write the total length at +8 and hand back the finished bytes.
     fn finish_with_total(mut self) -> Vec<u8> {
         let total = self.buf.len() as u32;
         self.u32(8, total);
         self.buf
     }
 
+    /// For chunks like mhlt/mhlp whose +8 field is a count, not a length.
     fn finish(self) -> Vec<u8> {
         self.buf
     }
@@ -49,6 +60,7 @@ impl Builder {
 
 const MHOD_HEADER: usize = 0x18;
 
+/// A string mhod. `utf16` picks the encoding so both paths get exercised.
 fn string_mhod(mhod_type: u32, value: &str, utf16: bool) -> Vec<u8> {
     let payload: Vec<u8> = if utf16 {
         value.encode_utf16().flat_map(|u| u.to_le_bytes()).collect()
@@ -65,6 +77,7 @@ fn string_mhod(mhod_type: u32, value: &str, utf16: bool) -> Vec<u8> {
     b.finish_with_total()
 }
 
+/// The position mhod inside an mhip. Its value sits at a fixed +24.
 fn position_mhod(position: u32) -> Vec<u8> {
     let mut b = Builder::new(b"mhod", MHOD_HEADER);
     b.u32(12, 100);
@@ -140,6 +153,8 @@ fn playlist_item(track_id: u32, position: u32) -> Vec<u8> {
     b.finish_with_total()
 }
 
+/// `entries` is `(track_id, position)` in *file* order, which need not be
+/// playlist order — that is exactly what the parser has to sort out.
 fn playlist_chunk(name: &str, is_master: bool, entries: &[(u32, u32)]) -> Vec<u8> {
     let title = string_mhod(1, name, true);
 
@@ -183,6 +198,8 @@ fn database(datasets: &[Vec<u8>]) -> Vec<u8> {
     b.finish_with_total()
 }
 
+/// A three-track, two-playlist database exercising both string encodings,
+/// zero and non-zero timestamps, and out-of-order playlist positions.
 pub fn build_test_db() -> Vec<u8> {
     let tracks = [
         TestTrack {
@@ -250,6 +267,8 @@ pub fn build_test_db() -> Vec<u8> {
     ])
 }
 
+/// One track whose mhods include a type the parser does not know, sitting
+/// between two it does — the unknown one must be skipped cleanly.
 pub fn build_db_with_unknown_mhod() -> Vec<u8> {
     let mhods = [
         string_mhod(1, "Survivor", true),
@@ -280,6 +299,7 @@ pub fn build_db_with_unknown_mhod() -> Vec<u8> {
     ])
 }
 
+/// Offset of the first occurrence of a chunk tag, for corruption tests.
 pub fn find_tag(data: &[u8], tag: &[u8; 4]) -> Option<usize> {
     data.windows(4).position(|w| w == tag)
 }

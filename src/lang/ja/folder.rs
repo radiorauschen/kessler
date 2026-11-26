@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("systemfarben", "システムカラー"),
     ("macos hell", "macos ライト"),

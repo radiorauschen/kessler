@@ -14,6 +14,7 @@ say() { echo "$@"; }
 fail() { echo "notarize: $*" >&2; exit 1; }
 
 BUILD=
+UPLOAD="${KESSLER_UPLOAD:-${UPLOAD:-1}}"
 for arg in "$@"; do
   case "$arg" in
     --build) BUILD=1 ;;
@@ -23,6 +24,7 @@ for arg in "$@"; do
 ./bundle/notarize.sh             sign, notarize and staple target/mac-share/kessler.app
 ./bundle/notarize.sh --build     build it first (make-app.sh --share)
 ./bundle/notarize.sh --no-upload leave the dmg on this mac only
+                                 (also KESSLER_UPLOAD=0)
 
 needs KESSLER_SIGN_IDENTITY ("Developer ID Application: …") and a notary
 profile (xcrun notarytool store-credentials kessler-notary …;
@@ -168,7 +170,7 @@ say "Done: $ZIP"
 say "      $DMG"
 say "Signed, notarized and stapled: opens on any Mac without a right click."
 
-if [[ "${UPLOAD:-1}" == "1" ]]; then
+if [[ "$UPLOAD" == "1" ]]; then
   REPO="${KESSLER_RELEASE_REPO:-radiorauschen/kessler}"
   TAG="mac"
   say
@@ -180,14 +182,17 @@ if [[ "${UPLOAD:-1}" == "1" ]]; then
     FIXED="$WORK/$NAME-macos.dmg"
     cp "$DMG" "$FIXED"
     NOTES="$NAME $VERSION for the mac, signed and notarized. this link always points to the newest notarized build."
+    uploaded=1
     if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-      gh release create "$TAG" --repo "$REPO" --prerelease --title "$NAME for the mac" --notes "$NOTES" ||
-        fail "das release „$TAG\" liess sich nicht anlegen"
+      gh release create "$TAG" --repo "$REPO" --prerelease --title "$NAME for the mac" --notes "$NOTES" || uploaded=0
     else
-      gh release edit "$TAG" --repo "$REPO" --title "$NAME for the mac" --notes "$NOTES" >/dev/null
+      gh release edit "$TAG" --repo "$REPO" --title "$NAME for the mac" --notes "$NOTES" >/dev/null || uploaded=0
     fi
-    gh release upload "$TAG" "$FIXED" --repo "$REPO" --clobber ||
-      fail "die dmg liess sich nicht hochladen"
-    say "Hochgeladen: https://github.com/$REPO/releases/download/$TAG/$NAME-macos.dmg"
+    if [[ "$uploaded" == "1" ]] && gh release upload "$TAG" "$FIXED" --repo "$REPO" --clobber; then
+      say "Hochgeladen: https://github.com/$REPO/releases/download/$TAG/$NAME-macos.dmg"
+    else
+      say "Nicht hochgeladen: das release „$TAG\" in $REPO liess sich nicht schreiben (rechte von gh?)."
+      say "Signiert und notarisiert ist alles trotzdem, in dist/."
+    fi
   fi
 fi

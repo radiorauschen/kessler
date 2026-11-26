@@ -1,3 +1,19 @@
+//! A station that sends HLS: not one endless answer but a playlist of short
+//! pieces, fetched one after the other — what many big stations send, and the
+//! directory lists as `hls`.
+//!
+//! The playlist may first name several versions of the stream (a master
+//! playlist); the best one of audio alone up to [`MOST_BITS`] is taken. Each
+//! piece is fetched with curl, as everything else is, on a thread of its own
+//! that keeps a few pieces ahead and asks the playlist again as a live one
+//! grows. MPEG-TS pieces are taken apart to the AAC (ADTS) or MP3 inside;
+//! pieces of plain AAC or MP3 go as they are. What the decoder reads is then
+//! one stream like any other. What plays is read from the pieces' ID3 tags,
+//! where a station puts it there, and said as an Icecast station's title is.
+//!
+//! Not yet: encrypted pieces (`EXT-X-KEY`) and fragmented MP4 (`EXT-X-MAP`),
+//! which say so instead of playing.
+
 use std::io::{Read, Seek, SeekFrom};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,15 +23,24 @@ use std::time::Duration;
 
 use super::stream::Said;
 
+/// The most a version of the stream may ask for, in bits a second: the best
+/// below this is taken, the least above it where none is below.
 const MOST_BITS: u64 = 320_000;
 
+/// How many pieces before a live playlist's end playback starts: the
+/// players' custom, so there is something in hand.
 const LIVE_BEHIND: usize = 3;
 
+/// How many pieces are held ready ahead of the decoder.
 const AHEAD: usize = 3;
 
+/// How deep master playlists naming playlists are followed.
 const MASTERS_DEEP: u32 = 3;
 
+/// What the decoder reads: the pieces' sound, one after the other.
 pub struct Hls {
+    /// Behind a lock only because the decoder wants a reader it could share;
+    /// one thread reads it.
     pieces: std::sync::Mutex<Receiver<Vec<u8>>>,
     piece: Vec<u8>,
     at: usize,
@@ -58,11 +83,13 @@ impl Drop for Hls {
     }
 }
 
+/// Whether `url`, answered as `kind`, is an HLS playlist.
 pub fn is_hls(url: &str, kind: &str) -> bool {
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
     path.ends_with(".m3u8") || kind.contains("vnd.apple.mpegurl")
 }
 
+/// Fetch `url` whole, as a piece or a playlist is.
 fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let mut command = crate::net::curl();
     command
@@ -80,6 +107,7 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// `link` as an address, read against the playlist at `base`.
 fn resolve(base: &str, link: &str) -> String {
     if link.starts_with("http://") || link.starts_with("https://") {
         return link.to_string();
@@ -99,6 +127,7 @@ fn resolve(base: &str, link: &str) -> String {
     }
 }
 
+/// An attribute of a tag line: `BANDWIDTH=128000`, `URI="…"`.
 fn attribute<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let mut rest = line.split_once(':')?.1;
     while !rest.is_empty() {
@@ -120,6 +149,9 @@ fn attribute<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// Where a master playlist points: its audio rendition where it names one,
+/// else the version best for audio — see [`MOST_BITS`]. `None` for a
+/// playlist of pieces.
 fn chosen_version(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let audio = lines
@@ -151,11 +183,16 @@ fn chosen_version(text: &str) -> Option<String> {
     Some(best.2.to_string())
 }
 
+/// A playlist of pieces.
 #[derive(Debug, Default, PartialEq)]
 struct Pieces {
+    /// How long a piece is at most, in seconds.
     target: f64,
+    /// Each piece's number and address.
     pieces: Vec<(u64, String)>,
+    /// No more will come: a recording, not a live stream.
     ended: bool,
+    /// Encrypted, or fragmented MP4: not played yet.
     refused: Option<&'static str>,
 }
 
@@ -183,13 +220,17 @@ fn pieces_in(text: &str, base: &str) -> Pieces {
     list
 }
 
+/// What a piece holds once taken apart: the sound, and what it says plays.
 #[derive(Debug, Default, PartialEq)]
 struct Opened {
     sound: Vec<u8>,
     said: Option<String>,
+    /// Whether the sound is MP3 rather than AAC.
     mp3: bool,
 }
 
+/// Take a piece apart: MPEG-TS to the audio inside, plain AAC or MP3 with
+/// any ID3 tag in front taken off.
 fn open_piece(piece: &[u8]) -> Opened {
     if piece.first() == Some(&0x47) && piece.len() >= 188 && piece.get(188).is_none_or(|&b| b == 0x47) {
         return transport(piece);
@@ -200,10 +241,12 @@ fn open_piece(piece: &[u8]) -> Opened {
     Opened { sound, said, mp3 }
 }
 
+/// Whether bytes start with an ADTS frame: AAC's sync word, layer 0.
 fn is_adts(bytes: &[u8]) -> bool {
     bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] & 0xF6 == 0xF0
 }
 
+/// The title an ID3 tag at the front says, and where the tag ends.
 fn id3_at(bytes: &[u8]) -> (Option<String>, usize) {
     if bytes.len() < 10 || &bytes[..3] != b"ID3" {
         return (None, 0);
@@ -213,6 +256,8 @@ fn id3_at(bytes: &[u8]) -> (Option<String>, usize) {
     (id3_said(&bytes[..end]), end)
 }
 
+/// „artist - title" out of an ID3 tag's TPE1 and TIT2 frames, the title
+/// alone where there is no artist.
 fn id3_said(tag: &[u8]) -> Option<String> {
     if tag.len() < 10 || &tag[..3] != b"ID3" {
         return None;
@@ -246,6 +291,7 @@ fn id3_said(tag: &[u8]) -> Option<String> {
     })
 }
 
+/// An ID3 text frame's words, in whichever of its encodings.
 fn id3_text(body: &[u8]) -> Option<String> {
     let (&encoding, text) = body.split_first()?;
     let text = match encoding {
@@ -269,6 +315,9 @@ fn id3_text(body: &[u8]) -> Option<String> {
     Some(text.trim_matches(|c: char| c == '\0' || c.is_whitespace()).to_string())
 }
 
+/// An MPEG transport stream taken apart: the first stream of sound its
+/// programme lists — AAC in ADTS, or MP3 — with the PES heads taken off,
+/// and the words of any ID3 stream beside it.
 fn transport(bytes: &[u8]) -> Opened {
     let mut programme_pid = None;
     let (mut sound_pid, mut words_pid, mut mp3) = (None, None, false);
@@ -346,6 +395,7 @@ fn transport(bytes: &[u8]) -> Opened {
     opened
 }
 
+/// A PES packet's body: past its head.
 fn pes_body(payload: &[u8]) -> &[u8] {
     if payload.len() < 9 || payload[..3] != [0, 0, 1] {
         return payload;
@@ -354,6 +404,10 @@ fn pes_body(payload: &[u8]) -> &[u8] {
     &payload[head.min(payload.len())..]
 }
 
+/// Open the HLS stream whose playlist at `url` said `text`: the version
+/// chosen, the first piece fetched (so the decoder has something to look
+/// at), and a thread that fetches the rest. Returns the reader and whether
+/// it is MP3 rather than AAC.
 pub fn open(url: &str, text: &str, said: Said) -> Result<(Hls, bool), String> {
     let (mut url, mut text) = (url.to_string(), text.to_string());
     for _ in 0..MASTERS_DEEP {
@@ -388,6 +442,9 @@ pub fn open(url: &str, text: &str, said: Said) -> Result<(Hls, bool), String> {
     Ok((Hls { pieces: std::sync::Mutex::new(pieces), piece: Vec::new(), at: 0, read: 0, stop }, mp3))
 }
 
+/// Fetch the pieces after `done`, one after the other, asking a live
+/// playlist again as it grows, until the decoder lets go or a recording
+/// ends.
 fn follow(url: &str, mut list: Pieces, mut done: u64, tell: SyncSender<Vec<u8>>, said: Said, stop: &AtomicBool) {
     let mut misses = 0;
     loop {
@@ -463,6 +520,7 @@ mod tests {
         assert!(pieces_in("#EXTINF:6,\na.aac\n#EXT-X-ENDLIST\n", "https://x/a.m3u8").ended);
     }
 
+    /// An ID3 tag with an artist and a title, version 2.4.
     fn id3(artist: &str, title: &str) -> Vec<u8> {
         let frame = |id: &[u8], text: &str| {
             let mut body = vec![3u8];
@@ -494,6 +552,7 @@ mod tests {
         assert_eq!(opened.said.as_deref(), Some("Alice Coltrane - Turiya and Ramakrishna"));
     }
 
+    /// A transport stream of one programme: AAC on PID 0x101, ID3 on 0x102.
     fn transport_stream(sound: &[u8], tag: &[u8]) -> Vec<u8> {
         let packet = |pid: u16, start: bool, payload: &[u8]| {
             let mut p = vec![0x47, (if start { 0x40 } else { 0 }) | (pid >> 8) as u8, pid as u8, 0x10];

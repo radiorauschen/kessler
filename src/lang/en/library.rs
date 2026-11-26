@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("eigene 1", "own 1"),
     ("eigene 2", "own 2"),

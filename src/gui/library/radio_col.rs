@@ -1,5 +1,13 @@
+//! The columns while the radio is open, in place of the library's: the stations
+//! kept, or — while something is typed in the search field — what the directory
+//! found; beside them what is known about the station, the programme with
+//! what was heard, and the side. Everything the radio draws is
+//! here; the library's columns know nothing of it beyond being stood in for.
+
 use super::*;
 
+/// The radio in one column, the stations, the station and under them what
+/// was heard: the narrow window's, which shows one column at a time.
 pub(super) fn radio_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) -> Rect {
     let width = m.artists_width;
     let taken = ui.allocate_ui(Vec2::new(width, ui.available_height()), |ui| {
@@ -16,6 +24,9 @@ pub(super) fn radio_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &
     taken.response.rect
 }
 
+/// A click anywhere but in the stations' column lets go of the keyboard's row
+/// there, as a click elsewhere does in the library, whose columns take the keys
+/// when clicked: the playing station keeps its arrow.
 fn let_go_elsewhere(app: &mut GuiApp, ui: &Ui, column: Rect) {
     let clicked_out = ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|at| !column.contains(at)));
     if clicked_out {
@@ -25,6 +36,14 @@ fn let_go_elsewhere(app: &mut GuiApp, ui: &Ui, column: Rect) {
     }
 }
 
+/// The radio across the window: the stations where the artists stand; what is
+/// known about the station beside them; the programme and what was heard; and
+/// whatever of the side is open — „informationen" about whom the station names,
+/// the lyrics, the log — as the library's side comes and goes. The station and
+/// the programme stand while the radio is open. The albums and the queue have
+/// nothing to say about a station; they wait behind it as they were.
+/// `reach`: how far down a column `n` this wide goes — into the foot's band
+/// where nothing is written under it, as the library's columns go.
 pub(super) fn radio_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, full_width: f32, reach: &dyn Fn(&Ui, usize, f32) -> f32) {
     let gap = m.column_gap;
     let min = crate::gui::theme::MIN_NAME_COLUMN;
@@ -166,6 +185,7 @@ pub(super) fn radio_row(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pal
     }
 }
 
+/// The side's column, whatever it holds.
 fn side_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, side: crate::gui::Fourth) {
     match side {
         crate::gui::Fourth::Artist if app.shown_artist().is_none() => nobody_named(app, ui, m, palette, width),
@@ -175,6 +195,10 @@ fn side_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wid
     }
 }
 
+/// The radio in the narrow window, which shows one column at a time, the
+/// way the library's are: the stations, the station, the programme,
+/// and the side while it is open, one strip slid along, with the neighbours
+/// named at the foot.
 pub(super) fn radio_strip(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, room: f32, height: f32) {
     let gap = crate::gui::theme::SLIDE_GAP;
     let side = radio_side(app);
@@ -237,6 +261,7 @@ pub(super) fn radio_strip(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
     }
 }
 
+/// What the strip's foot calls a column of the side.
 fn side_name(side: crate::gui::Fourth) -> &'static str {
     match side {
         crate::gui::Fourth::Queue => tr!("warteschlange"),
@@ -250,15 +275,20 @@ fn side_name(side: crate::gui::Fourth) -> &'static str {
     }
 }
 
+/// One, two, three dots, round and round, while something is looked for —
+/// as the other columns show it.
 fn going_dots(ui: &Ui) -> String {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     ".".repeat(1 + (ui.input(|i| i.time) / 0.4) as usize % 3)
 }
 
+/// What of the side the radio's row shows: whatever is open, as `i`, `y`,
+/// `t` and `o` open it. Not the iPod, which has the library's columns.
 fn radio_side(app: &GuiApp) -> Option<crate::gui::Fourth> {
     app.right_side().filter(|side| !matches!(side, crate::gui::Fourth::Device))
 }
 
+/// The first column: the stations.
 fn stations_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     let height = ui.available_height();
     let taken = ui.allocate_ui(Vec2::new(width, height), |ui| {
@@ -274,6 +304,10 @@ fn stations_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette,
     rect
 }
 
+/// The stations' head: „stationen", or „stationen · suche" while the field asks
+/// the directory, and how many („stationen", as „sender" is the column beside
+/// it). No „schliessen": the column stands while the radio is open, as the
+/// artists' does, and the switch up in the header goes back.
 fn stations_head(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) {
     let count = app.radio_listed().len();
     let trailing = if count == 0 { String::new() } else { text::count(count as u64) };
@@ -290,6 +324,18 @@ fn stations_head(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) {
             Some(_) => tr!("stationen · suche").to_string(),
             None => tr!("stationen").to_string(),
         };
+        if app.query().is_none() {
+            let mark = match app.config.ui.radio_order.as_str() {
+                "a-z" => "↓",
+                "z-a" => "↑",
+                _ => tr!("von hand"),
+            };
+            if heading(ui, &label, &trailing, Some(mark), None, m, palette).clicked() {
+                app.turn_radio_order();
+            }
+            ui.add_space(HEAD_AIR);
+            return;
+        }
         match found_layout(app, ui, ui.available_width(), m) {
             Found::Columns(widths) => {
                 let top = ui.cursor().top();
@@ -303,18 +349,29 @@ fn stations_head(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) {
     ui.add_space(HEAD_AIR);
 }
 
+/// How a found station's genre, land and bitrate are set beside its name —
+/// see `UiConfig::radio_found`. Only while something was searched for, or
+/// like stations are shown: the stations kept are one's own and known.
 enum Found {
     Nothing,
     Beside,
+    /// In columns this wide: genre, land, format, bitrate.
     Columns([f32; 4]),
 }
 
+/// The face of a found station's genre, land and bitrate: label size, set
+/// solid rather than tracked — they are facts to read along a list, not words
+/// about the interface, and tracked they took as much room as the name.
 const FOUND_ROLE: Role = Role::Note;
 
+/// The names of the three columns, as the track list's heads name its own.
 const FOUND_HEADS: [&str; 4] = ["genre", "land", "format", "kbit/s"];
 
+/// Which of them is figures, set flush right in the mono cut.
 const FOUND_FIGURES: usize = 3;
 
+/// Fewer points than this left for the name, and the columns give way to
+/// the words at the row's end.
 const FOUND_NAME_LEAST: f32 = 100.0;
 
 fn found_layout(app: &GuiApp, ui: &Ui, width: f32, m: Metrics) -> Found {
@@ -346,6 +403,8 @@ fn found_layout(app: &GuiApp, ui: &Ui, width: f32, m: Metrics) -> Found {
     }
 }
 
+/// The columns' names on the head's line, each over its column, ending at
+/// `right` as the rows' columns do.
 fn found_heads(ui: &Ui, top: f32, right: f32, widths: [f32; 4], m: Metrics, palette: &Palette) {
     let line = text::row_line(ui, m.row, Role::Label);
     let mut end = right;
@@ -358,6 +417,8 @@ fn found_heads(ui: &Ui, top: f32, right: f32, widths: [f32; 4], m: Metrics, pale
     }
 }
 
+/// The stations kept, or — while something is typed in the search field —
+/// what the directory found.
 fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
     let Some(radio) = app.radio.as_ref() else { return };
     let searching = app.query().is_some() || radio.similar.is_some();
@@ -382,7 +443,10 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
     let mut play: Option<usize> = None;
     let mut keep: Option<usize> = None;
     let carried_id = egui::Id::unique("radio-station-carried");
-    let carried = ui.data(|d| d.get_temp::<usize>(carried_id)).filter(|_| !searching);
+    let by_hand = !searching && app.radio_by_hand();
+    let carried = ui.data(|d| d.get_temp::<usize>(carried_id)).filter(|_| by_hand);
+    let register = !searching && !app.radio_by_hand() && app.config.ui.radio_letters;
+    let mut last_letter: Option<String> = None;
     let pointer = ui.input(|i| i.pointer.interact_pos());
     let mut drop_at: Option<(usize, f32)> = None;
     let mut menu: Option<(usize, egui::Pos2)> = None;
@@ -396,6 +460,9 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
             note_cursor_row(ui, "station", rect, at == cursor);
             typed_in = Some(rect);
             continue;
+        }
+        if register {
+            super::names::register_head(ui, width, &super::names::plain_letter(&station.name), &mut last_letter, m, palette);
         }
         let ahead = row_ahead(ui, width, m);
         let over = super::pointer_rests_on(ui, ahead) && carried.is_none();
@@ -441,7 +508,7 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
         };
         note_cursor_row(ui, "station", response.rect, at == cursor);
         point_at_word(ui, &response, word, over, m, palette);
-        if !searching && response.drag_started() {
+        if by_hand && response.drag_started() {
             ui.data_mut(|d| d.insert_temp(carried_id, at));
         }
         if let (Some(_), Some(p)) = (carried, pointer) {
@@ -503,15 +570,25 @@ fn station_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
     }
 }
 
+/// Where it is kept that the keyboard just moved in „gerade gehört", for
+/// the row it is on to be scrolled into sight.
 pub(in crate::gui) fn heard_follow_id() -> egui::Id {
     egui::Id::unique("radio-heard-follow")
 }
 
+/// What a click in „gerade gehört" asked for.
 enum Heard {
+    /// Keep the line heard at this place in `GuiApp::aired`, or let it go.
     Keep(usize),
+    /// Show who this is under „informationen".
     About(String),
 }
 
+/// What the station on the air said it played, at the time it came, and under
+/// it the songs kept from the radio; where the station publishes a programme,
+/// its shows, over it. The newest at the top. With `headed`, the parts have
+/// heads of their own; across the window the
+/// column's head says the first.
 fn heard_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32, headed: bool) {
     let searching = app.query().is_some();
     let Some(radio) = app.radio.as_ref() else { return };
@@ -636,6 +713,10 @@ fn heard_rows(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, widt
     }
 }
 
+/// One line heard: who and what, and the time it came — under the pointer
+/// „merken", or „vergessen" for one kept. The newest (`at` 0) is what
+/// plays, in the accent; the others faint, as tracks played are in the
+/// queue. Its row, and what a click on it asked for.
 #[allow(clippy::too_many_arguments)]
 fn aired_row(
     ui: &mut Ui,
@@ -685,9 +766,13 @@ fn aired_row(
     (response.rect, heard)
 }
 
+/// What is known about a station, for its page and its brief: what the
+/// directory says, what it says about itself as its stream begins, and what
+/// Wikipedia says.
 struct Known {
     station: crate::radio::Station,
     intro: crate::player::stream::Introduction,
+    /// Its page: the directory's, else the one it names itself.
     site: String,
     wiki: Option<crate::radio::AboutText>,
     asking: bool,
@@ -708,6 +793,11 @@ impl Known {
         Known { station, intro, site, wiki, asking }
     }
 
+    /// Land, language, genre, bitrate: those it has, as lines — land and
+    /// language on one, the genres on the next, the bitrate on its own.
+    ///
+    /// Then how many of the directory's users voted for it, and, where the
+    /// directory's last look found it silent, that it did.
     fn facts(&self) -> String {
         let genre = if self.station.tags.is_empty() { self.intro.genre.to_lowercase() } else { self.station.tags.clone() };
         let kbit = if self.intro.bitrate.is_empty() { self.station.bitrate.as_str() } else { self.intro.bitrate.as_str() };
@@ -734,6 +824,8 @@ impl Known {
             .join("\n")
     }
 
+    /// What Wikipedia says, else what the station says itself, cut to
+    /// `most` characters if given; or that it is being asked.
     fn words(&self, ui: &mut Ui, width: f32, most: usize, m: Metrics, palette: &Palette) {
         let lang = crate::lang::current().key();
         let cut = |text: &str| brief(text, most);
@@ -754,6 +846,9 @@ impl Known {
         }
     }
 
+    /// The article and the station's page, one under the other under „mehr
+    /// lesen", as the artist's are (until then on one line, wrapped when long);
+    /// the page clicked.
     fn links(&self, ui: &mut Ui, width: f32, m: Metrics, palette: &Palette) -> Option<String> {
         let mut links: Vec<(String, String)> = Vec::new();
         if let Some(wiki) = &self.wiki {
@@ -780,6 +875,9 @@ impl Known {
     }
 }
 
+/// What is known about a station, in the second column: the one on the air,
+/// else the one under the keyboard. Its picture, the facts, the whole article
+/// and the links.
 fn station_page(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
     let listed = app.radio_listed();
     let at = app.radio.as_ref().map_or(0, |r| r.cursor);
@@ -842,8 +940,11 @@ fn station_page(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
     }
 }
 
+/// How many of those heard on the station the column names.
 const HEARD_HERE: usize = 8;
 
+/// „informationen" while the station names nobody it plays: the show on now,
+/// with its picture, where the programme names one; else that nobody is named.
 fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
     let mut close = false;
     let show = app.show_on_now();
@@ -945,6 +1046,9 @@ fn nobody_named(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, wi
     }
 }
 
+/// The station on the air in brief, at the foot of the stations in the narrow
+/// window: its picture with the facts beside it, a few sentences from Wikipedia
+/// or its own, then its links.
 fn station_brief(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
     let Some(station) = app.on_air.clone() else {
         return;
@@ -982,17 +1086,29 @@ fn station_brief(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, w
     }
 }
 
+/// How many shows of the programme are shown, the one on now among them.
 const PROGRAMME_AHEAD: usize = 4;
 
+/// How big the station's picture is on its page: small enough for what is known
+/// of it to stand beside it.
 const STATION_PAGE_PICTURE: f32 = 88.0;
+/// How far below the top of what heads the facts — the station's name, the
+/// show on now — the facts' galley starts: so that the baselines of the
+/// head's last line and the facts' first are a heading's line step apart, as
+/// a record's name and the line under it are in the music.
 fn head_to_facts(head: &egui::Galley, facts: &egui::Galley, m: Metrics) -> f32 {
     let step = m.row * crate::gui::theme::head_line();
     (text::last_baseline(head) + step - text::baseline(facts)).max(head.size().y)
 }
+/// How big the station's picture is beside its name.
 const STATION_PICTURE: f32 = 56.0;
+/// Between the picture and the words beside it.
 const BRIEF_GAP: f32 = 12.0;
+/// How much of an article the brief keeps.
 const BRIEF_CHARS: usize = 280;
 
+/// The first sentences of `text`, as many as fit in about `most` characters,
+/// and at least the first — cut at a word, with, if even that is too long.
 fn brief(text: &str, most: usize) -> String {
     let text = text.trim();
     if text.chars().count() <= most {
@@ -1016,6 +1132,10 @@ fn brief(text: &str, most: usize) -> String {
     format!("{}…", cut.trim_end_matches([',', ';', ':']))
 }
 
+/// A station's picture as the covers are drawn, once it has been fetched;
+/// until then the blank tile with its initial. Held in the window's memory
+/// by station and by how it is drawn, not in the covers' cache, whose one
+/// picture of what plays the header has at another size.
 fn station_picture(app: &GuiApp, ui: &Ui, rect: Rect, palette: &Palette, station: &crate::radio::Station) {
     match crate::radio::picture_path(station) {
         Some(path) => picture_at(app, ui, rect, palette, &path, &station.name),
@@ -1023,6 +1143,10 @@ fn station_picture(app: &GuiApp, ui: &Ui, rect: Rect, palette: &Palette, station
     }
 }
 
+/// The picture at `path` as the covers are drawn, held by where it lies —
+/// a better one found later (the station's own page, the show on now) is
+/// another — or the blank tile with `name`'s initial until it can
+/// be read.
 pub(super) fn picture_at(app: &GuiApp, ui: &Ui, rect: Rect, palette: &Palette, path: &std::path::Path, name: &str) {
     let dithered = app.config.ui.cover_dither;
     let grain = crate::gui::dither::grain_for(rect.width(), ui.ctx().pixels_per_point(), app.config.ui.picture_fineness());
@@ -1059,6 +1183,13 @@ pub(super) fn picture_at(app: &GuiApp, ui: &Ui, rect: Rect, palette: &Palette, p
     }
 }
 
+/// A picture as wide as `width`, as tall as its shape asks — screened as the
+/// rest are. Room is kept for nothing until it is decoded; one too small to be
+/// more than a mark is left out.
+///
+/// At most `width` wide and `most_tall` high, in its own proportions: one
+/// taller than that is narrower, never squeezed; one that would come out under
+/// a few points wide is left out.
 pub(super) fn wide_picture(app: &GuiApp, ui: &mut Ui, width: f32, most_tall: f32, palette: &Palette, path: &std::path::Path) {
     let Some(decoded) = decoded_picture(ui.ctx(), path) else { return };
     if decoded.width() < 32 || decoded.height() < 32 {
@@ -1105,18 +1236,31 @@ pub(super) fn wide_picture(app: &GuiApp, ui: &mut Ui, width: f32, most_tall: f32
     crate::gui::covers::paint_screened(ui, rect, MARKER_RADIUS, handle.id(), &under, tint);
 }
 
+/// The last wide picture shown of each file, to stand in while the one for
+/// a new size or look is screened, and when it was shown.
 static LAST_WIDE: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, (egui::TextureHandle, std::time::Instant)>>> = std::sync::Mutex::new(None);
 
+/// What the screening thread made, by what it was made for: `None` while it
+/// is under way.
 static SCREENED: std::sync::Mutex<Option<std::collections::HashMap<egui::Id, Option<egui::ColorImage>>>> = std::sync::Mutex::new(None);
 
+/// When each was last asked for: one no longer asked for by the time the
+/// thread comes to it — a column sliding open asks at every step of the
+/// grain — is not screened at all.
 static WANTED: std::sync::Mutex<Option<std::collections::HashMap<egui::Id, std::time::Instant>>> = std::sync::Mutex::new(None);
 
+/// How long ago a picture may last have been asked for and still be screened.
 const STILL_WANTED: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// One picture to screen, on the screening thread.
 type ScreenJob = Box<dyn FnOnce() + Send>;
 
+/// The thread that screens the wide pictures, started at the first.
 static SCREENER: std::sync::Mutex<Option<std::sync::mpsc::Sender<ScreenJob>>> = std::sync::Mutex::new(None);
 
+/// The picture made for `id` by `make`, once the screening thread has made it:
+/// asked for the first time, it is handed to the thread and `None` comes back
+/// until it is done, the window then drawn again.
 pub(super) fn screened_later(
     ctx: &egui::Context,
     id: egui::Id,
@@ -1171,19 +1315,35 @@ pub(super) fn screened_later(
     None
 }
 
+/// The narrowest a picture is shown, in points: narrower, it is a sliver.
 const PICTURE_LEAST: f32 = 32.0;
 
+/// How big a picture is kept once decoded, on its longer side: twice the
+/// largest it is shown at, enough for a Retina screen.
 const PICTURE_KEPT: u32 = 512;
 
+/// How long a picture not found waits before it is looked for again, at
+/// first: each time the file is still as it was, the wait doubles, up to
+/// [`PICTURE_AGAIN_MOST_SECS`]. A picture being fetched turns up within the
+/// first few looks; one that is not there at all — a station without a
+/// logo — would otherwise wake the window every two seconds for good.
 const PICTURE_AGAIN_SECS: u64 = 2;
 const PICTURE_AGAIN_MOST_SECS: u64 = 64;
 
+/// How long a picture's texture, or the picture decoded, is kept once nothing
+/// draws it. Until then every one was kept for good — every episode's own
+/// picture, every picture in the notes, at every size and every look it had
+/// been shown in — so scrolling through the podcasts only ever grew.
 const PICTURE_UNUSED_SECS: u64 = 30;
 
+/// The pictures' textures, by what they were made for, and when each was
+/// last drawn.
 static TEXTURES: std::sync::Mutex<Option<std::collections::HashMap<egui::Id, (egui::TextureHandle, std::time::Instant)>>> = std::sync::Mutex::new(None);
 
+/// When the pictures were last looked through for ones not drawn.
 static PRUNED_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
+/// The texture made for `id`, if there is one — drawn now, so kept.
 fn held_texture(id: egui::Id) -> Option<egui::TextureHandle> {
     prune_pictures();
     let mut textures = TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
@@ -1192,10 +1352,14 @@ fn held_texture(id: egui::Id) -> Option<egui::TextureHandle> {
     Some(handle.clone())
 }
 
+/// Keep the texture made for `id`.
 fn keep_texture(id: egui::Id, handle: egui::TextureHandle) {
     TEXTURES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id, (handle, std::time::Instant::now()));
 }
 
+/// Let go of the textures and the decoded pictures nothing has drawn for
+/// [`PICTURE_UNUSED_SECS`] — looked through every few seconds, not every
+/// frame. A texture let go of is freed with its last handle.
 fn prune_pictures() {
     let now = std::time::Instant::now();
     {
@@ -1217,12 +1381,16 @@ fn prune_pictures() {
     }
 }
 
+/// A picture file decoded, or being decoded, or found missing.
 enum Decoding {
     Under,
+    /// Decoded, and when it was last asked for.
     Done(std::sync::Arc<image::DynamicImage>, std::time::Instant),
     Missing(Missed),
 }
 
+/// A picture not found: when it was last looked for, how long until the next
+/// look, and how the file stood then — read again only once that changed.
 #[derive(Clone, Copy)]
 struct Missed {
     at: std::time::Instant,
@@ -1230,6 +1398,8 @@ struct Missed {
     file: Option<FileStamp>,
 }
 
+/// A file's length and when it was last written, or nothing where there is
+/// no file.
 type FileStamp = (u64, Option<std::time::SystemTime>);
 
 fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
@@ -1241,13 +1411,18 @@ impl Missed {
         Missed { at: std::time::Instant::now(), wait: PICTURE_AGAIN_SECS, file: file_stamp(path) }
     }
 
+    /// Looked at again with the file unchanged: wait twice as long.
     fn again(self) -> Self {
         Missed { at: std::time::Instant::now(), wait: (self.wait * 2).min(PICTURE_AGAIN_MOST_SECS), file: self.file }
     }
 }
 
+/// The pictures decoded so far, by their file.
 static DECODED: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Decoding>>> = std::sync::Mutex::new(None);
 
+/// The picture at `path`, decoded and made small on a thread of its own —
+/// `None` while that is under way (the window is drawn again when it is
+/// done) or where there is no picture, looked for again in a while.
 pub(super) fn decoded_picture(ctx: &egui::Context, path: &std::path::Path) -> Option<std::sync::Arc<image::DynamicImage>> {
     let mut decoded = DECODED.lock().unwrap_or_else(|e| e.into_inner());
     let known = decoded.get_or_insert_with(Default::default);
@@ -1277,10 +1452,16 @@ pub(super) fn decoded_picture(ctx: &egui::Context, path: &std::path::Path) -> Op
     None
 }
 
+/// How many pictures are decoded at once. Each was given a thread of its own
+/// until then, all at once: thirty podcasts' pictures of three thousand points
+/// a side, each 36 mb while it is decoded, opened the podcasts at 650 mb, and
+/// the memory stayed taken after.
 const DECODERS: usize = 2;
 
+/// The pictures waiting to be decoded.
 static TO_DECODE: std::sync::Mutex<Option<std::sync::mpsc::Sender<(std::path::PathBuf, egui::Context)>>> = std::sync::Mutex::new(None);
 
+/// Decode `path` on one of the [`DECODERS`], made small, and draw again.
 fn decode_later(path: std::path::PathBuf, ctx: egui::Context) {
     let mut sender = TO_DECODE.lock().unwrap_or_else(|e| e.into_inner());
     let send = sender.get_or_insert_with(|| {
@@ -1299,6 +1480,7 @@ fn decode_later(path: std::path::PathBuf, ctx: egui::Context) {
     let _ = send.send((path, ctx));
 }
 
+/// Decode `path`, made small, and keep it.
 fn decode_now(path: std::path::PathBuf, ctx: &egui::Context) {
     let mut bytes = std::fs::read(&path).ok();
     if let Some(read) = &bytes {
@@ -1327,24 +1509,37 @@ fn decode_now(path: std::path::PathBuf, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
+/// One picture decoded let go of, so it is read again: the file was written
+/// anew under the same name.
 pub(super) fn forget_decoded(path: &std::path::Path) {
     if let Some(decoded) = DECODED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         decoded.remove(path);
     }
 }
 
+/// Every picture decoded let go of, so they are read again — after the
+/// podcasts' pictures were fetched anew.
 pub(in crate::gui) fn forget_decoded_pictures() {
     *DECODED.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *TEXTURES.lock().unwrap_or_else(|e| e.into_inner()) = None;
     PICTURES_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Counted up as the pictures are let go of, so the textures made of the
+/// old ones are not asked for again.
 static PICTURES_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The row about to be drawn, for asking whether the pointer is on it —
+/// half a point in at the top and the foot, so where two rows meet the
+/// pointer is on one of them, not on both.
 pub(super) fn row_ahead(ui: &Ui, width: f32, m: Metrics) -> Rect {
     Rect::from_min_size(ui.cursor().min + Vec2::new(0.0, 0.5), Vec2::new(width, (m.row - 1.0).max(1.0)))
 }
 
+/// The pointer turns into a hand over the action word at a row's end —
+/// „merken", „entfernen" — so it reads as something to press, as the words
+/// in the heads do. Only while the word is offered (`offered`), not where
+/// the row's end says something that does nothing, like „gemerkt".
 pub(super) fn point_at_word(ui: &Ui, response: &Response, word: &str, offered: bool, m: Metrics, palette: &Palette) {
     if !offered || word.is_empty() {
         return;
@@ -1355,12 +1550,18 @@ pub(super) fn point_at_word(ui: &Ui, response: &Response, word: &str, offered: b
     }
 }
 
+/// How long „wirklich?" waits for the second click, in seconds.
 const REALLY_SECS: f64 = 4.0;
 
+/// The row whose „entfernen" was clicked once, and when.
 fn really_id() -> egui::Id {
     egui::Id::unique("remove-really")
 }
 
+/// The word at the end of a row that can be taken out: „entfernen" under the
+/// pointer, and „wirklich?" once it has been clicked — a station kept or a
+/// podcast followed went with one stray click. Off the row, the question is
+/// let go of. `key` tells the row from every other.
 pub(super) fn removal_word(ui: &Ui, key: egui::Id, over: bool) -> &'static str {
     let asked = ui.data(|d| d.get_temp::<(egui::Id, f64)>(really_id()));
     let now = ui.input(|i| i.time);
@@ -1375,6 +1576,8 @@ pub(super) fn removal_word(ui: &Ui, key: egui::Id, over: bool) -> &'static str {
     }
 }
 
+/// A click on „entfernen": the first asks („wirklich?"), the second, while it
+/// is asked, does it. True when it is to be done.
 pub(super) fn really(ui: &Ui, key: egui::Id) -> bool {
     let now = ui.input(|i| i.time);
     let asked = ui.data(|d| d.get_temp::<(egui::Id, f64)>(really_id()));
@@ -1387,6 +1590,7 @@ pub(super) fn really(ui: &Ui, key: egui::Id) -> bool {
     false
 }
 
+/// Whether a click on a row landed on the word at its end.
 pub(super) fn on_the_word(ui: &Ui, response: &Response, word: &str, m: Metrics, palette: &Palette) -> bool {
     if word.is_empty() {
         return false;

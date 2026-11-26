@@ -1,16 +1,29 @@
+//! The radio's column and the station on the air — see `crate::radio`.
+
 use crate::gui::*;
 
+/// How long the search field has to stand still before the directory is
+/// asked: a search at every letter would be a search for every letter.
 const ASK_AFTER: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// How often a station playing is asked what it plays — see
+/// `hear_the_station`.
 const HEAR_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a song from the radio has to have been heard, from its start,
+/// to count on last.fm when the next one comes. Its length is unknown, so
+/// last.fm's „half of it" cannot be asked; its thirty-second floor can.
 pub(in crate::gui) const RADIO_SCROBBLE_AFTER: i64 = 30;
 
 impl GuiApp {
+    /// Whether the first column shows the radio.
     pub fn showing_radio(&self) -> bool {
         self.radio.is_some()
     }
 
+    /// „radio" in the header: the stations into the first column, or the
+    /// library back. Opening it reads the stations kept; leaving lets go of
+    /// everything but the station still playing.
     pub fn toggle_radio_view(&mut self) {
         if self.radio.is_some() {
             self.leave_radio();
@@ -32,6 +45,9 @@ impl GuiApp {
         self.switch_sides(View::Music, View::Radio);
     }
 
+    /// The columns over to the music, the radio or the iPod, as the masthead's
+    /// switch chooses: whatever was open goes first, the iPod's column with the
+    /// iPod.
     pub(in crate::gui) fn read_from(&mut self, radio: bool, device: bool) {
         self.leave_podcasts();
         if self.showing_ipod() && !device {
@@ -48,14 +64,21 @@ impl GuiApp {
         }
     }
 
+    /// The music's columns are what the window shows: neither the radio,
+    /// the podcasts nor the iPod is open.
     pub(in crate::gui) fn music_shown(&self) -> bool {
         !self.showing_radio() && !self.showing_podcasts() && !self.showing_ipod()
     }
 
+    /// Everything switched off: the music, and nothing else open in its place —
+    /// the window shows the note that says where to switch it on again.
     pub(in crate::gui) fn all_off(&self) -> bool {
         !self.config.ui.music && self.music_shown()
     }
 
+    /// Once a frame: with the music switched off, its columns are not shown
+    /// — the radio in their place, or the podcasts, or the iPod, whichever
+    /// is on.
     pub(in crate::gui) fn fall_back_from_music(&mut self) {
         self.player.library_hidden = !self.config.ui.music;
         let now = self.view_shown();
@@ -75,6 +98,8 @@ impl GuiApp {
         }
     }
 
+    /// The music switched on or off. Off, a track of the library that plays
+    /// stops — a station or an episode plays on.
     pub(in crate::gui) fn set_music(&mut self, on: bool) {
         self.config.ui.music = on;
         if !on && self.player.library_track().is_some() && self.on_air.is_none() {
@@ -92,6 +117,8 @@ impl GuiApp {
         self.save_config();
     }
 
+    /// The radio switched on or off (menu → allgemein, and `c` `2` / `2`
+    /// `2`). Off, its columns go, and a station on the air stops.
     pub(in crate::gui) fn set_radio(&mut self, on: bool) {
         self.config.ui.radio = on;
         if !on {
@@ -107,6 +134,8 @@ impl GuiApp {
         self.save_config();
     }
 
+    /// The podcasts switched on or off (menu → allgemein, and `c` `3` /
+    /// `3` `3`). Off, their column goes, and what was read of the feeds.
     pub(in crate::gui) fn set_podcasts(&mut self, on: bool) {
         self.config.ui.podcasts = on;
         if !on {
@@ -120,6 +149,7 @@ impl GuiApp {
         self.save_config();
     }
 
+    /// Which view the window shows.
     pub(in crate::gui) fn view_shown(&self) -> View {
         if self.showing_podcasts() {
             View::Podcasts
@@ -132,6 +162,10 @@ impl GuiApp {
         }
     }
 
+    /// `gone` switched off while it was open: back to the view open before it,
+    /// where that is still on — the radio after the podcasts opened from it,
+    /// not the music. Otherwise the music, as before — or, with the music off
+    /// too, whatever `fall_back_from_music` finds.
     fn back_to_before(&mut self, gone: View) {
         let before = self.view_before.filter(|v| *v != gone);
         match before {
@@ -142,10 +176,15 @@ impl GuiApp {
         }
     }
 
+    /// With the music off, nothing of the library is started: not by play,
+    /// space, `n` or `p`, nor by the keys on the keyboard's media row.
     pub(in crate::gui) fn music_held(&self) -> bool {
         !self.config.ui.music && self.on_air.is_none() && !self.playing_episode()
     }
 
+    /// Play or pause, as the key in the header, space and the k in the menu
+    /// have it — but stopped, with the music off, it does not start the
+    /// queue's track out of sight.
     pub fn toggle_pause(&mut self) {
         if self.music_held() && self.player.state() == crate::player::PlaybackState::Stopped {
             return;
@@ -153,6 +192,10 @@ impl GuiApp {
         self.player.toggle_pause();
     }
 
+    /// Play from nothing playing, for the media keys: the station under the
+    /// keyboard on the radio, the queue where it stood in the podcasts —
+    /// not the music's selection, out of sight there —, and in the music
+    /// what is selected.
     pub(in crate::gui) fn play_from_stopped(&mut self) -> Result<()> {
         if self.showing_radio() {
             self.play_radio_cursor();
@@ -168,6 +211,10 @@ impl GuiApp {
         self.play_selected()
     }
 
+    /// Put the radio's columns away: the library comes back with the side as it
+    /// was left — not with „informationen" open because the radio opened it,
+    /// nor without the lyrics or the log that made room for it. A station on
+    /// the air plays on.
     pub(in crate::gui) fn leave_radio(&mut self) {
         if self.radio.take().is_none() {
             return;
@@ -183,6 +230,8 @@ impl GuiApp {
         self.switch_sides(View::Radio, View::Music);
     }
 
+    /// The station on the air where it lives: the radio opened if it was not,
+    /// and the keyboard on it among the stations kept.
     pub(in crate::gui) fn show_on_air(&mut self) {
         let Some(url) = self.on_air.as_ref().map(|s| s.url.clone()) else { return };
         if !self.showing_radio() {
@@ -191,13 +240,16 @@ impl GuiApp {
         if let Err(e) = self.close_filter() {
             self.set_status(format!("{e}"));
         }
+        let at = self.radio_listed().iter().position(|s| s.url == url);
         let Some(radio) = self.radio.as_mut() else { return };
-        if let Some(at) = radio.kept.iter().position(|s| s.url == url) {
+        if let Some(at) = at {
             radio.cursor = at;
         }
         self.focus = crate::gui::Column::Artists;
     }
 
+    /// The stations the column lists: what was found while something is
+    /// searched for, else those kept.
     pub(in crate::gui) fn radio_listed(&self) -> Vec<crate::radio::Station> {
         let Some(radio) = &self.radio else { return Vec::new() };
         if self.query().is_some() {
@@ -205,10 +257,43 @@ impl GuiApp {
         } else if let Some(similar) = &radio.similar {
             similar.stations.clone()
         } else {
-            radio.kept.clone()
+            self.kept_in_order(radio.kept.clone())
         }
     }
 
+    /// The stations kept in the column's order: as dragged, or by name.
+    pub(in crate::gui) fn kept_in_order(&self, mut kept: Vec<crate::radio::Station>) -> Vec<crate::radio::Station> {
+        match self.config.ui.radio_order.as_str() {
+            "a-z" => kept.sort_by_cached_key(|s| s.name.to_lowercase()),
+            "z-a" => kept.sort_by_cached_key(|s| std::cmp::Reverse(s.name.to_lowercase())),
+            _ => {}
+        }
+        kept
+    }
+
+    /// Whether the stations kept stand as they were dragged — the only order
+    /// a station can be dragged to a new place in.
+    pub(in crate::gui) fn radio_by_hand(&self) -> bool {
+        !matches!(self.config.ui.radio_order.as_str(), "a-z" | "z-a")
+    }
+
+    /// The stations' head clicked: their order one step on — by hand, a–z,
+    /// z–a. The keyboard's row goes back to the top.
+    pub(in crate::gui) fn turn_radio_order(&mut self) {
+        self.config.ui.radio_order = match self.config.ui.radio_order.as_str() {
+            "a-z" => "z-a",
+            "z-a" => "eigene",
+            _ => "a-z",
+        }
+        .to_string();
+        if let Some(radio) = self.radio.as_mut() {
+            radio.cursor = 0;
+        }
+        self.save_config();
+    }
+
+    /// ↑ ↓ in the radio's column: the keyboard's row among the stations, as in
+    /// any column.
     pub(in crate::gui) fn move_radio_cursor(&mut self, delta: i32) {
         let len = self.radio_listed().len();
         let Some(radio) = self.radio.as_mut() else { return };
@@ -217,11 +302,19 @@ impl GuiApp {
         radio.cursor = (radio.cursor as i64 + i64::from(delta)).clamp(0, last) as usize;
     }
 
+    /// How many rows „gerade gehört" has for the keyboard: what was heard,
+    /// then the songs kept.
     fn heard_len(&self) -> (usize, usize) {
         let songs = self.radio.as_ref().map_or(0, |r| r.songs.len());
         (self.aired.len(), songs)
     }
 
+    /// The radio's keys for its two columns: `←` `→` between the stations and
+    /// „gerade gehört"; there `↑` `↓` go through what was heard and the songs
+    /// kept, `enter` keeps a line heard (or lets it go) and shows who sang a
+    /// song kept, `d` or `backspace` forgets a song kept. Returns whether the
+    /// keyboard is in „gerade gehört", where the keys every column has must
+    /// leave the stations alone.
     pub(in crate::gui) fn handle_radio_keys(&mut self, ctx: &egui::Context) -> bool {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;
@@ -272,6 +365,7 @@ impl GuiApp {
         true
     }
 
+    /// Enter in the radio's column: the station under the keyboard plays.
     pub(in crate::gui) fn play_radio_cursor(&mut self) {
         let listed = self.radio_listed();
         let Some(at) = self.radio.as_ref().map(|r| r.cursor) else { return };
@@ -280,17 +374,24 @@ impl GuiApp {
         }
     }
 
+    /// The station „sender" shows: the one on the air, else the one under
+    /// the keyboard.
     pub(in crate::gui) fn station_shown(&self) -> Option<crate::radio::Station> {
         let at = self.radio.as_ref().map_or(0, |r| r.cursor);
         self.on_air.clone().or_else(|| self.radio_listed().get(at).cloned())
     }
 
+    /// Begin typing a new name for the kept station `station`, all of the
+    /// old one marked, so typing replaces it.
     pub(in crate::gui) fn start_naming_station(&mut self, station: &crate::radio::Station) {
         let mut entry = crate::gui::tagedit::Entry::new(station.name.clone());
         entry.mark_all();
         self.naming_station = Some((station.url.clone(), entry));
     }
 
+    /// The typed name, onto the station: in the lists, `radio.toml`, and the
+    /// header while it plays. Nothing typed, or the name as it was, changes
+    /// nothing.
     pub(in crate::gui) fn rename_station(&mut self) {
         let Some((url, entry)) = self.naming_station.take() else { return };
         let name = entry.text().trim().to_string();
@@ -307,6 +408,7 @@ impl GuiApp {
         self.set_status(tr!("der sender heisst jetzt {}", crate::gui::theme::lower(&name)));
     }
 
+    /// Typing a station's name: enter keeps it, escape leaves it as it was.
     pub(in crate::gui) fn handle_station_naming_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -322,6 +424,8 @@ impl GuiApp {
         }
     }
 
+    /// Ask the system for a picture for the station at `url`, without
+    /// stopping the window.
     pub(in crate::gui) fn choose_station_picture(&mut self, url: &str) {
         if self.picking_station_picture.is_some() {
             return;
@@ -334,6 +438,7 @@ impl GuiApp {
         self.picking_station_picture = Some((url.to_string(), rx));
     }
 
+    /// Take the picture chosen, once the dialog answers.
     pub(in crate::gui) fn poll_station_picture(&mut self) {
         let Some((url, rx)) = &self.picking_station_picture else { return };
         let url = url.clone();
@@ -357,12 +462,15 @@ impl GuiApp {
         }
     }
 
+    /// The picture chosen for the station at `url` let go of: its own is
+    /// shown again.
     pub(in crate::gui) fn forget_station_picture(&mut self, url: &str) {
         crate::radio::forget_picture(url);
         crate::gui::library::forget_decoded_pictures();
         self.set_status(tr!("eigenes bild entfernt"));
     }
 
+    /// Play `station`, in place of whatever plays.
     pub fn play_station(&mut self, station: crate::radio::Station) {
         if self.on_air.as_ref().is_none_or(|on| on.url != station.url) {
             self.aired.clear();
@@ -377,6 +485,8 @@ impl GuiApp {
         self.on_air = Some(station);
     }
 
+    /// ← and →: on the radio the next or the one before among the stations
+    /// kept, otherwise the queue's next or previous track.
     pub fn skip(&mut self, forward: bool) -> Result<()> {
         if self.playing_episode() {
             let by = if forward { self.config.ui.podcast_ahead as f64 } else { -(self.config.ui.podcast_back as f64) };
@@ -389,10 +499,10 @@ impl GuiApp {
             }
             return if forward { self.player.next() } else { self.player.previous() };
         };
-        let kept = match &self.radio {
+        let kept = self.kept_in_order(match &self.radio {
             Some(radio) => radio.kept.clone(),
             None => crate::radio::Radio::open().kept,
-        };
+        });
         if kept.is_empty() {
             return Ok(());
         }
@@ -406,10 +516,17 @@ impl GuiApp {
         Ok(())
     }
 
+    /// The search field changed while the radio is open: asked once it
+    /// stands still — see `tend_the_radio`.
     pub(in crate::gui) fn radio_typed(&mut self) {
         self.radio_typed_at = Some(std::time::Instant::now());
     }
 
+    /// Once a frame: the station that has stopped is forgotten, a search
+    /// whose typing has stopped goes out, and what came back is taken in.
+    /// The stations kept, written as an `.m3u` to the desktop (the home
+    /// folder where there is none), to be read back by kessler or played by
+    /// any other player.
     pub(in crate::gui) fn export_stations(&mut self) {
         let kept = match &self.radio {
             Some(radio) => radio.kept.clone(),
@@ -434,6 +551,8 @@ impl GuiApp {
         }
     }
 
+    /// Ask for an `.m3u` or a `.pls`, and keep every station it names —
+    /// one's own list from another player, or one somebody passed on.
     pub(in crate::gui) fn import_stations(&mut self) {
         if self.station_import.is_some() {
             return;
@@ -446,6 +565,7 @@ impl GuiApp {
         self.station_import = Some(rx);
     }
 
+    /// Take in the list asked for, once the picker has answered.
     fn take_station_import(&mut self, ctx: &egui::Context) {
         let Some(asking) = &self.station_import else { return };
         let picked = match asking.try_recv() {
@@ -528,6 +648,9 @@ impl GuiApp {
         }
     }
 
+    /// Keep what the song on the air was not heard: from when a station is
+    /// paused until it plays again, added to the song's pauses, so last.fm's
+    /// count stands still meanwhile rather than running on in silence.
     fn hold_the_pauses(&mut self) {
         let paused = self.on_air.is_some() && self.player.state() == crate::player::PlaybackState::Paused;
         let now = chrono::Local::now();
@@ -543,6 +666,9 @@ impl GuiApp {
         }
     }
 
+    /// What the station says it plays, taken in when it changes. Looked at
+    /// every two seconds while a station plays — a line comes with each new
+    /// song, so this is plenty.
     fn hear_the_station(&mut self, ctx: &egui::Context) {
         if self.on_air.is_none() {
             self.aired.clear();
@@ -659,6 +785,8 @@ impl GuiApp {
         self.aired.truncate(crate::radio::AIRED_KEPT);
     }
 
+    /// Four minutes of one song count whatever happens after, as they do
+    /// for a file (last.fm's rule).
     fn scrobble_the_long_ones(&mut self) {
         if self.player.state() != crate::player::PlaybackState::Playing || self.player.tuning() {
             return;
@@ -672,6 +800,7 @@ impl GuiApp {
         }
     }
 
+    /// Hand what a station played to last.fm: playing now, or listened to.
     fn scrobble_aired(&self, aired: &crate::radio::Aired, listened: bool) {
         if !self.config.ui.radio_scrobble {
             return;
@@ -680,6 +809,8 @@ impl GuiApp {
         scrobbler.submit_aired(artist, &aired.title, listened.then(|| aired.at.timestamp()));
     }
 
+    /// „merken" on a line under „gerade gehört": kept in the radio's own list,
+    /// and loved on last.fm when that is asked for.
     pub fn keep_aired(&mut self, aired: &crate::radio::Aired) {
         let station = self.on_air.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let Some(radio) = self.radio.as_mut() else { return };
@@ -691,6 +822,8 @@ impl GuiApp {
         }
     }
 
+    /// What the station plays now, as a song with no file behind it — for the
+    /// words: a name and a title, nothing else.
     pub fn aired_song(&self) -> Option<Track> {
         self.on_air.as_ref()?;
         let aired = self.aired.first()?;
@@ -722,11 +855,17 @@ impl GuiApp {
         })
     }
 
+    /// The artist the station said it plays now, if it named one.
     pub fn aired_artist(&self) -> Option<String> {
         self.on_air.as_ref()?;
         self.aired.first()?.artist.clone()
     }
 
+    /// What plays, in three words — title, artist, and the record or, on
+    /// the radio, the station — for everything outside the window that says
+    /// so: the menu bar and its menu, the system's panel and MPRIS, the
+    /// keyboard's screen, the screen saver — on the radio no track plays, and
+    /// they would say nothing.
     pub(in crate::gui) fn playing_words(&self) -> Option<[String; 3]> {
         if let Some(track) = self.player.current_track() {
             return Some([track.display_title().to_string(), track.shown_artist().to_string(), track.album.clone()]);
@@ -739,6 +878,8 @@ impl GuiApp {
         })
     }
 
+    /// The picture of the show on now, where the programme gives one — shown
+    /// only under „informationen"; everywhere else the station's own.
     pub(in crate::gui) fn show_picture(&self) -> Option<std::path::PathBuf> {
         let station = self.on_air.as_ref()?;
         self.programme
@@ -747,6 +888,8 @@ impl GuiApp {
             .and_then(|p| p.picture_now())
     }
 
+    /// Who was last heard on `station`, the newest first, for the column about
+    /// whom it plays while it names nobody.
     pub(in crate::gui) fn heard_on_station(&mut self, station: &str, most: usize) -> Vec<String> {
         if self.radio_heard.is_none() {
             if !crate::radio::heard::Heard::exists() {
@@ -757,6 +900,9 @@ impl GuiApp {
         self.radio_heard.as_ref().map(|h| h.on_station(station, most)).unwrap_or_default()
     }
 
+    /// When and on which station `artist` was last heard on the radio, for
+    /// their column. Read from the file the first time, and only if the radio
+    /// ever named anybody.
     pub(in crate::gui) fn heard_on_radio(&mut self, artist: &str) -> Option<crate::radio::heard::Hearing> {
         if self.radio_heard.is_none() {
             if !crate::radio::heard::Heard::exists() {
@@ -767,6 +913,9 @@ impl GuiApp {
         self.radio_heard.as_ref()?.last(artist).cloned()
     }
 
+    /// What the show on now is, in the programme's words. Where else the show
+    /// on now is to be found — its soundcloud, its youtube — as the programme
+    /// says.
     pub(in crate::gui) fn show_links(&self) -> Vec<(String, String)> {
         let Some(station) = self.on_air.as_ref() else { return Vec::new() };
         self.programme
@@ -782,6 +931,8 @@ impl GuiApp {
         programme.about_now().map(str::to_string)
     }
 
+    /// The show on now, where the station publishes its programme: what plays,
+    /// for a station that does not say it in its stream.
     pub(in crate::gui) fn show_on_now(&self) -> Option<String> {
         let programme = self.programme.as_deref()?;
         if self.on_air.as_ref().map(|s| s.url.as_str()) != Some(programme.url.as_str()) {

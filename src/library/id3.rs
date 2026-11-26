@@ -1,3 +1,27 @@
+//! A forgiving reader for the ID3v2 tags that a strict parser refuses.
+//!
+//! Why this exists: a scan of a real library skipped whole albums —
+//! Panopticon, Minilogue's *Animals*, Ash Ra Tempel's private tapes — because
+//! lofty stops at the first malformed frame and discards the entire file.
+//! Three faults account for nearly all of it, and every one of them is a
+//! single bad frame in an otherwise readable tag:
+//!
+//! * a UTF-16 string with an odd number of bytes (a truncated last character),
+//! * a frame too short to hold what its header claims,
+//! * a v2.4 timestamp like `2008-` that stops mid-field.
+//!
+//! Strictness is right for writing and wrong for reading somebody's record
+//! collection: a file that says "Panopticon" in three places and has one
+//! broken byte is not an unreadable file. So this walks the frames itself,
+//! keeps what it understands, and drops what it does not — the file gets into
+//! the library, which is the thing that matters.
+//!
+//! Read-only, and deliberately partial. Nothing here writes tags; when Kessler
+//! writes, it writes through lofty, and a file this module rescued may well be
+//! refused there. That is the correct division: reading forgives, writing does
+//! not.
+
+/// What could be made out of a tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Salvaged {
     pub title: String,
@@ -12,15 +36,27 @@ pub struct Salvaged {
 }
 
 impl Salvaged {
+    /// Whether anything at all was understood.
     pub fn is_empty(&self) -> bool {
         self == &Salvaged::default()
     }
 }
 
+/// The header is ten bytes, and it says how long the rest is.
 const HEADER: usize = 10;
 
+/// How much of a file to hand to [`salvage`].
+///
+/// The tag's own length is in its header, so this is only an upper bound for
+/// the read — but an unbounded one would pull a 60 MB file into memory to look
+/// at its first kilobyte. A tag larger than this is a tag with a very large
+/// picture in it, and the text we are after sits in front of the picture.
 pub const READ_AT_MOST: usize = 4 * 1024 * 1024;
 
+/// Read what can be read of an ID3v2 tag.
+///
+/// `bytes` is the start of the file. Returns `None` when there is no ID3v2 tag
+/// at all — which is not a failure, only an absence.
 pub fn salvage(bytes: &[u8]) -> Option<Salvaged> {
     if bytes.len() < HEADER || &bytes[0..3] != b"ID3" {
         return None;
@@ -69,6 +105,7 @@ pub fn salvage(bytes: &[u8]) -> Option<Salvaged> {
     Some(out)
 }
 
+/// Assign only if there is something to assign and nothing there yet.
 fn set(field: &mut String, value: Option<String>) {
     if field.is_empty() {
         if let Some(v) = value {
@@ -79,6 +116,14 @@ fn set(field: &mut String, value: Option<String>) {
     }
 }
 
+/// A file with its ID3v2 tag rebuilt from only the frames `readable` accepts.
+///
+/// `file` is the whole file. Each frame is offered to `readable` on its own,
+/// as a one-frame tag in front of the file's audio; those it turns down are
+/// left out, everything else is kept byte for byte, in order. For a tag that
+/// a strict reader refuses because of one broken frame — and refuses whole,
+/// so it cannot be written either. `None` when there is no tag, nothing was
+/// left out, or what is left still does not read.
 pub fn mend(file: &[u8], readable: impl Fn(&[u8]) -> bool) -> Option<Vec<u8>> {
     if file.len() < HEADER || &file[0..3] != b"ID3" {
         return None;
@@ -132,6 +177,7 @@ pub fn mend(file: &[u8], readable: impl Fn(&[u8]) -> bool) -> Option<Vec<u8>> {
     readable(&mended).then_some(mended)
 }
 
+/// A synchsafe integer: four bytes, seven bits each.
 fn synchsafe(b: &[u8]) -> Option<u32> {
     if b.len() < 4 || b[..4].iter().any(|byte| byte & 0x80 != 0) {
         return None;
@@ -143,6 +189,7 @@ fn plain_u32(b: &[u8]) -> u32 {
     ((b[0] as u32) << 24) | ((b[1] as u32) << 16) | ((b[2] as u32) << 8) | b[3] as u32
 }
 
+/// Undo unsynchronisation: every `FF 00` was an `FF`.
 fn resynchronise(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len());
     let mut i = 0;
@@ -157,6 +204,7 @@ fn resynchronise(body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Step over the extended header, which the two versions size differently.
 fn skip_extended_header(body: &[u8], major: u8, flags: u8) -> &[u8] {
     if flags & 0x40 == 0 || body.len() < 4 {
         return body;
@@ -169,10 +217,13 @@ fn skip_extended_header(body: &[u8], major: u8, flags: u8) -> &[u8] {
     body.get(skip..).unwrap_or(&[])
 }
 
+/// Walks frames, stopping at padding or at anything it cannot make sense of.
 struct Frames<'a> {
     body: &'a [u8],
     at: usize,
     major: u8,
+    /// Where every frame stepped over began and ended, whole with its
+    /// header — for [`mend`], which keeps frames as they were written.
     spans: Vec<(usize, usize)>,
 }
 
@@ -272,6 +323,8 @@ impl<'a> Iterator for Frames<'a> {
 }
 
 impl Frames<'_> {
+    /// Whether a frame of this size would be followed by something that reads
+    /// like another frame header — or by the end of the tag.
     fn lands_on_a_frame(&self, size: usize) -> bool {
         let next = match self.at.checked_add(self.header_len() + size) {
             Some(n) => n,
@@ -290,6 +343,7 @@ impl Frames<'_> {
     }
 }
 
+/// Decode a text frame's payload: one encoding byte, then the string.
 fn text_of(data: &[u8]) -> Option<String> {
     let (encoding, rest) = data.split_first()?;
     let decoded = match encoding {
@@ -312,6 +366,11 @@ fn text_of(data: &[u8]) -> Option<String> {
     }
 }
 
+/// UTF-16 that does not give up.
+///
+/// An odd length means the last character was cut in half — the rest of the
+/// string is still there, so keep it. An unpaired surrogate is dropped rather
+/// than allowed to end the string.
 fn utf16(bytes: &[u8], force_big_endian: Option<bool>) -> String {
     let (bytes, big_endian) = match (force_big_endian, bytes) {
         (Some(be), _) => (bytes, be),
@@ -333,11 +392,13 @@ fn utf16(bytes: &[u8], force_big_endian: Option<bool>) -> String {
     char::decode_utf16(units).filter_map(|c| c.ok()).collect()
 }
 
+/// The number in front of a "3/12".
 fn numerator(text: String) -> Option<u32> {
     let head = text.split('/').next().unwrap_or("").trim();
     head.parse().ok()
 }
 
+/// The year at the front of a date, however the rest of it is broken.
 fn leading_year(text: &str) -> Option<i32> {
     let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.len() < 4 {
@@ -346,6 +407,10 @@ fn leading_year(text: &str) -> Option<i32> {
     digits[..4].parse().ok()
 }
 
+/// Strip the ID3v1 genre reference a v2.3 tag may put in front: `(17)Rock`.
+///
+/// A bare `(17)` with no text after it is a number, not a genre, and saying
+/// "(17)" in the genre column is worse than saying nothing.
 fn plain_genre(text: &str) -> String {
     let rest = match text.strip_prefix('(') {
         None => return text.to_string(),
@@ -400,12 +465,14 @@ mod tests {
         out
     }
 
+    /// Latin-1 text, the way most of these files are written.
     fn latin1(text: &str) -> Vec<u8> {
         let mut out = vec![0u8];
         out.extend(text.chars().map(|c| c as u8));
         out
     }
 
+    /// UTF-16LE with a byte order mark.
     fn utf16le(text: &str) -> Vec<u8> {
         let mut out = vec![1u8, 0xFF, 0xFE];
         for unit in text.encode_utf16() {
@@ -439,6 +506,7 @@ mod tests {
         assert_eq!(out.genre, "Black Metal");
     }
 
+    /// The first of the three faults.
     #[test]
     fn a_utf16_string_cut_in_half_keeps_the_rest() {
         let mut broken = utf16le("Sonic Prayer");
@@ -457,6 +525,7 @@ mod tests {
         assert_eq!(out.artist, "Earthless");
     }
 
+    /// The second: a frame with nothing in it at all.
     #[test]
     fn an_empty_frame_does_not_end_the_tag() {
         let bytes = tag(
@@ -474,6 +543,7 @@ mod tests {
         assert_eq!(out.album, "Als der Nebel");
     }
 
+    /// The third: a v2.4 timestamp that stops mid-field.
     #[test]
     fn a_half_written_timestamp_still_gives_its_year() {
         let bytes = tag(

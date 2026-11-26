@@ -1,3 +1,13 @@
+//! The signature Last.fm asks for, and the digest it is built from.
+//!
+//! MD5 is written out here rather than taken from a crate. Not on principle:
+//! this build has no network to fetch one from, and the algorithm is a fixed,
+//! published thing with published answers — the tests below are RFC 1321's own
+//! test suite, which is a stronger guarantee than most dependencies come with.
+//! It is used only where Last.fm requires it, never for anything that has to be
+//! secure.
+
+/// The per-round shift amounts.
 const SHIFT: [u32; 64] = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
     5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
@@ -5,6 +15,7 @@ const SHIFT: [u32; 64] = [
     6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
+/// `floor(abs(sin(i + 1)) * 2^32)`, written out because `sin` is not const.
 const NOISE: [u32; 64] = [
     0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
     0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
@@ -24,6 +35,7 @@ const NOISE: [u32; 64] = [
     0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
 ];
 
+/// MD5 of some bytes, as the sixteen bytes of the digest.
 fn digest(input: &[u8]) -> [u8; 16] {
     let mut state: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
 
@@ -78,6 +90,7 @@ fn digest(input: &[u8]) -> [u8; 16] {
     out
 }
 
+/// MD5 as the lowercase hexadecimal string every API writes it in.
 pub fn md5_hex(input: &[u8]) -> String {
     digest(input)
         .iter()
@@ -85,6 +98,14 @@ pub fn md5_hex(input: &[u8]) -> String {
         .collect()
 }
 
+/// The `api_sig` Last.fm wants on a signed call.
+///
+/// Its rule, exactly: sort the parameters by name, run their names and values
+/// together with nothing in between, append the shared secret, and take the MD5
+/// of the **UTF-8** of that. Nothing is url-encoded at this stage — encoding
+/// happens when the request is built, and signing the encoded form is the
+/// classic way to get an "invalid method signature" for every track with a
+/// space in its title. `format` and `callback` are never signed.
 pub fn api_sig(params: &[(String, String)], secret: &str) -> String {
     let mut sorted: Vec<&(String, String)> = params
         .iter()
@@ -105,6 +126,7 @@ pub fn api_sig(params: &[(String, String)], secret: &str) -> String {
 mod tests {
     use super::*;
 
+    /// RFC 1321's own test suite. If this passes, the digest is the digest.
     #[test]
     fn the_published_test_vectors_come_out() {
         let cases: &[(&str, &str)] = &[
@@ -130,6 +152,8 @@ mod tests {
         }
     }
 
+    /// The block boundary is where a hand-written digest goes wrong: 55 bytes
+    /// still fit their padding, 56 do not and need a second block.
     #[test]
     fn it_survives_the_block_boundary() {
         for length in [54, 55, 56, 57, 63, 64, 65, 119, 120, 128] {
@@ -142,6 +166,7 @@ mod tests {
         assert_eq!(md5_hex(&[b'x'; 64]), "c1bb4f81d892b2d57947682aeb252456");
     }
 
+    /// The signature's rule is "sorted by name, run together, secret last".
     #[test]
     fn a_signature_is_the_sorted_pairs_plus_the_secret() {
         let params = vec![
@@ -153,6 +178,8 @@ mod tests {
         assert_eq!(api_sig(&params, "SECRET"), expected);
     }
 
+    /// `format` is sent but never signed, and signing it is the mistake that
+    /// makes every call fail with "invalid method signature".
     #[test]
     fn format_is_left_out_of_the_signature() {
         let without = vec![("method".to_string(), "track.scrobble".to_string())];
@@ -162,6 +189,8 @@ mod tests {
         assert_eq!(api_sig(&without, "s"), api_sig(&with, "s"));
     }
 
+    /// Signed raw, not url-encoded: a track with a space in its title is the
+    /// normal case, not the exception.
     #[test]
     fn values_are_signed_exactly_as_they_are() {
         let params = vec![("track".to_string(), "tha".to_string())];
@@ -170,6 +199,7 @@ mod tests {
         assert_eq!(api_sig(&spaced, "s"), md5_hex(b"trackxtal twos"));
     }
 
+    /// Non-ASCII has to be signed as UTF-8, or every Japanese title fails.
     #[test]
     fn a_signature_is_taken_over_utf8() {
         let params = vec![("artist".to_string(), "坂本龍一".to_string())];

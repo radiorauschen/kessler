@@ -1,3 +1,21 @@
+//! What a station says it plays where it broadcasts from one of the common
+//! platforms.
+//!
+//! There is no standard for a programme; only the song in the stream
+//! (ICY), which kessler reads anyway. But most stations run on one of a few
+//! platforms, each with its own open answer, so one reading serves every
+//! station on it:
+//!
+//! - AzuraCast: `/api/nowplaying` — the song, with its cover.
+//! - LibreTime (and Airtime before it): `/api/live-info-v2` — the song, and
+//!   the show on now with the ones to come: a programme.
+//! - Icecast: `/status-json.xsl` on the stream's own server — the title,
+//!   even where the stream itself does not send it.
+//!
+//! Which one a station answers to is found out once, the first time it is
+//! tuned in, by asking a handful of addresses on its stream's server and its
+//! site, and kept for as long as kessler runs (nothing is written down).
+
 use std::sync::Mutex;
 
 use chrono::{DateTime, Local};
@@ -6,14 +24,20 @@ use super::programme::Show;
 use super::spins::Spin;
 use crate::json::Json;
 
+/// A platform a station was found on, with where to ask it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Platform {
+    /// Its `nowplaying` address, and the stream's path to pick the station
+    /// out of a server's several.
     AzuraCast { ask: String, path: String },
+    /// Its site, before `/api/`.
     LibreTime { site: String },
+    /// Its `status-json.xsl`, and the stream's mount.
     Icecast { ask: String, path: String },
 }
 
 impl Platform {
+    /// Its name, for the log.
     pub fn word(&self) -> &'static str {
         match self {
             Platform::AzuraCast { .. } => "azuracast",
@@ -23,12 +47,16 @@ impl Platform {
     }
 }
 
+/// What was found for each stream asked about: a platform, or none.
 static FOUND: Mutex<Vec<(String, Option<Platform>)>> = Mutex::new(Vec::new());
 
+/// What was found for `stream`, if it was looked for yet.
 fn found(stream: &str) -> Option<Option<Platform>> {
     FOUND.lock().ok()?.iter().find(|(s, _)| s == stream).map(|(_, p)| p.clone())
 }
 
+/// The platform of `stream`, looked for the first time it is asked (which
+/// asks the net: called off the window's thread).
 pub fn find(stream: &str, homepage: &str) -> Option<Platform> {
     if let Some(known) = found(stream) {
         return known;
@@ -42,10 +70,15 @@ pub fn find(stream: &str, homepage: &str) -> Option<Platform> {
     platform
 }
 
+/// The platform of `stream`, once known, where it says what comes next:
+/// LibreTime its shows, AzuraCast its next song. Icecast only ever says what
+/// plays now.
 pub fn programme_of(stream: &str) -> Option<Platform> {
     found(stream)?.filter(|p| !matches!(p, Platform::Icecast { .. }))
 }
 
+/// A stream's address in parts: scheme with host and port, the host alone
+/// over https, and the path.
 fn parts(url: &str) -> Option<(String, String, String)> {
     let (scheme, rest) = url.split_once("://")?;
     let rest = rest.split(['?', '#']).next().unwrap_or("");
@@ -58,6 +91,8 @@ fn parts(url: &str) -> Option<(String, String, String)> {
     Some((format!("{scheme}://{host}"), format!("https://{bare}"), format!("/{path}")))
 }
 
+/// Ask the platforms in turn, the fullest first; `read` fetches an address
+/// as JSON.
 fn look_for(stream: &str, homepage: &str, read: impl Fn(&str) -> Option<Json>) -> Option<Platform> {
     let (origin, site, path) = parts(stream)?;
     let mut sites = vec![site];
@@ -88,6 +123,7 @@ fn libretime_address(site: &str) -> String {
     format!("{site}/api/live-info-v2?timezone=UTC&days=1&shows=6")
 }
 
+/// What plays now, and the programme where the platform keeps one.
 pub fn ask(platform: &Platform) -> Result<(Option<Spin>, Vec<Show>), String> {
     let read = |url: &str| {
         crate::library::coverart::fetch_text(url)
@@ -108,10 +144,13 @@ pub fn ask(platform: &Platform) -> Result<(Option<Spin>, Vec<Show>), String> {
     })
 }
 
+/// What a station's platform says is on and to come: LibreTime's shows,
+/// AzuraCast's songs.
 pub fn shows(platform: &Platform) -> Result<Vec<Show>, String> {
     ask(platform).map(|(_, shows)| shows)
 }
 
+/// A song from who and what, the way a stream says it when the two come as one.
 fn spin(artist: &str, song: &str) -> Option<Spin> {
     let (artist, song) = (artist.trim(), song.trim());
     if song.is_empty() {
@@ -125,6 +164,8 @@ fn spin(artist: &str, song: &str) -> Option<Spin> {
     Some(Spin { artist: artist.to_string(), song: song.to_string() })
 }
 
+/// The station of an AzuraCast answer — one, or the server's several — whose
+/// stream is `path`; alone, the only one.
 fn azuracast_station<'a>(doc: &'a Json, path: &str) -> Option<&'a Json> {
     let is_one = |s: &&Json| s.get("now_playing").is_some() && s.get("station").is_some();
     if let Some(all) = doc.as_array() {
@@ -143,6 +184,9 @@ fn azuracast_station<'a>(doc: &'a Json, path: &str) -> Option<&'a Json> {
     Some(doc).filter(is_one)
 }
 
+/// AzuraCast's songs as a programme: the last few played, the one playing and
+/// the next, each with when it began (`played_at`, seconds since 1970) and how
+/// long it is.
 fn azuracast_shows(station: &Json) -> Vec<Show> {
     let as_show = |item: &Json, at_key: &str| -> Option<Show> {
         let song = item.get("song")?;
@@ -174,6 +218,8 @@ fn azuracast_song(station: &Json) -> Option<Spin> {
     spin(song.text("artist").unwrap_or(""), song.text("title").or(song.text("text")).unwrap_or(""))
 }
 
+/// The source of an Icecast status whose mount is `path`; alone, the only
+/// one.
 fn icecast_source<'a>(doc: &'a Json, path: &str) -> Option<&'a Json> {
     let sources = doc.get("icestats")?.get("source")?;
     let all: Vec<&Json> = match sources.as_array() {
@@ -195,6 +241,7 @@ fn libretime_song(doc: &Json) -> Option<Spin> {
     spin(field("artist_name"), Some(field("track_title")).filter(|t| !t.is_empty()).or(current.text("name")).unwrap_or(""))
 }
 
+/// LibreTime's show on now and the ones to come, asked for in UTC.
 fn libretime_shows(doc: &Json) -> Vec<Show> {
     let Some(shows) = doc.get("shows") else { return Vec::new() };
     let when = |s: &Json, k: &str| -> Option<DateTime<Local>> {

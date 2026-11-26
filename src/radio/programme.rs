@@ -1,27 +1,54 @@
+//! What a station broadcasts when.
+//!
+//! A stream says at most what plays now; what comes after is only known
+//! where a station publishes it. NTS does, openly: its live page asks
+//! `nts.live/api/v2/live`, which names the show on each channel now and the
+//! ones after it, with their times. Others may follow by the same door
+//! ([`Source`]); a station without one has no programme.
+
 use std::sync::mpsc;
 
 use chrono::{DateTime, Local};
 
 use crate::json::Json;
 
+/// One show: what it is called, when it begins and ends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Show {
     pub title: String,
     pub start: DateTime<Local>,
     pub end: DateTime<Local>,
+    /// Its picture's address, where the programme has one (NTS gives each show
+    /// its own).
     pub picture: String,
+    /// What the show is, in a sentence or two, where the programme says.
     pub about: String,
+    /// Where else the show is to be heard or read about — its soundcloud, its
+    /// youtube — as words and addresses: the links in its description, and the
+    /// programme's own list of them.
     pub links: Vec<(String, String)>,
 }
 
+/// Where a station's programme is to be had.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
+    /// NTS, and which of its two channels.
     Nts(u8),
+    /// One of Montez Press Radio's streams, by its name on their site: each
+    /// says which of its recordings plays, since when and for how long.
     Montez(&'static str),
+    /// KZSU Stanford, whose own site says the show on now, its song, and the
+    /// shows of the evening.
     Kzsu,
+    /// A station on a platform that says what comes next — LibreTime its shows,
+    /// AzuraCast its next song: found out by
+    /// `platform`, which also reads it.
     Platform(super::platform::Platform),
 }
 
+/// Montez Press Radio's streams, by a word of their names in the directory, and
+/// their names on Montez's own site. The main stream, without a word of its
+/// own, is the site's „default" playlist.
 const MONTEZ_STREAMS: [(&str, &str); 4] = [
     ("language, art", "reading-and-poetry-the-sounded-word"),
     ("music", "music"),
@@ -29,9 +56,12 @@ const MONTEZ_STREAMS: [(&str, &str); 4] = [
     ("recent", "recent"),
 ];
 
+/// The main stream's name on Montez's site.
 const MONTEZ_MAIN: &str = "default";
 
 impl Source {
+    /// The programme for the station called `name` and streaming from
+    /// `url`, if it has one that can be asked for.
     pub fn of(url: &str, name: &str) -> Option<Source> {
         let url = url.to_ascii_lowercase();
         let name = name.to_lowercase();
@@ -54,17 +84,26 @@ impl Source {
     }
 }
 
+/// Where a Montez stream says what it plays; `{}` is the stream's name.
+/// `KESSLER_MONTEZ_ENDPOINT` for a stand-in.
 fn montez_endpoint(slug: &str) -> String {
     let pattern = std::env::var("KESSLER_MONTEZ_ENDPOINT").unwrap_or_else(|_| MONTEZ_ENDPOINT.to_string());
     pattern.replace("{}", slug)
 }
 
+/// Montez's own address for one stream, as its site's script asks for it
+/// (`/api/get-stream/` and the name, as its `app.js` has it).
 const MONTEZ_ENDPOINT: &str = "https://radio.montezpress.com/api/get-stream/{}";
 
+/// Where Montez says what goes out live and is to come (`schedule_list`), and
+/// perhaps every stream with it (from the site's script);
+/// `KESSLER_MONTEZ_SCHEDULE` for a stand-in.
 fn montez_schedule() -> String {
     std::env::var("KESSLER_MONTEZ_SCHEDULE").unwrap_or_else(|_| "https://radio.montezpress.com/api/get-live-items".to_string())
 }
 
+/// Where KZSU's site asks what is on now and the next five shows (`onnow`,
+/// `upcoming`); `KESSLER_KZSU_ENDPOINT` for a stand-in.
 fn kzsu_endpoint() -> String {
     std::env::var("KESSLER_KZSU_ENDPOINT").unwrap_or_else(|_| "https://kzsu.stanford.edu/api/shows/upcoming/5/".to_string())
 }
@@ -73,6 +112,8 @@ fn nts_endpoint() -> String {
     std::env::var("KESSLER_NTS_ENDPOINT").unwrap_or_else(|_| "https://www.nts.live/api/v2/live".to_string())
 }
 
+/// Ask for the programme on a thread of its own: the show now and the ones
+/// after it, in order.
 pub fn ask(source: Source) -> mpsc::Receiver<Result<Vec<Show>, String>> {
     let (tell, answer) = mpsc::channel();
     std::thread::Builder::new()
@@ -111,6 +152,8 @@ pub fn ask(source: Source) -> mpsc::Receiver<Result<Vec<Show>, String>> {
     answer
 }
 
+/// The shows NTS names for `channel`: `now`, then `next`, `next2` … as far
+/// as it goes.
 fn nts_shows(doc: &Json, channel: u8) -> Vec<Show> {
     let wanted = channel.to_string();
     let Some(entry) = doc.list("results").iter().find(|r| r.text("channel_name") == Some(wanted.as_str())) else {
@@ -158,6 +201,11 @@ fn nts_shows(doc: &Json, channel: u8) -> Vec<Show> {
     shows
 }
 
+/// What a Montez stream played and plays: its recordings, each with when it
+/// last began (`last_played`, UTC) and how long it is (`duration`, seconds);
+/// the one playing says so. The one playing and those before it, in order; what
+/// comes after, the stream does not say. The title is the recording's, else its
+/// artist's; under it the artist, where and in which city it was recorded.
 fn montez_shows(doc: &Json, slug: &str) -> Vec<Show> {
     let stream = if slug == MONTEZ_MAIN {
         doc.get("playlist")
@@ -189,6 +237,11 @@ fn montez_shows(doc: &Json, slug: &str) -> Vec<Show> {
     shows
 }
 
+/// KZSU's shows: the one on now (`onnow`, its name, its DJ, when it ends — its
+/// start not said, so an hour before at most), then the evening's (`upcoming`:
+/// day, start as „2000" — „2400" is midnight — and minutes, all in Stanford's
+/// time). The picture on now is the record's playing; a show's own where it has
+/// one.
 fn kzsu_shows(doc: &Json, now: DateTime<Local>) -> Vec<Show> {
     let mut shows = Vec::new();
     let words = |item: &Json, keys: &[&str]| {
@@ -222,6 +275,8 @@ pub(super) fn kzsu_titles(doc: &Json) -> Vec<String> {
     kzsu_shows(doc, Local::now()).into_iter().map(|s| s.title).collect()
 }
 
+/// A time at Stanford as ours: Pacific time, an hour less from the second
+/// Sunday of March to the first of November, both at two in the morning.
 fn pacific(at: chrono::NaiveDateTime) -> Option<DateTime<Local>> {
     use chrono::Datelike;
     let sunday = |month: u32, nth: u32| {
@@ -234,6 +289,10 @@ fn pacific(at: chrono::NaiveDateTime) -> Option<DateTime<Local>> {
     Some(chrono::TimeZone::from_local_datetime(&zone, &at).single()?.with_timezone(&Local))
 }
 
+/// Montez's live broadcasts to come: each with its start in the time of its
+/// place (`start_time` and `timezone` as „UTC-4"), no length — so until the
+/// next one begins, the last an hour. Under the title the artist, the place,
+/// and the description with its links taken out.
 fn montez_live(doc: &Json) -> Vec<Show> {
     let mut shows: Vec<Show> = Vec::new();
     for item in doc.list("schedule_list") {
@@ -264,6 +323,7 @@ fn montez_live(doc: &Json) -> Vec<Show> {
     shows
 }
 
+/// „UTC-4", „UTC+1", „UTC+5:30" as an offset.
 fn utc_offset(zone: &str) -> Option<chrono::FixedOffset> {
     let rest = zone.trim().strip_prefix("UTC")?;
     if rest.is_empty() {
@@ -279,6 +339,8 @@ fn utc_offset(zone: &str) -> Option<chrono::FixedOffset> {
     chrono::FixedOffset::east_opt(sign * seconds)
 }
 
+/// The links a description written as HTML holds: each `<a href>` with
+/// its words, or, without words, the name of its site.
 fn links_in(html: &str) -> Vec<(String, String)> {
     let mut links: Vec<(String, String)> = Vec::new();
     let mut rest = html;
@@ -306,6 +368,7 @@ fn links_in(html: &str) -> Vec<(String, String)> {
     links
 }
 
+/// A site's name from its address: „soundcloud" for soundcloud.com.
 pub(super) fn site_word(url: &str) -> String {
     let host = url.split("//").nth(1).unwrap_or(url).split(['/', '?', '#']).next().unwrap_or("");
     let host = host.trim_start_matches("www.").trim_start_matches("m.");
@@ -316,6 +379,9 @@ pub(super) fn site_word(url: &str) -> String {
     }
 }
 
+/// The words without the lines that only name a link — „soundcloud",
+/// „youtube" — which stand below as links, or, with no address to them,
+/// would be words nothing comes of.
 fn without_link_lines(text: &str, links: &[(String, String)]) -> String {
     const ONLY_A_PLACE: [&str; 10] =
         ["soundcloud", "youtube", "mixcloud", "bandcamp", "instagram", "facebook", "twitter", "spotify", "website", "x"];
@@ -330,6 +396,7 @@ fn without_link_lines(text: &str, links: &[(String, String)]) -> String {
         .to_string()
 }
 
+/// A description written as HTML, as plain words.
 fn strip_tags(text: &str) -> String {
     let mut out = String::new();
     let mut inside = false;
@@ -344,6 +411,7 @@ fn strip_tags(text: &str) -> String {
     out
 }
 
+/// NTS writes some titles with their HTML entities still in.
 fn unescape(title: &str) -> String {
     title
         .replace("&amp;", "&")
@@ -353,6 +421,7 @@ fn unescape(title: &str) -> String {
         .replace("&gt;", ">")
 }
 
+/// Where a show's picture is kept, by its address.
 pub fn picture_path(url: &str) -> Option<std::path::PathBuf> {
     if url.is_empty() {
         return None;
@@ -361,6 +430,7 @@ pub fn picture_path(url: &str) -> Option<std::path::PathBuf> {
     Some(crate::config::Config::config_dir().join("radio-shows").join(name))
 }
 
+/// Fetch a show's picture on a thread of its own, unless it is kept.
 fn fetch_picture(url: &str) {
     let Some(path) = picture_path(url) else { return };
     if path.exists() {
@@ -382,16 +452,23 @@ fn fetch_picture(url: &str) {
         .ok();
 }
 
+/// A station's programme as the window holds it: the shows heard, the one
+/// on now and those to come; and when it is next to be asked again.
 #[derive(Debug, Default)]
 pub struct Programme {
+    /// The station it is for.
     pub url: String,
+    /// The shows that were on while it was listened to, oldest first.
     pub past: Vec<Show>,
+    /// Now, then what comes after.
     pub coming: Vec<Show>,
     asking: Option<mpsc::Receiver<Result<Vec<Show>, String>>>,
     asked_at: Option<std::time::Instant>,
 }
 
+/// How many of the shows that went by are kept to look back on.
 const PAST_KEPT: usize = 3;
+/// How often the programme is asked for again at most, and at least.
 const ASK_AGAIN_SOON: std::time::Duration = std::time::Duration::from_secs(60);
 const ASK_AGAIN_LATE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -400,10 +477,14 @@ impl Programme {
         Programme { url: url.to_string(), ..Programme::default() }
     }
 
+    /// The show on now, if the programme knows it.
     pub fn now(&self, at: DateTime<Local>) -> Option<&Show> {
         self.coming.first().filter(|s| s.start <= at && at < s.end)
     }
 
+    /// Ask again when it is time: at once the first time, after the show
+    /// on now has ended (a minute's grace, NTS takes a moment), and every
+    /// quarter of an hour in any case. Whether anything changed.
     pub fn tend(&mut self, source: Source) -> bool {
         let mut changed = false;
         if let Some(asking) = &self.asking {
@@ -439,10 +520,13 @@ impl Programme {
         changed
     }
 
+    /// Whether the programme is still being asked for the first time.
     pub fn waiting(&self) -> bool {
         self.asking.is_some() && self.coming.is_empty() && self.past.is_empty()
     }
 
+    /// A fresh answer: what it names from now on replaces what was to come,
+    /// and what was on before and is over goes to the past.
     fn take(&mut self, shows: Vec<Show>) {
         let now = Local::now();
         for show in shows.iter().filter(|s| s.end <= now) {
@@ -462,6 +546,8 @@ impl Programme {
         }
     }
 
+    /// What the show on now is, where the programme says. Where else the show
+    /// on now is to be found.
     pub fn links_now(&self) -> Vec<(String, String)> {
         self.now(Local::now()).map(|s| s.links.clone()).unwrap_or_default()
     }
@@ -470,6 +556,7 @@ impl Programme {
         self.now(Local::now()).map(|s| s.about.as_str()).filter(|a| !a.is_empty())
     }
 
+    /// The picture of the show on now, once it is fetched.
     pub fn picture_now(&self) -> Option<std::path::PathBuf> {
         let show = self.now(Local::now())?;
         let path = picture_path(&show.picture)?;

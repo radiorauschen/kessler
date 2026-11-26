@@ -1,6 +1,22 @@
+//! Showing a file where it lives, in the system's own file manager.
+//!
+//! The same reasoning as [`super::folder`]: every platform already has a way
+//! to do this, and shelling out to it costs one process and no dependencies.
+//!
+//! - **macOS**: `open -R`, which opens a Finder window on the folder with the
+//!   file selected in it.
+//! - **Linux**: there is no one file manager, but there is one agreed way to
+//!   ask whichever is installed — the `org.freedesktop.FileManager1` D-Bus
+//!   interface, which Nautilus, Dolphin, Nemo, Caja and Thunar all answer
+//!   with the file selected. Where nothing answers it, `xdg-open` on the
+//!   folder: the right folder, just without the file picked out.
+//! - **Windows**: `explorer /select,`, which does what `open -R` does.
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// What the right-click menu calls it, in the file manager's own name where
+/// the platform has one.
 pub const WORD: &str = if cfg!(target_os = "macos") {
     "im finder zeigen"
 } else if cfg!(windows) {
@@ -9,6 +25,12 @@ pub const WORD: &str = if cfg!(target_os = "macos") {
     "im dateimanager zeigen"
 };
 
+/// Open the file manager on the folder `path` is in, with `path` selected.
+///
+/// Returns once the file manager has been asked, not once it has opened: on
+/// Linux the asking happens on a thread of its own, because a D-Bus call
+/// that starts a file manager can take a second, and the window must not
+/// stop for it.
 pub fn show(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(tr!("{} ist nicht mehr da", path.display()));
@@ -76,6 +98,9 @@ fn started(command: &mut Command) -> Result<(), String> {
         .map_err(|e| tr!("der dateimanager liess sich nicht öffnen: {}", e))
 }
 
+/// A path as a `file://` address: every byte that is not plainly safe in one
+/// written as `%XX`, so a space, an umlaut or a `#` in an album name arrives
+/// as itself. The D-Bus interface takes addresses, not paths.
 #[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
 fn file_uri(path: &Path) -> String {
     let mut out = String::from("file://");

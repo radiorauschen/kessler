@@ -1,7 +1,26 @@
+//! Writer for the iPod `iTunesDB`.
+//!
+//! [`write`] produces a database for devices that do **not** require a
+//! signed header (iPod 1G–5.5G, mini, nano 1–2, shuffle); [`write_signed`]
+//! one for the iPod classic and the nano 3G and 4G, which want it signed with
+//! their own FireWire GUID (see `hash58`). Callers must check
+//! [`crate::ipod::device_info::DeviceInfo::writable`] first and pick by
+//! [`crate::ipod::device_info::DeviceInfo::signing`] — this module has no way
+//! to know what hardware the bytes are headed for.
+//!
+//! Layout mirrors `parser.rs`; every length field is computed from what was
+//! actually written rather than hardcoded, so the two cannot drift apart.
+
 use super::types::*;
 
+/// Header sizes. These are the sizes iTunes 4.x–7.x wrote and every iPod in
+/// the unsigned-database era accepts.
 const MHBD_HEADER: usize = 0x68;
+/// The header a signed database gets: the length iTunes 7.4 and libgpod
+/// write, with room for the signature at 0x58.
 const MHBD_HEADER_SIGNED: usize = 0xF4;
+/// The oldest database version written for a device that wants a signature:
+/// iTunes 7.4's, which those iPods came out with. Older ones it may refuse.
 const SIGNED_DB_VERSION: u32 = 0x19;
 const MHSD_HEADER: usize = 0x60;
 const MHLT_HEADER: usize = 0x5c;
@@ -11,8 +30,13 @@ const MHOD_HEADER: usize = 0x18;
 const MHYP_HEADER: usize = 0x6c;
 const MHIP_HEADER: usize = 0x4c;
 
+/// Database version written when the device's own database gave us no hint.
+/// 0x13 is iTunes 7 era: new enough that the longer mhit fields are expected,
+/// old enough that pre-Classic firmware is comfortable with it.
 const DEFAULT_DB_VERSION: u32 = 0x13;
 
+/// A chunk under construction. Fields are written at absolute offsets inside
+/// the fixed-size header, then children are appended.
 struct Chunk {
     buf: Vec<u8>,
 }
@@ -46,17 +70,24 @@ impl Chunk {
         self.buf.extend_from_slice(bytes);
     }
 
+    /// Stamp the final size into the total-length field at +8.
     fn finish(mut self) -> Vec<u8> {
         let total = self.buf.len() as u32;
         self.u32(8, total);
         self.buf
     }
 
+    /// For mhlt/mhlp, whose +8 field is a child count rather than a length.
     fn finish_counted(self) -> Vec<u8> {
         self.buf
     }
 }
 
+/// A string `mhod`.
+///
+/// Always written as UTF-16LE. UTF-8 payloads (marker 2) only appear in newer
+/// databases, and older firmware does not expect them — UTF-16 is what every
+/// supported generation was shipped reading.
 fn string_mhod(kind: MhodType, value: &str) -> Vec<u8> {
     let utf16: Vec<u8> = value.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
 
@@ -70,6 +101,7 @@ fn string_mhod(kind: MhodType, value: &str) -> Vec<u8> {
     c.finish()
 }
 
+/// The position `mhod` that gives a playlist entry its place in the order.
 fn position_mhod(position: u32) -> Vec<u8> {
     let mut c = Chunk::new(b"mhod", MHOD_HEADER);
     c.u32(12, MhodType::PlaylistPosition.as_raw());
@@ -78,12 +110,15 @@ fn position_mhod(position: u32) -> Vec<u8> {
     c.finish()
 }
 
+/// Only emit a string object when there is something to say — iTunes leaves
+/// empty tags out rather than writing zero-length objects.
 fn push_if_set(mhods: &mut Vec<Vec<u8>>, kind: MhodType, value: &str) {
     if !value.is_empty() {
         mhods.push(string_mhod(kind, value));
     }
 }
 
+/// The four-character format marker iPods store at mhit+24.
 fn filetype_marker(track: &IpodTrack) -> u32 {
     let ext = track
         .path
@@ -103,6 +138,7 @@ fn filetype_marker(track: &IpodTrack) -> u32 {
     u32::from_be_bytes(*tag)
 }
 
+/// The path as the iPod stores it: colon-separated, with a leading colon.
 fn relative_to_ipod_path(track: &IpodTrack) -> Option<String> {
     let path = track.path.as_ref()?;
     let joined: Vec<String> = path
@@ -170,13 +206,22 @@ fn playlist_item(track_id: u32, position: u32) -> Vec<u8> {
     c.finish()
 }
 
+/// The fields the iPod browses by, as its library index numbers them, in the
+/// order libgpod writes them: title, artist, album, genre, composer (title,
+/// album, artist … until then).
 pub const INDEX_FIELDS: [u32; 5] = [0x03, 0x05, 0x04, 0x07, 0x12];
 
+/// A string as the indices order it: as iTunes orders them on a 3G
+/// (`crate::db::shelf_key`), then as written, so that two spellings of one
+/// name sort side by side and each spelling's tracks stand together.
 fn index_key(text: &str) -> (u8, String, &str) {
     let (class, key) = crate::db::shelf_key(text);
     (class, key, text)
 }
 
+/// The order of the tracks for one index field, iTunes's and libgpod's: the
+/// field first, then album, disc, number and title, so a record's tracks
+/// stand together and in their running order.
 fn index_order(tracks: &[IpodTrack], field: u32) -> Vec<u32> {
     let mut order: Vec<u32> = (0..tracks.len() as u32).collect();
     let rest = |t: &IpodTrack| (t.disc_number, t.track_number, crate::db::sort_key(&t.title));
@@ -203,6 +248,14 @@ fn index_order(tracks: &[IpodTrack], field: u32) -> Vec<u32> {
     order
 }
 
+/// The library index for one field (`mhod` 52): every track, by its place in
+/// the track list, in the field's order.
+///
+/// The iPod builds its Artists, Albums, Genres and Songs menus from these.
+/// Without them a 3G walks the tracks in the order the database holds them and
+/// folds only neighbours with the same name together — and a sync adds its
+/// tracks at the end, so an artist synced in two goes stood in the menu twice,
+/// one synced in six goes six times, and their records with them.
 fn index_mhod(order: &[u32], field: u32) -> Vec<u8> {
     let mut c = Chunk::new(b"mhod", MHOD_HEADER);
     c.u32(12, 52);
@@ -215,6 +268,10 @@ fn index_mhod(order: &[u32], field: u32) -> Vec<u8> {
     c.finish()
 }
 
+/// The long playlist `mhod` (type 100) libgpod writes after every playlist's
+/// name: the columns iTunes shows it with. Its numbers are libgpod's; what they
+/// mean nobody has written down, but iTunes and libgpod both write it, so a
+/// database without it is one no iPod has been tested with.
 fn playlist_columns_mhod() -> Vec<u8> {
     let mut words: Vec<u32> = vec![0; 6];
     words.extend([0x010084, 0x05, 0x09, 0x03, 0x120001]);
@@ -260,16 +317,26 @@ fn playlist_chunk(playlist: &IpodPlaylist, tracks: &[IpodTrack]) -> Vec<u8> {
     c.finish()
 }
 
+/// Serialise a database to the bytes that go into
+/// `iPod_Control/iTunes/iTunesDB`.
+///
+/// The result is always a complete, self-consistent file: this cannot fail
+/// partway and leave a half-written database behind.
 pub fn write(db: &ItunesDb) -> Vec<u8> {
     build(db, false)
 }
 
+/// [`write`] for a device that wants its database signed — the iPod classic,
+/// the nano 3G and 4G — with its FireWire GUID: a longer header, a version
+/// no older than those iPods know, and the signature in it.
 pub fn write_signed(db: &ItunesDb, guid: &[u8; 8]) -> Vec<u8> {
     let mut bytes = build(db, true);
     crate::ipod::hash58::sign(&mut bytes, guid);
     bytes
 }
 
+/// The database, with the header for a signed one where `signed` says so;
+/// signing it is the caller's.
 fn build(db: &ItunesDb, signed: bool) -> Vec<u8> {
     let ordered = in_master_order(db);
     let db = &numbered(ItunesDb { tracks: ordered, ..db.clone() });
@@ -311,6 +378,7 @@ fn build(db: &ItunesDb, signed: bool) -> Vec<u8> {
     root.finish()
 }
 
+/// The window's language as the two letters iTunes writes into the header.
 fn language_code() -> [u8; 2] {
     match crate::lang::current() {
         crate::lang::Lang::De => *b"de",
@@ -319,6 +387,9 @@ fn language_code() -> [u8; 2] {
     }
 }
 
+/// A number for a library that has none yet: from the database's own where
+/// it has one, else from the clock — any number that is not nought will do,
+/// as long as it stays, and it does once it is written.
 fn new_library_id(db_id: u64) -> u64 {
     let seed = if db_id != 0 {
         db_id
@@ -331,6 +402,17 @@ fn new_library_id(db_id: u64) -> u64 {
     (x ^ (x >> 31)).max(1)
 }
 
+/// The same database with its tracks numbered afresh, rising in the order
+/// they stand, and every playlist pointing at the new numbers.
+///
+/// A 3G finds a track by its number as if the numbers rose down the track
+/// list, as they do in every database iTunes writes. The list stands in the
+/// artists' order, and a track copied over later would carry a higher number
+/// than the ones after it: the artists menu then stops at the first such
+/// track (the same database renumbered lists everything).
+///
+/// Numbers that already rise are kept, so a database written twice keeps
+/// its numbers.
 fn numbered(mut db: ItunesDb) -> ItunesDb {
     if db.tracks.windows(2).all(|w| w[0].id < w[1].id) {
         return db;
@@ -346,8 +428,12 @@ fn numbered(mut db: ItunesDb) -> ItunesDb {
     db
 }
 
+/// The first track's number. Any rising run will do; this one was tried on a
+/// 3G.
 const FIRST_TRACK_ID: u32 = 1000;
 
+/// The tracks in the master playlist's order, then any it does not list in
+/// the order they were in.
 fn in_master_order(db: &ItunesDb) -> Vec<IpodTrack> {
     let Some(master) = db.playlists.iter().find(|p| p.is_master) else {
         return db.tracks.clone();
@@ -367,6 +453,9 @@ fn in_master_order(db: &ItunesDb) -> Vec<IpodTrack> {
     ordered
 }
 
+/// Build the master playlist that lists every track in the database — in the
+/// artist index's order, so a firmware that reads the list rather than the
+/// indices finds each artist's tracks together too.
 pub fn master_playlist(name: &str, db: &ItunesDb) -> IpodPlaylist {
     IpodPlaylist {
         id: 1,
@@ -393,6 +482,9 @@ pub fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
 
+    /// The header's language and the library's number go out as they came
+    /// in; where nothing wrote them, a language and a number are written and
+    /// stay from then on.
     #[test]
     fn the_header_keeps_its_language_and_its_library() {
         let parse = crate::ipod::itunesdb::parse;
@@ -406,6 +498,10 @@ mod tests {
         assert_eq!((second.language, second.library_id), (first.language, first.library_id), "and kept");
     }
 
+    /// The indices sort as iTunes sorts a 3G: marks before the first
+    /// letter left aside, letters before digits, numbers as numbers, and the
+    /// one track without an artist last — first, it left the 3G with no artists
+    /// at all.
     #[test]
     fn the_artist_index_is_sorted_as_itunes_sorts_it() {
         let names = ["", "6955", "(((Microwaves)))", "40318", "Acid Mothers Guru Guru", "ÄÄNIPÄÄ", "Zeni Geva"];
@@ -418,6 +514,10 @@ mod tests {
         assert_eq!(sorted, ["ÄÄNIPÄÄ", "Acid Mothers Guru Guru", "(((Microwaves)))", "Zeni Geva", "6955", "40318", ""]);
     }
 
+    /// The master playlist is laid out as libgpod lays it out: the name, the
+    /// long column mhod (type 100, 0x288 bytes), then the indices as title,
+    /// artist, album, genre, composer, without jump tables as Apple writes
+    /// them; one string mhod said in the header.
     #[test]
     fn a_string_mhod_says_1_where_itunes_does() {
         let bytes = string_mhod(MhodType::Artist, "Can");
@@ -452,6 +552,9 @@ mod tests {
         assert_eq!(&bytes[at..at + 4], b"mhip");
     }
 
+    /// The track list goes out in the master playlist's order, so a place in
+    /// an index means the same track in either list (a 3G reads them as the
+    /// master playlist's, and otherwise lists artists twice and out of order).
     #[test]
     fn the_track_list_stands_in_the_master_order() {
         let names = ["Popol Vuh", "Ash Ra Tempel", "Qluster", "Ash Ra Tempel", "Can"];
@@ -481,6 +584,9 @@ mod tests {
     use super::*;
     use crate::ipod::itunesdb::{parse, test_writer};
 
+    /// A signed database reads back as the same library, carries the
+    /// signature where the iPod looks for it, and is told apart from an
+    /// unsigned one by kessler itself.
     #[test]
     fn a_signed_database_reads_back_and_carries_its_signature() {
         let db = sample_db();
@@ -505,6 +611,9 @@ mod tests {
         assert_eq!(resigned, bytes);
     }
 
+    /// What the unsigned writer produces, pinned to the byte: the iPods that
+    /// sync today must go on getting exactly this, whatever the signed path
+    /// changes around it.
     #[test]
     fn the_unsigned_database_stays_byte_for_byte() {
         let mut db = sample_db();
@@ -579,6 +688,7 @@ mod tests {
         db
     }
 
+    /// The library index for `field` read out of a written database.
     fn index_in(bytes: &[u8], field: u32) -> Vec<u32> {
         let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         for at in 0..bytes.len().saturating_sub(4) {
@@ -590,6 +700,9 @@ mod tests {
         panic!("no index for field {field}");
     }
 
+    /// Tracks synced in several goes stand scattered through the database;
+    /// the artist index brings each artist's together, and each record's
+    /// within it, in its running order — what the 3G's menus fold by.
     #[test]
     fn the_artist_index_keeps_an_artist_and_a_record_together() {
         let track = |id: u32, artist: &str, album: &str, number: u32| IpodTrack {
@@ -623,6 +736,8 @@ mod tests {
         assert_eq!(reparsed.tracks.len(), 5);
     }
 
+    /// Every track goes on ticked — 0 at mhit+0x78, as iTunes writes it —
+    /// and marked as audio; the parser sees the byte.
     #[test]
     fn tracks_are_written_ticked_and_as_audio() {
         let db = sample_db();
@@ -787,6 +902,8 @@ mod tests {
     }
 }
 
+/// Write a made-up iPod into a folder, so the window can be driven against one
+/// without a device on the desk.
 #[cfg(test)]
 mod fake_device {
     use super::*;

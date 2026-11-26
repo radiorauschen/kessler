@@ -1,8 +1,21 @@
+//! What a station that keeps its playlist in Spinitron plays.
+//!
+//! KZSU sends nothing of what plays in its stream; its DJs log every song in
+//! Spinitron, whose page of the station's newest songs — the „now playing"
+//! widget stations put on their sites — is open to anyone. Read every
+//! half minute while the station is on the air, its newest song stands in
+//! for the title the stream does not send.
+//!
+//! The widget's markup was not seen from here (the network is closed), so
+//! it is read leniently: the song's data as Spinitron's player gets it
+//! (`data-spin`), else whatever is marked `artist` and `song`.
+
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::Station;
 
+/// One song logged: who, what, and from which record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spin {
     pub artist: String,
@@ -10,6 +23,7 @@ pub struct Spin {
 }
 
 impl Spin {
+    /// As a stream would say it: „artist - title".
     pub fn said(&self) -> String {
         if self.artist.is_empty() {
             self.song.clone()
@@ -19,8 +33,11 @@ impl Spin {
     }
 }
 
+/// The stations known to keep their playlist in Spinitron, by something
+/// their stream's address or page has in it, and their name there.
 const KNOWN: [(&str, &str); 1] = [("kzsu", "kzsu")];
 
+/// Spinitron's name for `station`, if it is one known to log there.
 pub fn of(station: &Station) -> Option<&'static str> {
     let url = station.url.to_ascii_lowercase();
     let page = station.homepage.to_ascii_lowercase();
@@ -37,11 +54,14 @@ fn endpoint(name: &str) -> String {
     format!("{base}?station={name}&num=5&sharing=0&player=0&cover=0&merch=0&meta=0")
 }
 
+/// The station's own page at Spinitron, asked when the widget names nothing.
 fn station_page(name: &str) -> String {
     let base = std::env::var("KESSLER_SPINITRON_PAGE").unwrap_or_else(|_| "https://spinitron.com".to_string());
     format!("{base}/{}/", name.to_ascii_uppercase())
 }
 
+/// The newest songs, from the widget, else from the station's page; the
+/// trouble of the last asked when neither names any.
 fn ask_both(name: &str) -> Result<Vec<Spin>, String> {
     let mut trouble = String::new();
     if name == "kzsu" {
@@ -69,10 +89,13 @@ fn ask_both(name: &str) -> Result<Vec<Spin>, String> {
     Err(trouble)
 }
 
+/// Where KZSU's site asks, every little while, only what is on now;
+/// `KESSLER_KZSU_ONNOW` for a stand-in.
 fn kzsu_on_now_endpoint() -> String {
     std::env::var("KESSLER_KZSU_ONNOW").unwrap_or_else(|_| "https://kzsu.stanford.edu/api/shows/onnow/?focusevent=1".to_string())
 }
 
+/// The song KZSU's site names on now (`onnow.track_artist`/`track_title`).
 fn kzsu_on_now(doc: &crate::json::Json) -> Option<Spin> {
     let on = doc.get("onnow").or(Some(doc).filter(|d| d.get("track_title").is_some()))?;
     let word = |k: &str| on.text(k).map(str::trim).unwrap_or("").to_string();
@@ -80,25 +103,36 @@ fn kzsu_on_now(doc: &crate::json::Json) -> Option<Spin> {
     (!song.is_empty()).then_some(Spin { artist, song })
 }
 
+/// How often the playlist is asked again.
 const EVERY: Duration = Duration::from_secs(30);
 
+/// Where a station's songs are read: its log at Spinitron, or the platform it
+/// broadcasts from, found out on the first asking.
 #[derive(Debug, Clone)]
 enum From {
     Spinitron(&'static str),
     Platform { homepage: String },
 }
 
+/// What one asking brought: who said it (`None`: no platform found), and
+/// the songs, newest first.
 type Answer = Result<(Option<&'static str>, Vec<Spin>), String>;
 
+/// The playlist of the station on the air, asked every half minute.
 #[derive(Debug)]
 pub struct Watch {
+    /// The station it is for.
     pub url: String,
     from: From,
     asking: Option<mpsc::Receiver<Answer>>,
     asked_at: Option<Instant>,
+    /// The newest song logged, once asked.
     pub latest: Option<Spin>,
+    /// How the first answer went, once, for the log: who said it (none: no
+    /// platform found) and how many songs.
     pub first: Option<Result<(Option<&'static str>, usize), String>>,
     answered: bool,
+    /// Nothing to ask: no platform was found.
     idle: bool,
 }
 
@@ -112,6 +146,7 @@ impl Watch {
         Some(Watch { url: station.url.clone(), from, asking: None, asked_at: None, latest: None, first: None, answered: false, idle: false })
     }
 
+    /// Ask when it is time, take in what came. Whether the newest changed.
     pub fn tend(&mut self) -> bool {
         let mut changed = false;
         if let Some(asking) = &self.asking {
@@ -155,6 +190,7 @@ impl Watch {
     }
 }
 
+/// The songs on a Spinitron page, the newest first.
 pub fn spins_in(page: &str) -> Vec<Spin> {
     let from_data = spins_from_data(page);
     if !from_data.is_empty() {
@@ -170,6 +206,8 @@ pub fn spins_in(page: &str) -> Vec<Spin> {
         .collect()
 }
 
+/// The songs as Spinitron's player gets them: `data-spin` holding a little
+/// JSON with `a` (artist) and `s` (song).
 fn spins_from_data(page: &str) -> Vec<Spin> {
     let mut spins = Vec::new();
     let mut rest = page;
@@ -189,6 +227,7 @@ fn spins_from_data(page: &str) -> Vec<Spin> {
     spins
 }
 
+/// The words of every element whose class names `what`, in order.
 fn marked(page: &str, what: &str) -> Vec<String> {
     let mut found = Vec::new();
     let lower = page.to_ascii_lowercase();

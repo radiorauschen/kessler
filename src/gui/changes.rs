@@ -1,11 +1,28 @@
+//! The list of changes, as the menu shows it.
+//!
+//! `CHANGELOG.md` is read at build time rather than from disk, which settles
+//! two questions at once: where the file would have to live beside a
+//! double-clickable application, and whether what it says matches the program
+//! showing it. Compiled in, it cannot drift and cannot go missing.
+//!
+//! The format is the one the file already has: `## ` begins a version, `- `
+//! begins a change, everything else is prose for whoever opens the file and
+//! is skipped here. Deliberately forgiving — a changelog that has to parse
+//! before the program will start would be a poor trade.
+
+/// One released version and what went into it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     pub version: String,
     pub changes: Vec<String>,
 }
 
+/// The file itself, as it stood when this was built.
 const CHANGELOG: &str = include_str!("../../CHANGELOG.md");
 
+/// Every release in the file, newest first — which is the order it is written
+/// in, so no sorting is done: a version number is not always something you can
+/// compare, and the person writing the file knows the order they meant.
 pub fn releases() -> Vec<Release> {
     read(CHANGELOG)
 }
@@ -37,6 +54,8 @@ fn read(text: &str) -> Vec<Release> {
     out
 }
 
+/// The file is markdown, the menu is not: `*so*` is emphasis to a reader of
+/// the file and two stray asterisks to a reader of the window.
 fn plainly(text: &str) -> String {
     text.trim().replace(['*', '`'], "")
 }
@@ -63,6 +82,8 @@ mod tests {
         );
     }
 
+    /// The file is wrapped so it can be read as a file; an entry that runs
+    /// over two lines is still one entry.
     #[test]
     fn a_wrapped_entry_is_one_entry() {
         let text = "## 0.1.0\n- a change that was too long\n  for one line\n- a short one\n";
@@ -99,6 +120,9 @@ mod tests {
         assert!(read("just some words\n").is_empty());
     }
 
+    /// The real file has to parse, and its newest version has to be the one
+    /// the program says it is — a changelog whose top entry is not this build
+    /// is worse than none.
     #[test]
     fn the_file_that_ships_says_what_this_build_is() {
         let releases = releases();

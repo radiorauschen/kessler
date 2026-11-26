@@ -1,22 +1,60 @@
+//! The equalizer: ten bands an octave apart, from 31 Hz to 16 kHz.
+//!
+//! Each band is a peaking filter (Robert Bristow-Johnson's cookbook), an
+//! octave wide, raised or lowered by up to [`RANGE_DB`]. All ten run one after
+//! the other on every channel, in the same tap that levels and listens — see
+//! `audio::Tap` — so the music, the radio and the podcasts all go through
+//! them, and the scope draws what is heard.
+//!
+//! What sets it apart from a row of sliders that only add:
+//!
+//! - **headroom**: whatever the curve raises, the whole is first lowered by
+//!   the curve's highest point, so a raised band can never push the sound
+//!   past full scale and break up. The curve's shape is what is heard, not
+//!   its height;
+//! - **no clicks**: a change walks to the new setting over some tens of
+//!   milliseconds, the filters worked out afresh every few frames on the way
+//!   there, rather than jumping in the middle of a wave;
+//! - **nothing when flat**: a band at 0 dB is left out, and with all of them
+//!   there and the walk over, the tap passes the sound through untouched.
+//!
+//! The setting itself lives in [`SETTINGS`], one for the whole program: the
+//! window writes it, every tap reads it, a change is heard at once.
+
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+/// The bands' middles, in hertz: octaves, as a graphic equalizer has them.
 pub const BANDS: [f32; 10] = [31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
 
+/// How many bands.
 pub const COUNT: usize = BANDS.len();
 
+/// How far a band goes either way, in decibels.
 pub const RANGE_DB: f32 = 12.0;
 
+/// How wide each band is: an octave, give or take, so neighbours meet
+/// rather than leave a dip between them or pile up.
 const Q: f64 = std::f64::consts::SQRT_2;
 
+/// How long a change takes to be heard in full, in seconds — long enough not
+/// to click, short enough to feel immediate under the hand.
 const WALK_SECS: f32 = 0.06;
 
+/// How many frames between two steps of the walk. The filters are worked out
+/// again at each step, so this is also how often that happens while one is
+/// under way.
 const STEP_FRAMES: u32 = 32;
 
+/// The most channels a tap keeps filter memory for; past that, a channel
+/// shares the last one's — nothing kessler plays has more than two.
 const CHANNELS: usize = 8;
 
+/// The equalizer's setting, shared by the window and every tap.
 pub struct Settings {
     on: AtomicBool,
     gains: [AtomicU32; COUNT],
+    /// Counted up at every change, so a tap need only compare one number
+    /// per frame to know whether to look again.
     version: AtomicU32,
 }
 
@@ -29,6 +67,7 @@ impl Settings {
         }
     }
 
+    /// Switch it, and set every band, in decibels — clamped to the range.
     pub fn set(&self, on: bool, gains: [f32; COUNT]) {
         self.on.store(on, Ordering::Relaxed);
         for (slot, gain) in self.gains.iter().zip(gains) {
@@ -46,6 +85,8 @@ impl Settings {
         std::array::from_fn(|i| f32::from_bits(self.gains[i].load(Ordering::Relaxed)))
     }
 
+    /// What the taps should be walking to: the gains while it is on, flat
+    /// while it is off.
     fn wanted(&self) -> [f32; COUNT] {
         if self.on() {
             self.gains()
@@ -65,8 +106,11 @@ impl Default for Settings {
     }
 }
 
+/// The one setting the program has.
 pub static SETTINGS: Settings = Settings::new();
 
+/// The ready-made settings, by the word the window shows for them, in
+/// decibels from the lowest band to the highest.
 pub const PRESETS: [(&str, [f32; COUNT]); 6] = [
     ("flach", [0.0; COUNT]),
     ("mehr bass", [6.0, 5.0, 3.5, 1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -76,6 +120,7 @@ pub const PRESETS: [(&str, [f32; COUNT]); 6] = [
     ("loudness", [5.0, 4.0, 2.0, 0.0, -1.0, -1.0, 0.0, 1.5, 3.0, 3.5]),
 ];
 
+/// Which preset `gains` is, if any.
 pub fn preset_of(gains: &[f32; COUNT]) -> Option<&'static str> {
     PRESETS
         .iter()
@@ -83,10 +128,12 @@ pub fn preset_of(gains: &[f32; COUNT]) -> Option<&'static str> {
         .map(|(name, _)| *name)
 }
 
+/// The gains as the config keeps them: ten numbers, one decimal each.
 pub fn gains_to_text(gains: &[f32; COUNT]) -> String {
     gains.iter().map(|g| format!("{:.1}", g)).collect::<Vec<_>>().join(" ")
 }
 
+/// Read back; anything missing or unreadable is flat.
 pub fn gains_from_text(text: &str) -> [f32; COUNT] {
     let mut out = [0.0; COUNT];
     for (slot, word) in out.iter_mut().zip(text.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty())) {
@@ -99,6 +146,7 @@ pub fn gains_from_text(text: &str) -> [f32; COUNT] {
     out
 }
 
+/// One biquad's coefficients, divided through by a0.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Coeffs {
     b0: f64,
@@ -111,6 +159,8 @@ struct Coeffs {
 impl Coeffs {
     const THROUGH: Self = Self { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 };
 
+    /// A peaking filter at `hz`, raised by `gain_db`, at `rate` frames a
+    /// second.
     fn peaking(hz: f32, gain_db: f32, rate: u32) -> Self {
         if gain_db == 0.0 || rate == 0 {
             return Self::THROUGH;
@@ -131,6 +181,7 @@ impl Coeffs {
         }
     }
 
+    /// What it does to a sine at `hz`, in decibels.
     fn response_db(&self, hz: f64, rate: f64) -> f64 {
         let w = 2.0 * std::f64::consts::PI * hz / rate;
         let (c1, s1) = (w.cos(), w.sin());
@@ -145,8 +196,11 @@ impl Coeffs {
     }
 }
 
+/// The rate the curve is drawn for: what most music is at.
 const DRAWN_RATE: u32 = 48_000;
 
+/// What all ten bands together do to a sine at `hz`, in decibels — the curve
+/// the window draws, before the headroom is taken off.
 pub fn curve_db(gains: &[f32; COUNT], hz: f32) -> f32 {
     let rate = f64::from(DRAWN_RATE);
     BANDS
@@ -157,6 +211,8 @@ pub fn curve_db(gains: &[f32; COUNT], hz: f32) -> f32 {
         .sum::<f64>() as f32
 }
 
+/// How far the whole is lowered first so the curve's highest point stays at
+/// full scale: its highest point, where that is above nought, in decibels.
 pub fn headroom_db(gains: &[f32; COUNT]) -> f32 {
     if gains.iter().all(|g| *g <= 0.0) {
         return 0.0;
@@ -171,17 +227,24 @@ fn decibels_to_factor(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
+/// One tap's equalizer: the filters, their memory, and the walk to whatever
+/// the setting says.
 pub struct Running {
     settings: &'static Settings,
     seen: u32,
     rate: u32,
+    /// Where each band is now and where it is going, in decibels.
     now: [f32; COUNT],
     wanted: [f32; COUNT],
+    /// The factor everything is lowered by first, now and wanted.
     pre_now: f32,
     pre_wanted: f32,
     coeffs: [Coeffs; COUNT],
+    /// Per channel, per band, the transposed direct form's two numbers.
     memory: [[[f64; 2]; COUNT]; CHANNELS],
+    /// Frames until the next step of the walk.
     until_step: u32,
+    /// How far a band moves in one step, in decibels.
     step_db: f32,
 }
 
@@ -205,14 +268,19 @@ impl Running {
         }
     }
 
+    /// Whether anything is being done to the sound at all.
     fn idle(&self) -> bool {
         self.pre_now == 1.0 && self.pre_wanted == 1.0 && self.now.iter().chain(&self.wanted).all(|g| *g == 0.0)
     }
 
+    /// Forget what the filters were ringing with: after a seek, the old
+    /// place's tail does not belong in front of the new one.
     pub fn reset(&mut self) {
         self.memory = [[[0.0; 2]; COUNT]; CHANNELS];
     }
 
+    /// Called once a frame, before its first sample: look at the setting,
+    /// and take the next step of the walk when one is due.
     fn frame(&mut self) {
         let version = self.settings.version();
         if version != self.seen {
@@ -245,6 +313,7 @@ impl Running {
         }
     }
 
+    /// One sample of channel `channel`; `channel` 0 starts a frame.
     #[inline]
     pub fn process(&mut self, sample: f32, channel: u16) -> f32 {
         if channel == 0 {
@@ -276,6 +345,8 @@ mod tests {
         Box::leak(Box::new(Settings::new()))
     }
 
+    /// A sine at `hz` through `running`, mono; the level of the last half,
+    /// once the filters have settled, as a peak.
     fn peak_through(running: &mut Running, hz: f32, rate: u32) -> f32 {
         let n = rate as usize;
         let mut peak = 0.0f32;

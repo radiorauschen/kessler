@@ -1,3 +1,11 @@
+//! Light or dark, as the Linux desktop says it — by way of the desktop
+//! portal, which GNOME, KDE and the portals of sway and Hyprland all answer
+//! alike (`org.freedesktop.appearance` `color-scheme`).
+//!
+//! `gsettings` is GNOME's own: under KDE or a tiling window manager it answers
+//! nothing, or what GNOME would have said, so it is only asked where there is
+//! no portal.
+
 use std::sync::mpsc::Sender;
 
 use eframe::egui;
@@ -9,6 +17,9 @@ const INTERFACE: &str = "org.freedesktop.portal.Settings";
 const NAMESPACE: &str = "org.freedesktop.appearance";
 const KEY: &str = "color-scheme";
 
+/// The portal's answer as light or dark: 1 is „prefer dark", 2 „prefer
+/// light", and 0 „no preference", which is how a desktop left as it came
+/// answers — light, everywhere it is asked.
 fn theme_of(code: u32) -> egui::Theme {
     if code == 1 {
         egui::Theme::Dark
@@ -17,6 +28,8 @@ fn theme_of(code: u32) -> egui::Theme {
     }
 }
 
+/// The number inside whatever the portal wraps it in: `ReadOne` hands back
+/// the value, the older `Read` a value inside a value.
 fn code_in(value: &Value<'_>) -> Option<u32> {
     match value {
         Value::U32(code) => Some(*code),
@@ -29,6 +42,7 @@ fn proxy(connection: &zbus::blocking::Connection) -> zbus::Result<zbus::blocking
     zbus::blocking::Proxy::new(connection, DESTINATION, PATH, INTERFACE)
 }
 
+/// What the desktop is set to now; `None` without a portal that knows.
 pub fn read() -> Option<egui::Theme> {
     let connection = zbus::blocking::Connection::session().ok()?;
     let proxy = proxy(&connection).ok()?;
@@ -39,6 +53,10 @@ pub fn read() -> Option<egui::Theme> {
     code_in(&value).map(theme_of)
 }
 
+/// Send every change of the desktop's setting, and wake the window for it,
+/// for as long as the window listens. Returns at once with `false` when
+/// there is no portal to listen to, so the caller can ask `gsettings`
+/// instead; otherwise only when the window has gone.
 pub fn watch(tx: &Sender<egui::Theme>, wake: &egui::Context) -> bool {
     let Ok(connection) = zbus::blocking::Connection::session() else {
         return false;
@@ -73,8 +91,12 @@ pub fn watch(tx: &Sender<egui::Theme>, wake: &egui::Context) -> bool {
     true
 }
 
+/// The accent colour, under the same name: three shares of red, green and
+/// blue between 0 and 1 — GNOME's and Ubuntu's accent colours, KDE's too.
+/// Anything outside that is „none chosen".
 const ACCENT_KEY: &str = "accent-color";
 
+/// The colour inside whatever the portal wraps it in.
 fn accent_in(value: &Value<'_>) -> Option<egui::Color32> {
     match value {
         Value::Value(inner) => accent_in(inner),
@@ -98,6 +120,10 @@ fn accent_in(value: &Value<'_>) -> Option<egui::Color32> {
     }
 }
 
+/// Read the desktop's accent now, and keep `theme`'s copy of it up to date
+/// for as long as the program runs — on a thread of its own, the window woken
+/// at each change. Nothing where there is no portal, or one that has no
+/// accent to say.
 pub fn follow_accent(wake: egui::Context) {
     let _ = std::thread::Builder::new().name("kessler-accent".into()).spawn(move || {
         let Ok(connection) = zbus::blocking::Connection::session() else { return };

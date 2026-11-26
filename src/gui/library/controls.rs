@@ -1,5 +1,22 @@
+//! The controls in the masthead: the switches, the volume, the progress
+//! rule, the transport keys and the words the status line uses.
+
 use super::*;
 
+/// The volume, in the transport line: a word and a figure, not a control —
+/// the rule beside it is what changes them.
+///
+/// Two galleys rather than one, because they are two different things. „vol"
+/// is a word and is set like every other word up there; the number is a
+/// number, and set in the mono cut for the reason every figure in this window
+/// is: it changes under your hand, and in a proportional face a 1 is narrower
+/// than a 7, so the word beside it would shuffle sideways at every step.
+///
+/// `figure`, while the rule is pushed and there is no room for the badge
+/// over it, stands in the word's place, set to end where the word ends.
+///
+/// True when the word was right-clicked: it opens the equalizer as the
+/// rule beside it does, the word being the bigger thing to hit.
 pub(super) fn transport_volume(ui: &Ui, right: &mut f32, top: f32, palette: &Palette, figure: Option<u8>) -> bool {
     let word = text::line(ui, tr!("vol"), Role::Label, palette.mid);
     let end = *right;
@@ -17,16 +34,45 @@ pub(super) fn transport_volume(ui: &Ui, right: &mut f32, top: f32, palette: &Pal
     ui.interact(hit, egui::Id::unique("volume-word"), Sense::click()).secondary_clicked()
 }
 
+/// What „vol" takes, measured the way it is drawn.
 pub(super) fn volume_width(ui: &Ui, palette: &Palette) -> f32 {
     text::line(ui, tr!("vol"), Role::Label, palette.mid).size().x
 }
 
+/// How far apart two header controls stand, measured text to text.
+///
+/// Wide enough that their plates keep clear air between them: each plate
+/// reaches `CONTROL_PAD_X` past its own word, so the gap left over is this
+/// minus twice that, and it has to stay larger than the padding itself or the
+/// plate looks closer to its neighbour than to the word it belongs to.
+/// Twenty-eight: the twelve left between two plates is still more than the
+/// eight a plate reaches past its word.
 pub(super) const CONTROL_GAP: f32 = 28.0;
 
+/// How far a hover plate reaches past the word it sits behind: sideways from
+/// the type's own box, above and below from its **ink**.
+///
+/// Eight points every way, and the two numbers are the same number for a
+/// reason — what the eye checks on a plate this small is whether the word sits
+/// in the middle of it, and it cannot do that if the four gaps are set from
+/// two different edges.
 pub(super) const CONTROL_PAD_X: f32 = 8.0;
 
 pub(super) const CONTROL_PAD_Y: f32 = 8.0;
 
+/// The rectangle a header control occupies: its word, plus the air around it
+/// that the pointer counts as part of it.
+///
+/// Measured from the ink, not from the box. The box keeps room above the
+/// ascender and below the descender — and in some faces a line gap below that
+/// again. Grown from it, the plate carried three points more air under the
+/// word than over it: nothing you can name at a glance, everything you can see
+/// once somebody says it.
+///
+/// The band is taken from the face with the usual probe rather than from the
+/// word in front of us, so `liste`, `raster` and `menü` get plates of one
+/// height that line up with each other — a word with an umlaut must not sit in
+/// a taller plate than the word beside it.
 pub(in crate::gui) fn control_plate(ui: &Ui, at: egui::Pos2, width: f32) -> Rect {
     plate_around(
         text::ink_middle(ui, Role::Label, at.y),
@@ -36,6 +82,12 @@ pub(in crate::gui) fn control_plate(ui: &Ui, at: egui::Pos2, width: f32) -> Rect
     )
 }
 
+/// The plate itself, once the face has been asked where its ink is.
+///
+/// Apart from the measuring so that it can be read, and checked, without a
+/// window: `middle` is where the word's ink sits and `ink` how tall it stands.
+/// The whole of the rule is that the air above the ink and the air below it
+/// are one number — which is what a plate grown from the box could not do.
 pub(super) fn plate_around(middle: f32, ink: f32, left: f32, width: f32) -> Rect {
     let half = ink / 2.0 + CONTROL_PAD_Y;
     Rect::from_min_max(
@@ -44,6 +96,10 @@ pub(super) fn plate_around(middle: f32, ink: f32, left: f32, width: f32) -> Rect
     )
 }
 
+/// The faintest possible hover, on a control in the header.
+///
+/// Exactly what a row in a list gets: same fill, same corner. Two different
+/// ways of saying "you can click this" in one window is one too many.
 pub(in crate::gui) fn paint_control_hover(
     ui: &Ui,
     plate: Rect,
@@ -56,6 +112,9 @@ pub(in crate::gui) fn paint_control_hover(
     }
 }
 
+/// The words of a text link: in the ink under the pointer, as the header's
+/// controls are, and in their own tone otherwise. News keeps the accent,
+/// which says what it is.
 pub(super) fn hover_ink(response: &Response, colour: Color32, palette: &Palette) -> Color32 {
     if response.hovered() && colour != palette.accent {
         palette.ink
@@ -64,6 +123,14 @@ pub(super) fn hover_ink(response: &Response, colour: Color32, palette: &Palette)
     }
 }
 
+/// The volume rule, shown beside its label while it is open.
+///
+/// Same language as the progress rule — two pixels of mark, a taller strip to
+/// grab — because they are the same kind of thing and there is no reason for a
+/// second one.
+///
+/// What it hands back is the figure for „vol" to say in its place, while the
+/// rule is pushed with no room for the badge over it.
 pub(super) fn volume_rule(app: &mut GuiApp, ui: &Ui, right: &mut f32, top: f32, palette: &Palette) -> Option<u8> {
     const WIDTH: f32 = VOLUME_WIDTH;
     const GRAB_HEIGHT: f32 = 16.0;
@@ -127,7 +194,8 @@ pub(super) fn volume_rule(app: &mut GuiApp, ui: &Ui, right: &mut f32, top: f32, 
     }
 
     let hot = response.hovered() || response.dragged();
-    let (height, knob) = rule_swell(swell(ui, "volume", hot));
+    let (height, _) = rule_swell(swell(ui, "volume", hot));
+    let knob = knob_swell(ui, "volume", hot);
     let rule = Rect::from_min_size(
         egui::pos2(strip.left(), strip.center().y - height / 2.0),
         Vec2::new(WIDTH, height),
@@ -167,20 +235,38 @@ pub(super) fn volume_rule(app: &mut GuiApp, ui: &Ui, right: &mut f32, top: f32, 
     in_the_word
 }
 
+/// How many points of scrolling over the volume rule make one step of it.
 const VOLUME_SCROLL_POINTS: f32 = 8.0;
 
+/// How many points a notch of a wheel counts for over the volume rule: two
+/// steps of it.
 const VOLUME_SCROLL_LINE: f32 = 2.0 * VOLUME_SCROLL_POINTS;
 
+/// How long the figure stays after the volume rule was scrolled, in seconds.
 const VOLUME_SCROLL_SHOWN: f64 = 0.8;
 
+/// How far a key's mark stands in from the edge of its cell.
 pub(super) const KEY_AIR: f32 = 5.0;
 
+/// The air between „vol" and its rule.
 pub(super) const VOLUME_GAP: f32 = 10.0;
 
+/// The progress rule: two pixels to look at, a taller strip to grab.
+///
+/// It is drawn whether or not anything is playing — empty, it is the one line
+/// the design keeps, and it holds the header together as a block. The exception
+/// to "no lines" is that this one always turns out to be carrying something:
+/// how far into a track you are, or that there is no track. The chapters on the
+/// timeline `rule`, the starts as shares of the way: heard and not heard as
+/// with music, a mark where each begins — no shade for every other chapter.
+///
+/// `lit`, the chapter pointed at — on the rule or in the list — stands out a
+/// shade more, its number by it.
 fn paint_chapters(ui: &Ui, rule: Rect, starts: &[f32], palette: &Palette, lit: Option<usize>, plated: bool) {
     if starts.len() < 2 {
         return;
     }
+    /// How wide the cut where a chapter begins is.
     const CUT: f32 = 1.5;
     let x = |share: f32| rule.left() + rule.width() * share;
     for (i, &start) in starts.iter().enumerate() {
@@ -199,9 +285,14 @@ fn paint_chapters(ui: &Ui, rule: Rect, starts: &[f32], palette: &Palette, lit: O
     chapter_number(ui, rule, from, i + 1, plated, palette);
 }
 
+/// How wide a chapter's mark on the timeline is, and how far it stands out
+/// of the rule above and below.
 const MARK_WIDTH: f32 = 2.0;
 const MARK_OUT: f32 = 2.5;
 
+/// The tone of the scheme that stands out most from its ground — the ink, the
+/// accent or the second tone, whichever it is in this scheme — for the
+/// chapters' marks.
 fn sharpest(palette: &Palette) -> Color32 {
     [palette.ink, palette.accent, palette.mid]
         .into_iter()
@@ -209,6 +300,10 @@ fn sharpest(palette: &Palette) -> Color32 {
         .unwrap_or(palette.ink)
 }
 
+/// The number of a chapter by the rule at `x`, where it begins. `plated` — the
+/// compact header — on the same plate the volume's figure wears while it is
+/// pulled, above the rule where the window has room, else under it; in the
+/// super compact one, small, in the scheme's sharpest tone on the ground.
 fn chapter_number(ui: &Ui, rule: Rect, x: f32, number: usize, plated: bool, palette: &Palette) {
     let said = number.to_string();
     if plated {
@@ -216,6 +311,7 @@ fn chapter_number(ui: &Ui, rule: Rect, x: f32, number: usize, plated: bool, pale
         badge_centred(ui, egui::pos2(x, rule.center().y), &said, above, palette);
         return;
     }
+    /// The air between the rule and the figure, and around the figure.
     const AWAY: f32 = 5.0;
     const PAD: Vec2 = Vec2::new(4.0, 2.0);
     let tone = sharpest(palette);
@@ -231,10 +327,16 @@ fn chapter_number(ui: &Ui, rule: Rect, x: f32, number: usize, plated: bool, pale
     painter.galley(text::ink_centred(&g, plate), g, tone);
 }
 
+/// The air between a time and the end of the rule it belongs to.
 const TIME_GAP: f32 = 14.0;
 
+/// The shortest stretch of rule worth drawing after the time: less, and it
+/// read as a stray dash beside the figures.
 const RULE_STROKE_LEAST: f32 = 40.0;
 
+/// How much of the line the time and its rule need at the least: the time at
+/// its widest, its gap, and a rule worth the name. Without a track, the time
+/// is not there and the rule alone is asked for.
 pub(super) fn rule_least(app: &GuiApp, ui: &Ui, palette: &Palette, m: Metrics) -> f32 {
     let time = if app.player.current_track().is_some() {
         let whole = text::duration(app.player.duration().as_secs());
@@ -332,7 +434,8 @@ pub(super) fn progress_rule(
         }
     }
 
-    let (height, knob) = rule_swell(swell(ui, "timeline", hot));
+    let (height, _) = rule_swell(swell(ui, "timeline", hot));
+    let knob = knob_swell(ui, "timeline", hot);
     let top = strip.center().y - height / 2.0;
     let rule = Rect::from_min_size(
         egui::pos2(strip.left(), top),
@@ -383,6 +486,14 @@ pub(super) fn progress_rule(
     }
 }
 
+/// The rule while a station plays: it shows that a connection is being made,
+/// and then that one stands — a little rule, `STATION_SPAN` wide, as wide as
+/// the volume's, that draws itself in to a dot that pulses.
+///
+/// One movement after the other, each eased and in its own time:
+/// see [`Step`]. Paused, it draws itself out to the little rule again, still
+/// and faint, and wanders there once play tunes the station in anew. Returns
+/// where it ends, for „live" after it, and whether „live" is to stand.
 fn station_rule(app: &GuiApp, ui: &Ui, strip: Rect, palette: &Palette) -> (f32, bool) {
     let tuning = app.player.tuning();
     let playing = app.player.state() == crate::player::PlaybackState::Playing;
@@ -487,6 +598,9 @@ fn station_rule(app: &GuiApp, ui: &Ui, strip: Rect, palette: &Palette) -> (f32, 
     (shape.right(), false)
 }
 
+/// A box with corners rounded by `radius`, any fraction of a point, as one
+/// outline — so that a colour faded in or out is even all over, with no
+/// overlaps.
 fn rounded_box(painter: &egui::Painter, rect: Rect, radius: f32, colour: Color32) {
     let r = radius.clamp(0.0, rect.width().min(rect.height()) / 2.0);
     if r < 0.05 {
@@ -511,6 +625,9 @@ fn rounded_box(painter: &egui::Painter, rect: Rect, radius: f32, colour: Color32
     painter.add(egui::Shape::convex_polygon(points, colour, egui::Stroke::NONE));
 }
 
+/// Whether the station's rule has done its work, so its line may say what
+/// the station plays — see `station_rule`. A rule not drawn for a moment
+/// (another layout) holds nothing back.
 pub(super) fn station_settled(ctx: &egui::Context) -> bool {
     let now = ctx.input(|i| i.time);
     match ctx.data(|d| d.get_temp::<(bool, f64)>(egui::Id::unique("station-settled"))) {
@@ -519,46 +636,72 @@ pub(super) fn station_settled(ctx: &egui::Context) -> bool {
     }
 }
 
+/// Wake the window `secs` from now, on time: egui takes a frame of the
+/// screen's off every wait it is asked for (see `picture::on_grid`), and
+/// woken that much early the rule would ask again for the few milliseconds
+/// left and draw the same picture twice.
 fn wake_in(ui: &Ui, secs: f64) {
     let early = f64::from(ui.input(|i| i.predicted_dt));
     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(secs.max(0.01) + early));
 }
 
+/// The movements of the rule while a station plays, one after the other.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum Step {
+    /// A small ball comes up, in `STATION_APPEAR_SECS`.
     #[default]
     Appearing,
+    /// It pushes out to the right into the little rule.
     Opening,
+    /// A piece travels to and fro on it while the station is tuned in —
+    /// at least once.
     Wandering,
+    /// Tuned in: the rule draws itself in to the ball again.
     Closing,
+    /// A moment still.
     Waiting,
+    /// The ball stands still, with „live" beside it.
     Live,
+    /// Paused: the rule draws in, then the ball shrinks away.
     Leaving,
+    /// Nothing drawn until play comes again.
     Gone,
 }
 
+/// Where the rule is in its movements: which, since when, — opening — from
+/// how far out it began, and for which station (by its address).
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Show {
     step: Step,
     since: f64,
     from: f32,
+    /// How round it was when this step began, 0 square and 1 the dot — for
+    /// a square-ended face only.
     round: f32,
     station: String,
 }
 
 impl Show {
+    /// Opening takes the time the rest of the way takes.
     fn opening_secs(&self) -> f64 {
         (STATION_OPEN_SECS * f64::from(1.0 - self.from)).max(0.001)
     }
 
+    /// Leaving, how long the rule takes to draw in: as long as the rest of
+    /// the way takes.
     fn closing_part(&self) -> f64 {
         STATION_CLOSE_SECS * f64::from(self.from)
     }
 
+    /// The whole of leaving: drawing in, then the ball going.
     fn leaving_secs(&self) -> f64 {
         self.closing_part() + STATION_GO_SECS
     }
 
+    /// How round the shape is, 0 square and 1 the dot, for a square-ended
+    /// face: square until the station is there, rounding while it waits,
+    /// round once live; drawn out again, it squares off first, and leaving
+    /// it keeps what it had.
     fn roundness(&self, now: f64) -> f32 {
         let t = now - self.since;
         match self.step {
@@ -570,6 +713,7 @@ impl Show {
         }
     }
 
+    /// How far out the rule is, 0 the ball and 1 the little rule.
     fn out(&self, now: f64) -> f32 {
         let t = now - self.since;
         match self.step {
@@ -583,6 +727,7 @@ impl Show {
     }
 }
 
+/// Eased at both ends, 0 to 1.
 fn ease_in_out(t: f32) -> f32 {
     0.5 - 0.5 * (t.clamp(0.0, 1.0) * std::f32::consts::PI).cos()
 }
@@ -593,31 +738,79 @@ fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()), mix(a.a(), b.a()))
 }
 
+/// How big the dot is before „live", and the air between them.
 const STATION_DOT: f32 = 7.0;
+/// How long a station's rule is: the dot and its little line, the gap and
+/// „live" — what the compact line keeps for it.
 pub(super) fn station_rule_width(ui: &Ui, palette: &Palette) -> f32 {
     STATION_SPAN + STATION_LIVE_GAP + text::line(ui, tr!("live"), Role::Label, palette.mid).size().x
 }
 
 const STATION_LIVE_GAP: f32 = 8.0;
+/// How wide the little rule the dot draws out to is: the volume's width.
 const STATION_SPAN: f32 = VOLUME_WIDTH;
+/// How thick the little rule is: about half the dot.
 const STATION_TUNE_THICK: f32 = 3.5;
+/// The movements' times: the ball coming up, pushing out to the rule, one turn
+/// of the travelling piece (and the least it wanders), drawing in, the moment
+/// still, and „live" fading in.
 const STATION_APPEAR_SECS: f64 = 0.5;
 const STATION_OPEN_SECS: f64 = 0.9;
 const STATION_TUNE_SECS: f64 = 2.0;
 const STATION_CLOSE_SECS: f64 = 1.2;
 const STATION_WAIT_SECS: f64 = 0.5;
 const STATION_LIVE_SECS: f32 = 0.8;
+/// With a square-ended face, how quickly the dot squares off when a new
+/// station draws it out again.
 const STATION_SQUARE_SECS: f64 = 0.3;
+/// Paused, how long the ball takes to shrink away once the rule is in.
 const STATION_GO_SECS: f64 = 0.5;
+/// How much of the little rule the travelling piece takes.
 const STATION_PIECE: f32 = 0.3;
+/// The four things you do to a record while it is playing, set as type.
+///
+/// Set, not drawn. This window has no pictograms anywhere else, and these are
+/// letterforms out of the typeface it is already set in: two arrows point back
+/// and forward, a circular pair comes back round to where it started, and two
+/// more pass each other going opposite ways. Repeat before shuffle: the round
+/// mark between the straight ones, rather than two flat pairs side by side.
+///
+/// All four are arrows, and that was measured rather than felt: with `«` and
+/// `»` in the first two seats the row held two sizes of mark, 11 by 12 screen
+/// dots against 20 by 21 for the arrows beside them — punctuation dropped
+/// between pictures. `←` and `→` are drawn by the same hand at the same weight
+/// as `⇵` and `↻`, and the four read as one set.
+///
+/// They come from the proportional cut: marks like `≈` and `∞` from a mono
+/// cut without circular arrows had to be *read into* rather than recognised.
+///
+/// The mono cut had one argument in its favour and it has since expired: two
+/// of these glyphs change with the state behind them, and a proportional face
+/// would have re-spaced the row under the pointer. Since the row became
+/// buttons on a fixed grid, nothing can move — a glyph sits in the middle of
+/// its own button and the button does not care how wide it is.
 pub(super) const RING: [&str; 4] = ["←", "→", "↻", "⇵"];
 
+/// The one glyph that says which of three states it is in, rather than only
+/// whether it is on: the whole queue goes round, one track is „①" — the same
+/// circle, with the number inside it.
 pub(super) const REPEAT_ONE: &str = "①";
 
+/// How wide one key is, and how far apart two stand. The keys are the transport
+/// in the corner.
+///
+/// Round ones were tried, and then not kept: a row of circles reads as a
+/// string of beads rather than as a row of keys. The rounded rectangle is the
+/// window's own plate, the one the drag badge wears.
 pub(super) const RING_CELL: f32 = KEY_SIZE;
 
 pub(super) const RING_STEP: f32 = KEY_SIZE + 4.0;
 
+/// One key of the transport, set the way every other control in the header
+/// is: a mark on the ground, and a plate behind it only while the pointer is
+/// on it — the same faint plate `vol`, `liste` and `menü` wear.
+///
+/// `letters` is the caller's: see [`key_colour`].
 pub(super) fn paint_key(
     ui: &Ui,
     plate: Rect,
@@ -649,6 +842,14 @@ pub(super) fn paint_key(
     ui.painter().galley(at, g, letters);
 }
 
+/// The five marks the transport keys carry.
+///
+/// Out of the chosen face, read by glyph name and set a step above the label
+/// size — see `glyphs`. As plain characters they came out at the size of the
+/// lists, a third heavier than the words beside them, and the one repeat
+/// worth having is a drawing no character reaches. Where the face has not
+/// got them, they are drawn here instead: every stroke one width, the width
+/// of the label face's stems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum KeyMark {
     Back,
@@ -659,6 +860,7 @@ pub(super) enum KeyMark {
 }
 
 impl KeyMark {
+    /// The same mark, as the face draws it.
     pub(super) fn glyph(self) -> crate::gui::glyphs::Mark {
         use crate::gui::glyphs::Mark;
         match self {
@@ -682,8 +884,10 @@ impl KeyMark {
     }
 }
 
+/// How thick a drawn mark's strokes are: the label face's stem.
 pub(super) const MARK_STROKE: f32 = 1.1;
 
+/// Draw one of the transport's marks, centred on `at`.
 pub(super) fn paint_mark(ui: &Ui, mark: KeyMark, at: egui::Pos2, colour: Color32) {
     let painter = ui.painter();
     let stroke = egui::Stroke::new(MARK_STROKE, colour);
@@ -730,8 +934,18 @@ pub(super) fn paint_mark(ui: &Ui, mark: KeyMark, at: egui::Pos2, colour: Color32
     }
 }
 
+/// The two words the play key can say. It says what pressing it will do, as
+/// every player's key does: „pause" while the music plays, „play" while it is
+/// held or has not started yet. Both in the ink: „pause" lit in the accent
+/// while „play" was not would read as two different kinds of key; what is
+/// playing is shown by the track in the accent, and by the moving timeline.
+///
+/// It used to say what the player *was* doing, the way the repeat key's glyph
+/// does, and read as the wrong word: a key marked „play" while the music plays
+/// looks like a key that has not been pressed.
 pub(in crate::gui) const PLAY_WORDS: [&str; 2] = ["play", "pause"];
 
+/// What the play key says for `state`, and whether it is lit.
 pub(super) fn play_word(state: crate::player::PlaybackState) -> (&'static str, bool) {
     match state {
         crate::player::PlaybackState::Playing => (PLAY_WORDS[1], false),
@@ -739,6 +953,13 @@ pub(super) fn play_word(state: crate::player::PlaybackState) -> (&'static str, b
     }
 }
 
+/// How far play, standing alone in →'s place while a station plays, moves on
+/// past the cell's edge: its word in the middle of a cell made for the wider of
+/// its two words stood that much further from „vol" than the marks of the other
+/// keys do. Moved, the wider word's edge stands where a mark's would, one
+/// control's gap from „vol". Measured on the wider word, not the one shown:
+/// measured on the one shown, the key jumped sideways each time play turned
+/// into pause.
 pub(super) fn on_air_nudge(ui: &Ui, palette: &Palette) -> f32 {
     let widest = PLAY_WORDS
         .iter()
@@ -747,10 +968,17 @@ pub(super) fn on_air_nudge(ui: &Ui, palette: &Palette) -> f32 {
     ((play_key_width(ui, palette) - widest) / 2.0 - KEY_AIR).max(0.0)
 }
 
+/// The air either side of the word on the play key.
 pub(super) const PLAY_PAD: f32 = 9.0;
 
+/// The air between on and repeat: repeat and shuffle are a group of their
+/// own, as far from the transport as one control stands from the next —
+/// [`CONTROL_GAP`] from mark to mark.
 pub(super) const MODES_APART: f32 = CONTROL_GAP - 2.0 * KEY_AIR;
 
+/// How wide the play key is: the wider of its two words, plus its air, and
+/// never narrower than the other keys. Fixed, so the arrows either side do not
+/// move when it changes its word.
 pub(super) fn play_key_width(ui: &Ui, palette: &Palette) -> f32 {
     let widest = PLAY_WORDS
         .iter()
@@ -759,6 +987,11 @@ pub(super) fn play_key_width(ui: &Ui, palette: &Palette) -> f32 {
     (widest + PLAY_PAD * 2.0).max(RING_CELL)
 }
 
+/// Where the five keys stand, left to right: back, play, on, repeat, shuffle.
+/// The row ends at `right`, the corner of the header. Two groups: the
+/// transport, then the modes, further off.
+///
+/// Lifted out so the arithmetic can be checked without a window.
 pub(super) fn key_cells(right: f32, bottom: f32, play: f32) -> [Rect; 5] {
     let widths = [RING_CELL, play, RING_CELL, RING_CELL, RING_CELL];
     let gap = RING_STEP - RING_CELL;
@@ -778,11 +1011,16 @@ pub(super) fn key_cells(right: f32, bottom: f32, play: f32) -> [Rect; 5] {
     cells
 }
 
+/// How much of the header's line the keys take, from the right margin — all
+/// five, or the three of the transport when `modes` (repeat and shuffle)
+/// stand over the queue instead.
 pub(super) fn keys_width(ui: &Ui, palette: &Palette, modes: bool) -> f32 {
     let cells = header_cells(0.0, 0.0, play_key_width(ui, palette), modes);
     -cells[0].left()
 }
 
+/// The keys' cells in the header, ending at `right`: all five, or — without
+/// the modes — the first three moved along to end there themselves.
 pub(super) fn header_cells(right: f32, bottom: f32, play: f32, modes: bool) -> Vec<Rect> {
     let cells = key_cells(right, bottom, play);
     if modes {
@@ -793,13 +1031,22 @@ pub(super) fn header_cells(right: f32, bottom: f32, play: f32, modes: bool) -> V
     }
 }
 
+/// What a key is, for its colour.
+///
+/// under the pointer in the ink, on its plate; on — playing, lit, chosen — in
+/// the accent. One colour for each state, wherever the control is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Key {
+    /// Back and on.
     Plain,
+    /// The play key, on while the music plays.
     Play(bool),
+    /// Repeat and shuffle, on while lit.
     Switch(bool),
 }
 
+/// The colour of a key's letters at rest — see [`Key`]; [`paint_key`]
+/// turns them to the ink under the pointer.
 pub(super) fn key_colour(key: Key, palette: &Palette) -> Color32 {
     match key {
         Key::Play(true) | Key::Switch(true) => palette.accent,
@@ -807,6 +1054,7 @@ pub(super) fn key_colour(key: Key, palette: &Palette) -> Color32 {
     }
 }
 
+/// Repeat and shuffle as keys: what each shows, and whether it is lit.
 pub(super) fn mode_keys(app: &GuiApp) -> [(&'static str, Role, bool); 2] {
     use crate::db::models::RepeatMode;
     [
@@ -819,6 +1067,9 @@ pub(super) fn mode_keys(app: &GuiApp) -> [(&'static str, Role, bool); 2] {
     ]
 }
 
+/// Repeat and shuffle at the top of the queue's column, the way Apple Music
+/// keeps them over „als nächstes": two keys in a row starting at `left`,
+/// their middle on `middle`. Returns where they end.
 pub(super) fn queue_mode_keys(app: &mut GuiApp, ui: &mut Ui, left: f32, middle: f32, palette: &Palette) -> f32 {
     let mut x = left;
     for (index, (label, role, on)) in mode_keys(app).into_iter().enumerate() {
@@ -843,8 +1094,11 @@ pub(super) fn queue_mode_keys(app: &mut GuiApp, ui: &mut Ui, left: f32, middle: 
     x - (RING_STEP - RING_CELL)
 }
 
+/// How wide the two keys over the queue are.
 pub(super) const QUEUE_MODES_WIDTH: f32 = RING_CELL * 2.0 + (RING_STEP - RING_CELL);
 
+/// The transport, standing in the corner all the time: back, play, on,
+/// repeat, shuffle — the play key between the two arrows.
 pub(super) fn transport_keys(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -915,6 +1169,8 @@ pub(super) fn transport_keys(
     }
 }
 
+/// A piece of the status line: set in one face and cut to its room, or —
+/// at the foot of the compact window — with its figures in the mono cut.
 pub(super) enum StatusWords {
     Plain(std::sync::Arc<egui::Galley>),
     Figured(text::Figured),
@@ -936,8 +1192,13 @@ impl StatusWords {
     }
 }
 
+/// What stands between who speaks in the status line and what they say.
 const STATUS_APART: &str = "   ";
 
+/// `words` for the status line, in `colour`, in at most `room`. With
+/// `figures`, its figures are in the mono cut — unless that is too long for
+/// the room, when it is cut in the one face like everywhere else: a figured
+/// line has no way to end in an ellipsis.
 pub(super) fn status_words(ui: &Ui, words: &str, colour: Color32, room: f32, figures: bool) -> StatusWords {
     let spaced = words.replace("  ", STATUS_APART);
     let words = spaced.as_str();

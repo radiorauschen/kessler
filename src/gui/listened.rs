@@ -1,7 +1,16 @@
+//! How long kessler has played, all told: the music, the radio, the
+//! podcasts, each counted while it really sounds — under „über".
+//!
+//! Kept in `gehoert.toml` beside the settings, a few numbers of seconds.
+//! The music before the count began is not lost entirely: the first time,
+//! every track's plays times its length stand in for it. The radio and the
+//! podcasts have no such past and count from then on.
+
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+/// Seconds heard, by where they came from.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Heard {
@@ -16,6 +25,7 @@ impl Heard {
     }
 }
 
+/// Which of the three is sounding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     Music,
@@ -23,8 +33,11 @@ pub enum Source {
     Podcasts,
 }
 
+/// How long a frame may count at most: a window asleep for a while, then
+/// woken, would otherwise add the whole sleep.
 const MOST_A_FRAME: f64 = 2.0;
 
+/// How often what is counted goes to disk, in seconds.
 const SAVE_EVERY: f64 = 60.0;
 
 pub struct Listened {
@@ -38,6 +51,8 @@ fn path() -> std::path::PathBuf {
 }
 
 impl Listened {
+    /// What was counted, or — the first time — the music's past from the
+    /// library's play counts (`seed`).
     pub fn open(seed: impl FnOnce() -> f64) -> Self {
         let heard = std::fs::read_to_string(path())
             .ok()
@@ -50,6 +65,7 @@ impl Listened {
         Self { heard, last: None, unsaved: 0.0 }
     }
 
+    /// Once a frame: `playing` is what sounds now, if anything.
     pub fn tick(&mut self, playing: Option<Source>) {
         let now = Instant::now();
         let since = self.last.map(|at| now.duration_since(at).as_secs_f64().min(MOST_A_FRAME));
@@ -66,6 +82,7 @@ impl Listened {
         }
     }
 
+    /// Everything counted back to nought, at once on disk too.
     pub fn reset(&mut self) {
         self.heard = Heard::default();
         self.unsaved = 0.0;
@@ -87,6 +104,7 @@ fn write(heard: &Heard) {
     }
 }
 
+/// „312 std" or „45 min" — whole hours from one on, else whole minutes.
 pub fn said(secs: f64) -> String {
     match amount(secs) {
         (hours, true) => tr!("{} std", hours),
@@ -94,6 +112,8 @@ pub fn said(secs: f64) -> String {
     }
 }
 
+/// The three sources in brackets, as bare numbers in the unit `total` is said
+/// in — after „312 std".
 pub fn parts(heard: &Heard) -> String {
     let hours = amount(heard.total()).1;
     let n = |secs: f64| {
@@ -103,6 +123,7 @@ pub fn parts(heard: &Heard) -> String {
     tr!("(musik {}, radio {}, podcast {})", n(heard.music), n(heard.radio), n(heard.podcasts))
 }
 
+/// The number said, and whether it is hours.
 fn amount(secs: f64) -> (u64, bool) {
     let minutes = (secs.max(0.0) / 60.0).floor() as u64;
     if minutes >= 60 {

@@ -1,17 +1,48 @@
+//! Talking to Last.fm.
+//!
+//! The request goes out through `curl`, for the same reason the folder picker
+//! shells out to the system's own dialog: this program makes perhaps three
+//! small requests per song, and an HTTP client with a TLS stack behind it would
+//! be the largest dependency in the build by a wide margin, for that. `curl`
+//! ships with macOS and with Windows, and is on every Linux worth the name. If
+//! it is missing, scrobbling says so and switches itself off rather than
+//! failing quietly.
+//!
+//! The reply is asked for as XML, not JSON. Last.fm's XML is small and fixed,
+//! the four values this program reads out of it are one `<tag>` deep, and
+//! reading them with string search needs no parser at all. A JSON parser would
+//! be another dependency for the same four values.
+
 use std::io::Write;
 use std::process::Stdio;
 
 use super::sign::api_sig;
 use crate::error::{KesslerError, Result};
 
+/// Where every call goes.
 const ENDPOINT: &str = "https://ws.audioscrobbler.com/2.0/";
 
+/// The same, unless `KESSLER_LASTFM_ENDPOINT` says otherwise.
+///
+/// There is no other way to see what this program actually puts on the wire:
+/// the signature, the encoding and the field names are exactly the things that
+/// are wrong the first time, and "it returned an error" does not say which.
+/// Pointing it at a listener on this machine turns that into something that can
+/// be read.
 fn endpoint() -> String {
     std::env::var("KESSLER_LASTFM_ENDPOINT").unwrap_or_else(|_| ENDPOINT.to_string())
 }
 
+/// How long one call may take. Scrobbling is never urgent, and a scrobble that
+/// hangs must not hold a queue up behind it.
 const TIMEOUT_SECS: u32 = 15;
 
+/// Percent-encode one value for a form body.
+///
+/// Written out because the rule is short and the alternative is a crate: keep
+/// the unreserved set, encode everything else, and — this is the one that bites
+/// — a space becomes `%20`, never `+`, because the signature was taken over the
+/// raw text and the two have to describe the same thing.
 pub fn encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
@@ -25,6 +56,7 @@ pub fn encode(value: &str) -> String {
     out
 }
 
+/// A form body from parameters already in their final order.
 pub fn form_body(params: &[(String, String)]) -> String {
     params
         .iter()
@@ -33,6 +65,10 @@ pub fn form_body(params: &[(String, String)]) -> String {
         .join("&")
 }
 
+/// The text between the first `<tag …>` and its `</tag>`, unescaped.
+///
+/// `None` when the tag is not there at all, which is how a missing value is
+/// told apart from an empty one.
 pub fn tag(xml: &str, name: &str) -> Option<String> {
     let open = format!("<{name}");
     let close = format!("</{name}>");
@@ -42,6 +78,7 @@ pub fn tag(xml: &str, name: &str) -> Option<String> {
     Some(unescape(&xml[after_open..end]))
 }
 
+/// The five XML entities, turned back into characters.
 fn unescape(text: &str) -> String {
     text.replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -50,6 +87,10 @@ fn unescape(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// What Last.fm said went wrong, if anything did.
+///
+/// The code matters: 9 means the session is no longer valid and the user has to
+/// connect again, 11 and 16 mean "try later", and the rest are ours to fix.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiError {
     pub code: u32,
@@ -57,17 +98,20 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    /// Whether waiting and sending it again is worth doing.
     #[cfg(test)]
     pub fn worth_retrying(&self) -> bool {
         matches!(self.code, 11 | 16 | 29)
     }
 
+    /// Whether the stored session has stopped working.
     #[cfg(test)]
     pub fn needs_reconnecting(&self) -> bool {
         matches!(self.code, 4 | 9 | 14)
     }
 }
 
+/// The error in a reply, if the reply is one.
 pub fn error_in(xml: &str) -> Option<ApiError> {
     if !xml.contains("status=\"failed\"") && !xml.contains("<error") {
         return None;
@@ -89,6 +133,12 @@ pub fn error_in(xml: &str) -> Option<ApiError> {
     })
 }
 
+/// One call to the service.
+///
+/// `params` go out as given plus the signature; the reply comes back as text.
+/// Anything that is not a reply — no curl, no network, a timeout — is an error
+/// here rather than an empty answer, so the caller can tell "it said no" from
+/// "it never got there".
 pub fn call(params: Vec<(String, String)>, secret: &str) -> Result<String> {
     let mut params = params;
     params.push(("api_sig".to_string(), api_sig(&params, secret)));
@@ -143,6 +193,7 @@ pub fn call(params: Vec<(String, String)>, secret: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// A space is `%20`. `+` would not match what was signed.
     #[test]
     fn a_space_is_not_a_plus() {
         assert_eq!(encode("xtal two"), "xtal%20two");
@@ -155,6 +206,7 @@ mod tests {
         assert_eq!(encode("aZ09-_.~"), "aZ09-_.~");
     }
 
+    /// Non-ASCII goes out as its UTF-8 bytes, one `%XX` each.
     #[test]
     fn non_ascii_is_encoded_per_byte() {
         assert_eq!(encode("ö"), "%C3%B6");
@@ -180,6 +232,7 @@ mod tests {
         assert_eq!(tag(xml, "key"), None);
     }
 
+    /// The session reply nests, and the name is wanted as well as the key.
     #[test]
     fn a_session_is_read_out_of_its_reply() {
         let xml = r#"<?xml version="1.0"?>
@@ -198,6 +251,7 @@ mod tests {
         assert!(error_in(xml).is_none());
     }
 
+    /// An ampersand in a title comes back escaped and has to go back.
     #[test]
     fn entities_are_turned_back_into_characters() {
         let xml = "<lfm><track>rock &amp; roll &lt;live&gt;</track></lfm>";
@@ -228,12 +282,18 @@ mod tests {
         assert!(!error.needs_reconnecting());
     }
 
+    /// A reply with no error is not an error, however odd it looks.
     #[test]
     fn an_ordinary_reply_carries_no_error() {
         assert!(error_in(r#"<lfm status="ok"><nowplaying/></lfm>"#).is_none());
         assert!(error_in("").is_none());
     }
 
+    /// The whole chain, against a listener on this machine: curl runs, the
+    /// body is a signed form post, and the reply comes back as text.
+    ///
+    /// This is the only test that proves the request is actually made — the
+    /// rest check the pieces. It needs nothing but a loopback socket.
     #[test]
     fn a_call_goes_out_as_a_signed_form_post() {
         use std::io::{BufRead, BufReader, Read, Write};

@@ -1,12 +1,36 @@
+//! The `iTunesSD` of an iPod shuffle.
+//!
+//! A shuffle has no screen and does not read the `iTunesDB` at all: its
+//! firmware plays what `iPod_Control/iTunes/iTunesSD` lists, a much plainer
+//! file iTunes writes beside the database. Written with the database only, a
+//! synced shuffle would hold the new songs and play none of them.
+//!
+//! Two layouts, both after libgpod (`itdb_itunesdb.c`) and the scripts the
+//! shuffle owners of the time wrote for themselves — KeyJ's `rebuild_db`
+//! for the first two, `ipod-shuffle-4g` for the last two:
+//!
+//! - **1st and 2nd generation**: a short header and one fixed 558-byte entry
+//!   per track, numbers big-endian in three bytes, the path in UTF-16.
+//! - **3rd and 4th generation**: little-endian chunks (`bdhs`, `hths`, `rths`,
+//!   `hphs`, `lphs` — the tags read backwards), with playlists. Without
+//!   VoiceOver: no spoken titles, the shuffle plays as one with VoiceOver
+//!   turned off.
+//!
+//! The database stays what kessler reads the device by; this file is only
+//! ever written, from it, every time the database is.
+
 use std::path::Path;
 
 use super::device_info::Generation;
 use super::itunesdb::types::{IpodTrack, ItunesDb};
 use crate::error::{KesslerError, Result};
 
+/// Which `iTunesSD` a generation wants, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
+    /// Shuffle 1st and 2nd generation.
     Classic,
+    /// Shuffle 3rd and 4th generation.
     Chunked,
 }
 
@@ -20,8 +44,13 @@ impl Layout {
     }
 }
 
+/// The files the shuffle keeps about its own playing: where it was, the
+/// order it shuffled into, what it counted. All three point into the old
+/// `iTunesSD` by position, so they go with it; the shuffle makes them anew.
 const STATE_FILES: [&str; 3] = ["iTunesPState", "iTunesShuffle", "iTunesStats"];
 
+/// Write the `iTunesSD` for this database next to it, through a temporary
+/// file, and clear the shuffle's state files.
 pub fn install(itunes_dir: &Path, layout: Layout, db: &ItunesDb) -> Result<()> {
     let bytes = match layout {
         Layout::Classic => classic(db),
@@ -40,6 +69,9 @@ pub fn install(itunes_dir: &Path, layout: Layout, db: &ItunesDb) -> Result<()> {
     Ok(())
 }
 
+/// What the shuffle calls the kind of file: 1 MPEG, 2 AAC (and anything
+/// else in an MP4 box), 4 PCM. Anything else it cannot play, so it is left
+/// out of the file altogether.
 fn kind(path: &str) -> Option<u32> {
     let extension = path.rsplit('.').next()?.to_ascii_lowercase();
     match extension.as_str() {
@@ -50,11 +82,15 @@ fn kind(path: &str) -> Option<u32> {
     }
 }
 
+/// The track's path as the shuffle wants it: from the root, with slashes.
 fn device_path(track: &IpodTrack) -> Option<String> {
     let path = track.path.as_ref()?.to_string_lossy().replace(':', "/");
     Some(format!("/{}", path.trim_start_matches('/')))
 }
 
+/// The tracks the shuffle will list, in the order it plays them when it is
+/// not shuffling: by album artist, album, disc and number, the way a record
+/// shelf is read. Tracks without a file it can play are left out.
 fn playable(db: &ItunesDb) -> Vec<(&IpodTrack, String, u32)> {
     let mut tracks: Vec<(&IpodTrack, String, u32)> = db
         .tracks
@@ -75,14 +111,17 @@ fn playable(db: &ItunesDb) -> Vec<(&IpodTrack, String, u32)> {
     tracks
 }
 
+/// Length of one entry, and of the header.
 const CLASSIC_ENTRY: usize = 0x22e;
 const CLASSIC_HEADER: usize = 0x12;
+/// UTF-16 units the path field holds.
 const CLASSIC_PATH_UNITS: usize = 261;
 
 fn put24(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_be_bytes()[1..]);
 }
 
+/// The 1st- and 2nd-generation `iTunesSD`.
 pub fn classic(db: &ItunesDb) -> Vec<u8> {
     let tracks = playable(db);
     let mut out = Vec::with_capacity(CLASSIC_HEADER + tracks.len() * CLASSIC_ENTRY);
@@ -121,6 +160,7 @@ const SHTH_LEN: u32 = 20;
 const SHTR_LEN: u32 = 0x174;
 const SHPH_LEN: u32 = 20;
 const SHPL_LEN: u32 = 44;
+/// Bytes the path field holds.
 const CHUNKED_PATH: usize = 256;
 
 fn put32(out: &mut Vec<u8>, value: u32) {
@@ -131,6 +171,8 @@ fn put16(out: &mut Vec<u8>, value: u16) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+/// The 3rd- and 4th-generation `iTunesSD`: every track, the whole library
+/// as the master list, and each of the device's own lists.
 pub fn chunked(db: &ItunesDb) -> Vec<u8> {
     let tracks = playable(db);
     let index: std::collections::HashMap<u32, u32> =

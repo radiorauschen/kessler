@@ -1,3 +1,10 @@
+//! Compiles the small Objective-C file that talks to macOS, and links it.
+//!
+//! Everything here is optional by design. On any other system it does nothing;
+//! on a Mac without a working compiler it says so and does nothing. The cfg it
+//! sets — `kessler_media` — is what the Rust side checks, so a failure here
+//! costs the media keys and the Dock menu and not the build.
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -90,6 +97,9 @@ fn main() {
     route(&compiler, arch, &out);
 }
 
+/// Where the sound goes (`src/media/route.c`): a pause when it would go on
+/// out of the speakers once the headphones are gone. Built on its own like
+/// the Touch Bar: a file that will not compile costs this and nothing else.
 fn route(compiler: &str, arch: &str, out: &std::path::Path) {
     let source = "src/media/route.c";
     let object = out.join("kessler_route.o");
@@ -113,6 +123,9 @@ fn route(compiler: &str, arch: &str, out: &std::path::Path) {
     println!("cargo:rustc-cfg=kessler_route");
 }
 
+/// The Touch Bar (`src/media/touchbar.m`), built on its own as the menu bar's
+/// symbol is: a file that will not compile costs the Touch Bar and nothing
+/// else.
 fn touch_bar(compiler: &str, arch: &str, out: &std::path::Path) {
     let source = "src/media/touchbar.m";
     let object = out.join("kessler_touchbar.o");
@@ -139,6 +152,9 @@ fn touch_bar(compiler: &str, arch: &str, out: &std::path::Path) {
     println!("cargo:rustc-cfg=kessler_touchbar");
 }
 
+/// The symbol in the menu bar (`src/media/statusbar.m`), built on its own:
+/// a file that will not compile costs the symbol and nothing else — not the
+/// media keys, which are built above and work without it.
 fn menu_bar(compiler: &str, arch: &str, out: &std::path::Path) {
     let source = "src/media/statusbar.m";
     let object = out.join("kessler_tray.o");
@@ -165,6 +181,16 @@ fn menu_bar(compiler: &str, arch: &str, out: &std::path::Path) {
     println!("cargo:rustc-cfg=kessler_tray");
 }
 
+/// Put the commit this build came from into the binary.
+///
+/// The version number alone cannot answer "am I running what I just built?" —
+/// and that question has already cost an afternoon here, when cargo reported
+/// "Finished" in 0.4 seconds and the new code was not in the binary. A short
+/// commit hash next to the version answers it at a glance, and a `+` says the
+/// working copy had uncommitted changes when it was built.
+///
+/// Outside a git checkout — a downloaded source tarball, say — there is simply
+/// nothing to stamp, and the version stands on its own.
 fn stamp_the_build() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");

@@ -1,9 +1,27 @@
+//! The masthead: the band at the top with the search field, what is playing
+//! and the status line, in its full and its compact form.
+
 use super::*;
 
+/// The top line: the search field on the left, the transport and the menu on
+/// the right.
+///
+/// The application's own name used to sit on the left, and the track and album
+/// counts on the right. Neither said anything worth a permanent line: the name
+/// is already in the title bar, and the counts are in the menu, where you go
+/// when you actually want to know.
+/// What the header did, for the block below it to take account of.
 pub(super) struct Masthead {
+    /// Where the search field ended up — a press outside it ends the search.
     pub(super) field: Rect,
 }
 
+/// The header of a window too narrow for the columns side by side: the search
+/// field across the top as far as „menü" — and the device, when one is plugged
+/// in — and nothing else. The volume and the view give way: on a screen this
+/// small they are the system's keys and the menu's. The transport keys stand
+/// under what is playing — see [`narrow_playing`] — and what the status line
+/// says in the bottom corner, as on the compact line.
 pub(super) fn masthead_narrow(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -22,6 +40,10 @@ pub(super) fn masthead_narrow(
     Masthead { field }
 }
 
+/// What is playing in a narrow window: title, artist and album each on a line
+/// of its own, so each has the window's width; under them the timeline with its
+/// time at the left and the transport keys at its right (until then on a line
+/// of their own under it).
 pub(super) fn narrow_playing(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, m: Metrics, width: f32) {
     let (block, _) = ui.allocate_exact_size(Vec2::new(width, NARROW_LINE * 3.0), Sense::hover());
     let names = content_rect(block, m);
@@ -44,6 +66,9 @@ pub(super) fn narrow_playing(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, m
     narrow_rule(app, ui, palette, m, width);
 }
 
+/// The timeline of a narrow window on a line of its own, its time at the left
+/// and the transport keys at its right: under the names, and under the cover
+/// with „mit cover".
 pub(super) fn narrow_rule(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, m: Metrics, width: f32) {
     let (line, _) = ui.allocate_exact_size(Vec2::new(width, field_height()), Sense::hover());
     let inner = content_rect(line, m);
@@ -63,14 +88,24 @@ pub(super) fn narrow_rule(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, m: M
     }
 }
 
+/// The air between the names, the timeline and the keys of [`narrow_playing`].
 const NARROW_GAP: f32 = 12.0;
 
+/// One line of the names in [`narrow_playing`].
 const NARROW_LINE: f32 = text::SMALL_LINE;
 
+/// The air the search field keeps before whatever stands to its right.
 const SEARCH_GAP: f32 = 12.0;
 
+/// The search field's caret: a block, but a slim one.
 const SEARCH_CARET: Vec2 = Vec2::new(4.0, 12.0);
 
+/// The right-hand end of the header — menü, a plugged-in device, the view,
+/// the volume and a running scan — laid out right to left from `edge`, every
+/// word set with its top at `top`. `keep_left` is how far left it may reach
+/// before it starts giving things up. Without `with_menu`, „menü" stands
+/// elsewhere — see [`menu_in_band`]. Returns where the next thing to the left
+/// would be placed.
 pub(super) fn header_controls(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -106,21 +141,42 @@ pub(super) fn header_controls(
     right
 }
 
+/// How much air stands between two groups of things on the header's line —
+/// the search field and the status beside it, the status and the transport.
+///
+/// Wider than a word space, so each group reads as its own thing. The same as
+/// [`CONTROL_GAP`] between the controls at the other end, so the line has one
+/// measure of air from the field to the menu.
 pub(super) const HEADER_GAP: f32 = CONTROL_GAP;
 
+/// Where what is playing stands. Three places; the menu steps through them in
+/// this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayingAt {
+    /// Everything on one line at the top — the search field at its left end,
+    /// narrow until the pointer or the keyboard comes to it, then the names,
+    /// the time and its rule, the transport, the volume, the view and the
+    /// menu — and the rest of the window for the lists.
     Compact,
+    /// The same line, set in the band at the top of the window beside its three
+    /// buttons, with a flatter field and the columns nearer the edges. On a Mac
+    /// the buttons are set in from the corner by hand for it — see `macwindow`
+    /// — and the band's empty parts drag the window.
     SuperCompact,
 }
 
 impl PlayingAt {
     pub const ALL: [PlayingAt; 2] = [Self::Compact, Self::SuperCompact];
 
+    /// Whether everything stands on the one line at the top.
     pub fn compact(self) -> bool {
         matches!(self, Self::Compact | Self::SuperCompact)
     }
 
+    /// Read the setting back. The places that have since been taken out — in
+    /// the header, in its larger size, at the foot, the first compact line with
+    /// the field on a row of its own, its own line and the one with the cover
+    /// — open on the compact line.
     pub fn of(ui: &crate::config::UiConfig) -> Self {
         match ui.playing_at.trim() {
             "super kompakt" => Self::SuperCompact,
@@ -128,6 +184,11 @@ impl PlayingAt {
         }
     }
 
+    /// Where it stands in the window now: as set, except that „super kompakt"
+    /// in a window too narrow for it stands as „kompakt" — the one line beside
+    /// the switch and „menü" then has no room left for the time and its rule,
+    /// and the line under the band has. Decided once a frame by `render`, see
+    /// [`set_window_width`].
     pub fn now(ui: &crate::config::UiConfig) -> Self {
         match Self::of(ui) {
             Self::SuperCompact if SQUEEZED.load(std::sync::atomic::Ordering::Relaxed) => Self::Compact,
@@ -135,6 +196,7 @@ impl PlayingAt {
         }
     }
 
+    /// What the config file calls it.
     pub fn key(self) -> &'static str {
         match self {
             Self::Compact => "kompakt",
@@ -142,6 +204,7 @@ impl PlayingAt {
         }
     }
 
+    /// What the menu calls it.
     pub fn name(self) -> &'static str {
         match self {
             Self::Compact => "kompakt",
@@ -154,20 +217,29 @@ impl PlayingAt {
         Self::ALL[(at + 1) % Self::ALL.len()]
     }
 
+    /// Put it here, in the config.
     pub fn store(self, ui: &mut crate::config::UiConfig) {
         ui.playing_at = self.key().to_string();
-        ui.header_playing = false;
     }
 }
 
+/// The narrowest window „super kompakt" stands in as it is; narrower, it
+/// stands as „kompakt" — see [`PlayingAt::now`].
 const SUPER_COMPACT_LEAST: f32 = 1100.0;
 
+/// Whether the window is narrower than [`SUPER_COMPACT_LEAST`] this frame.
 static SQUEEZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Say how wide the window is, at the start of a frame.
 pub fn set_window_width(width: f32) {
     SQUEEZED.store(width < SUPER_COMPACT_LEAST, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The search field, in the masthead's left-hand place.
+///
+/// It is the one thing in the interface with a fill behind it, and that is the
+/// point: everywhere else a fill would be decoration, here it is what says
+/// "this is somewhere you can type".
 pub(super) fn search_field(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -292,32 +364,65 @@ pub(super) fn search_field(
     field
 }
 
+/// How the what-is-playing line is set — the whole difference between the two
+/// headers.
+///
+/// Same three names, same click, same marquee: only the size, the placing and
+/// what is said when nothing is playing change, so the two headers cannot
+/// drift into being two different lines.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Playing {
+    /// The face for the title, the artist's, and the quieter companion for
+    /// the album.
     pub(super) title: Role,
     pub(super) artist: Role,
     pub(super) rest: Role,
+    /// Whether an empty player is worth a word. On its own line it is — the
+    /// room is taken either way, and empty it would read as broken. In the
+    /// header it is not: nothing playing, nothing said.
     pub(super) idle_word: bool,
+    /// Title, artist and album one under the other, each on its own line of
+    /// the cell, rather than one after the other. Beside the cover, where the
+    /// block is tall and the line would otherwise be long.
     pub(super) stacked: bool,
 }
 
+/// The experiment's field while nobody wants it, and the air between its
+/// one line and the lists.
 pub(super) const COMPACT_FIELD_SHUT: f32 = MIN_FIELD;
 
+/// The same under „super kompakt", a little narrower: its line shares the band
+/// with the window's buttons.
 pub(super) const SUPER_COMPACT_FIELD_SHUT: f32 = MIN_FIELD - 8.0;
 
+/// How much further than the controls on the right the compact field opens: a
+/// little past their width rather than exactly to it, so opening reads as a
+/// reach and not as a swap of one width for another.
 pub(super) const COMPACT_FIELD_REACH: f32 = 9.0;
 
+/// And how much further again under „kompakt", whose line has the room. Not
+/// under „super kompakt", whose line shares its room with the buttons.
 pub(super) const COMPACT_FIELD_FURTHER: f32 = 120.0;
 
 pub(super) const COMPACT_FIELD_HOVER: f32 = 0.8;
 pub(super) const COMPACT_FIELD_HOVER_SHARE: f32 = 0.75;
+/// How long the compact field takes to open and to close all the way — a part
+/// of the way takes that part of it — easing in and out, so it does not jump at
+/// the pointer.
 pub(super) const COMPACT_FIELD_SECS: f32 = 0.6;
+/// How long the pointer rests on the field before it opens for it: a
+/// pointer passing over on its way elsewhere leaves it shut.
 pub(super) const COMPACT_FIELD_DELAY: f64 = 0.1;
 
 pub(super) const COMPACT_LINE_BELOW: f32 = 34.0;
 
+/// Between the window's last button and the search field, when the line
+/// stands in the band beside them.
 const AFTER_THE_BUTTONS: f32 = 28.0;
 
+/// A line in the band beside the window's buttons starts clear of them rather
+/// than at the column's edge — where there are any: elsewhere the band is only
+/// air, and the line keeps the column's edge.
 fn clear_of_the_buttons(ui: &Ui, rect: Rect) -> Rect {
     let end = crate::gui::theme::buttons_end();
     if end <= 0.0 {
@@ -327,6 +432,8 @@ fn clear_of_the_buttons(ui: &Ui, rect: Rect) -> Rect {
     Rect::from_min_max(egui::pos2(rect.left().max(clear), rect.top()), rect.max)
 }
 
+/// The switch between musik, radio and ipod, its right edge at `right`,
+/// and what a click or a drop on it asks for.
 fn run_source_switch(app: &mut GuiApp, ui: &mut Ui, right: &mut f32, top: f32, palette: &Palette) {
     match source_switch(app, ui, right, top, palette) {
         Switched::To(Source::Podcasts) => {
@@ -353,6 +460,11 @@ fn run_source_switch(app: &mut GuiApp, ui: &mut Ui, right: &mut f32, top: f32, p
 
 }
 
+/// The menu trigger in the band, in its right-hand corner, on the middle of the
+/// window's buttons, its right edge at `right`, and the switch between musik,
+/// radio and ipod beside it — for „kompakt" and the narrow window, whose line
+/// stands under the band. Set as they would be on a flat field there, so they
+/// stand where they stand in every other view.
 pub(super) fn menu_in_band(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, window_top: f32, right: f32) {
     let row_top = window_top + crate::gui::theme::line_on_band_middle(FIELD_HEIGHT_FLAT);
     let probe = text::line(ui, "x", Role::Label, palette.mid);
@@ -365,12 +477,21 @@ pub(super) fn menu_in_band(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, win
     run_source_switch(app, ui, &mut right, top, palette);
 }
 
+/// The least room the names and the rule are left on the compact line before
+/// the controls start giving things up.
 pub(super) const COMPACT_LEAST: f32 = 300.0;
 
+/// The most of the compact line the names may take, before they scroll.
 pub(super) const COMPACT_NAMES_SHARE: f32 = 0.5;
 
+/// Under „super kompakt", the air added before the time and after its rule:
+/// measured, 30 points between the names and the time and 35 between the
+/// rule and the ink of ←, so 37 either side.
 pub(super) const SUPER_COMPACT_RULE_AIR: (f32, f32) = (7.0, 2.0);
 
+/// The transport keys, standing in the header with their right edge at
+/// `right` and their middle on the middle of the header's words — `top` is
+/// where those words are set. Returns where they begin, to the left.
 pub(super) fn header_corner(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, right: f32, top: f32) -> f32 {
     let right = right + KEY_AIR;
     let middle = text::ink_middle(ui, Role::Label, top);
@@ -385,8 +506,20 @@ pub(super) fn header_corner(app: &mut GuiApp, ui: &mut Ui, palette: &Palette, ri
     right - keys_width(ui, palette, modes)
 }
 
+/// What the status line says, set in the header instead: between `left` and
+/// `right`, ending at the right — in the corner — on the header's own line
+/// (`top`, as the other controls there are set).
+///
+/// The same things in the same order as at the foot — news in the accent or,
+/// with no news, what is standing; then the device, with „auswerfen" last,
+/// because that is the one word here you can press. When the room is short the news gives
+/// way first and the device's line is cut, and „auswerfen" keeps its place.
+///
+/// Returns where what it drew begins — or `right` when it said nothing.
 #[allow(clippy::too_many_arguments)]
+/// How long what the status line says takes to come and to go.
 const STATUS_FADE: f32 = 0.12;
+/// How long the foot's words take to go.
 const STATUS_FADE_OUT: f32 = 0.9;
 
 pub(super) fn header_status(
@@ -514,8 +647,13 @@ pub(super) fn header_status(
     right - total
 }
 
+/// Between „+5 min" and „beenden" at the foot.
 const SLEEP_GAP: f32 = 12.0;
 
+/// A time's words — said for what the radio heard: the date as the language
+/// writes it — and the time on 24 hours or on 12 with am/pm (午前/午後 in Japanese,
+/// before the time, as it is written there). Without `with_date`, the time
+/// alone.
 pub(super) fn clock_words(at: chrono::NaiveDateTime, twelve: bool, with_date: bool, lang: crate::lang::Lang) -> String {
     use chrono::{Datelike as _, Timelike as _};
     use crate::lang::Lang;
@@ -538,6 +676,13 @@ pub(super) fn clock_words(at: chrono::NaiveDateTime, twelve: bool, with_date: bo
     if with_date { format!("{date}  {time}") } else { time }
 }
 
+/// The header as one line: the search field at its left end, narrow while
+/// nobody wants it and opening while the pointer is on it or anything is
+/// typed in it; then what is playing at label size, the time and its rule,
+/// the transport, the volume, the view and the menu. The names and the rule
+/// move along to make room for the field. What the status line says —
+/// last.fm, news — goes down to the bottom right-hand corner,
+/// into the band of air under the lists, so it costs them no height.
 pub(super) fn masthead_compact(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -692,8 +837,14 @@ pub(super) fn masthead_compact(
     Masthead { field }
 }
 
+/// How long a station's line takes to cross-fade from what it said to what
+/// it says, and its dot and „live" to glide along.
 const ON_AIR_FADE_SECS: f32 = 0.3;
 
+/// The line for a station on the air, as (words, 0 title / 1 artist / 2 the
+/// rest): what it says it plays and whose station it is, or its name and that
+/// it is the radio — or still being tuned in, with `dots` after „verbinde",
+/// for as long as the rule after the line is at work.
 fn on_air_words(app: &GuiApp, ui: &Ui, dots: usize) -> Option<Vec<(String, usize)>> {
     let station = app.on_air.as_ref()?;
     if app.player.tuning() || !super::controls::station_settled(ui.ctx()) {
@@ -713,6 +864,8 @@ fn on_air_words(app: &GuiApp, ui: &Ui, dots: usize) -> Option<Vec<(String, usize
     Some(words)
 }
 
+/// A station's line as it cross-fades: what it says now (without the dots,
+/// to tell a change), the words, the words before and since when.
 #[derive(Clone, Default)]
 struct OnAirFade {
     key: Vec<(String, usize)>,
@@ -722,6 +875,9 @@ struct OnAirFade {
     seen: f64,
 }
 
+/// The same line, set into whatever rectangle it has been given.
+///
+/// `line` is the baseline within the cell, as [`text::on_line`] wants it.
 pub(super) fn playing_line(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -830,6 +986,9 @@ pub(super) fn playing_line(
     }
 }
 
+/// Runs of type set on one line of a cell, scrolling while the pointer is on
+/// them when they are longer than the cell, and faded at whichever edge has
+/// more of them hidden past it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn set_runs(
     ui: &Ui,
@@ -886,6 +1045,13 @@ pub(super) fn set_runs(
     }
 }
 
+/// Show the playing track where it lives.
+///
+/// Held for the next frame as well: the line can be clicked at the foot of
+/// the window, which is drawn after the columns — and a request made after
+/// the columns have looked for it, and cleared at the end of the same frame,
+/// is a request nobody ever read. That was the foot arrangement's click on
+/// the names doing nothing in the cover view.
 pub(super) fn found_it(app: &mut GuiApp) {
     if app.playing_episode() {
         app.show_playing_episode();

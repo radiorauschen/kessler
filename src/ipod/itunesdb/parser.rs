@@ -1,8 +1,18 @@
+//! Read-only parser for the iPod `iTunesDB` file.
+//!
+//! The file is a tree of little-endian chunks. Every chunk starts with a
+//! 4-byte tag, a header length at +4 and (for container chunks) a total length
+//! at +8. Traversal always uses those two lengths rather than fixed sizes, so
+//! a database written by a newer iTunes with longer headers still parses.
+//!
+//! Offsets follow libgpod's `itdb_itunesdb.c`.
+
 use std::path::PathBuf;
 
 use super::types::*;
 use crate::error::{KesslerError, Result};
 
+/// Bounds-checked little-endian reader over the whole file.
 struct Cursor<'a> {
     data: &'a [u8],
 }
@@ -44,6 +54,7 @@ impl<'a> Cursor<'a> {
         ]))
     }
 
+    /// Check that `off` starts with `tag`.
     fn expect_tag(&self, off: usize, tag: &[u8; 4]) -> Result<()> {
         let found = self.tag(off)?;
         if &found == tag {
@@ -66,12 +77,14 @@ fn corrupt(msg: impl Into<String>) -> KesslerError {
     KesslerError::Ipod(format!("iTunesDB corrupt: {}", msg.into()))
 }
 
+/// A chunk header: its tag, its own header length and its total length.
 struct Chunk {
     header_len: usize,
     total_len: usize,
 }
 
 impl Chunk {
+    /// Read the header of a container chunk and sanity-check both lengths.
     fn read(cur: &Cursor, off: usize, tag: &[u8; 4], min_header: usize) -> Result<Self> {
         cur.expect_tag(off, tag)?;
         let header_len = cur.u32_at(off + 4)? as usize;
@@ -100,6 +113,10 @@ impl Chunk {
     }
 }
 
+/// The payload of a string `mhod`, read from `mhod_off + header_len`.
+///
+/// Layout: encoding marker (4), byte length (4), two unknown words, then the
+/// text. Marker 2 means UTF-8; anything else means UTF-16LE.
 fn read_mhod_string(cur: &Cursor, mhod_off: usize, header_len: usize) -> Result<String> {
     let base = mhod_off + header_len;
     let encoding = cur.u32_at(base)?;
@@ -119,10 +136,12 @@ fn read_mhod_string(cur: &Cursor, mhod_off: usize, header_len: usize) -> Result<
     }
 }
 
+/// Turn an iPod path (`:iPod_Control:Music:F00:ABCD.mp3`) into a relative path.
 fn ipod_path_to_relative(s: &str) -> PathBuf {
     s.split(':').filter(|p| !p.is_empty()).collect()
 }
 
+/// Parse an iTunesDB from raw bytes.
 pub fn parse(data: &[u8]) -> Result<ItunesDb> {
     let cur = Cursor::new(data);
 
@@ -218,6 +237,8 @@ fn parse_track_list(cur: &Cursor, mhlt_off: usize) -> Result<Vec<IpodTrack>> {
     Ok(tracks)
 }
 
+/// Parse one `mhit` plus its string children. Returns the track and the offset
+/// of the next `mhit`.
 fn parse_track(cur: &Cursor, off: usize) -> Result<(IpodTrack, usize)> {
     let mhit = Chunk::read(cur, off, TAG_MHIT, 0x9c)?;
     let mhod_count = cur.u32_at(off + 12)?;
@@ -376,6 +397,7 @@ fn parse_playlist(cur: &Cursor, off: usize) -> Result<(IpodPlaylist, usize)> {
     Ok((playlist, next))
 }
 
+/// Returns `(track_id, position, next_offset)`.
 fn parse_playlist_item(cur: &Cursor, off: usize) -> Result<(u32, u32, usize)> {
     let mhip = Chunk::read(cur, off, TAG_MHIP, 36)?;
     let mhod_count = cur.u32_at(off + 12)?;

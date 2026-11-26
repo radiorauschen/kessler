@@ -1,15 +1,39 @@
+//! The plugged-in device, looked at rather than browsed.
+//!
+//! Two things live here, and neither draws anything on its own: the little
+//! player that turns at the head of the device column — worked out as a
+//! picture of light, which the cover raster then turns into dots — and the
+//! figures that stand under it, read once when the column opens rather than
+//! every frame.
+//!
+//! The player is not a picture of any one model. It is the shape the word means
+//! — a slab with rounded corners, a screen at the top, a round control below it
+//! — lit from the upper left, and seen face on (it turned by itself and was
+//! seen from a little above until then). It turns in the hand: see
+//! [`Handling`]. A shuffle is drawn as itself: no screen, and each of the four
+//! in its own shape — and the third generation with its row of four buttons
+//! under the screen — see [`Body`].
+
 use std::path::PathBuf;
 
 use crate::db::models::Track;
 
+/// What is drawn turning: the player with its screen, or one of the four
+/// shuffles, which have none.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Body {
     #[default]
     Player,
+    /// The third generation of 2003: the screen, under it the row of four
+    /// round touch buttons, and the touch wheel below.
     Third,
+    /// The white stick of 2005, its round control near the top.
     Shuffle1,
+    /// The clip of 2006: a small square, the round control on its face.
     Shuffle2,
+    /// The bare stick of 2009: nothing on its face but a light.
     Shuffle3,
+    /// The clip of 2010: squarer and smaller still, the control again.
     Shuffle4,
 }
 
@@ -26,6 +50,8 @@ impl Body {
         }
     }
 
+    /// Its measurements, with its height as one — taken off the real ones
+    /// and then rounded to what reads at forty dots.
     fn shape(self) -> Shape {
         match self {
             Self::Player => Shape {
@@ -92,20 +118,40 @@ impl Body {
     }
 }
 
+/// A body's measurements, see [`Body::shape`].
 #[derive(Debug, Clone, Copy)]
 struct Shape {
+    /// Half its width, height and depth.
     half: [f32; 3],
+    /// The rounding of its corners seen from the front, and of its edges.
     corner: f32,
     edge: f32,
+    /// The screen, where it has one: its half width and height, and the
+    /// height of its middle.
     screen: Option<([f32; 2], f32)>,
+    /// A row of four round buttons across the face, the third generation's:
+    /// their middles' height, their radius, and how far apart they stand.
     keys: Option<(f32, f32, f32)>,
+    /// The round control: its middle's height, the ring's outer edge and the
+    /// button inside it.
     control: Option<(f32, f32, f32)>,
+    /// Half the width of the dark lines round the control and the buttons.
     line: f32,
+    /// A small light on its face instead: its height and size.
     light: Option<(f32, f32)>,
 }
 
+/// What a drawn frame was made for: grain, body, and the screen — `None` for
+/// drawn as it is.
 pub type Made = (u32, Body, Option<crate::gui::dither::Look>);
 
+/// How the player stands: a turn in space, kept as a unit quaternion — `w`
+/// and then the axis part — so any turn can follow any other without the
+/// axes getting in each other's way.
+///
+/// Two angles, about the upright axis and then the crosswise one, would
+/// turn it about its own long side on a drag sideways, however far it had
+/// been tipped, and it could never be rolled.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Turn([f32; 4]);
 
@@ -116,14 +162,17 @@ impl Default for Turn {
 }
 
 impl Turn {
+    /// No turn at all: the player face on.
     pub const FACE_ON: Turn = Turn([1.0, 0.0, 0.0, 0.0]);
 
+    /// A turn by `angle` about `axis`, which need not be of unit length.
     pub fn about(axis: [f32; 3], angle: f32) -> Turn {
         let axis = normalised(axis);
         let (s, c) = (angle / 2.0).sin_cos();
         Turn([c, axis[0] * s, axis[1] * s, axis[2] * s]).tidied()
     }
 
+    /// This turn, then `then`.
     fn then(self, then: Turn) -> Turn {
         let [a, b, c, d] = then.0;
         let [e, f, g, h] = self.0;
@@ -136,17 +185,21 @@ impl Turn {
         .tidied()
     }
 
+    /// The same turn backwards.
     fn undone(self) -> Turn {
         let [w, x, y, z] = self.0;
         Turn([w, -x, -y, -z])
     }
 
+    /// Back to unit length, which a long drag of small turns wears away, and
+    /// with `w` never below nought, so one turn has one way of being written.
     fn tidied(self) -> Turn {
         let length = self.0.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-6);
         let sign = if self.0[0] < 0.0 { -1.0 } else { 1.0 };
         Turn(self.0.map(|v| v * sign / length))
     }
 
+    /// A point of the body, where it is seen.
     pub fn apply(self, p: [f32; 3]) -> [f32; 3] {
         let [w, x, y, z] = self.0;
         let u = [x, y, z];
@@ -155,6 +208,8 @@ impl Turn {
         [p[0] + w * t[0] + ut[0], p[1] + w * t[1] + ut[1], p[2] + w * t[2] + ut[2]]
     }
 
+    /// The way from here to `to`, `share` of it along, at an even pace —
+    /// along the shortest arc between the two.
     fn toward(self, to: Turn, share: f32) -> Turn {
         let mut to = to.0;
         let mut cos = self.0.iter().zip(&to).map(|(a, b)| a * b).sum::<f32>();
@@ -172,6 +227,8 @@ impl Turn {
         Turn([0, 1, 2, 3].map(|i| a * self.0[i] + b * to[i])).tidied()
     }
 
+    /// The turn as four whole numbers, fine enough to tell two pictures
+    /// apart and coarse enough that a still player is drawn once.
     pub fn stood(self) -> [i32; 4] {
         self.0.map(|v| (v * 1000.0).round() as i32)
     }
@@ -181,18 +238,33 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
+/// How the player is held: face on at rest, turned by the hand that drags it —
+/// like a ball under the hand, as Quick Look turns a model on the Mac:
+/// whichever way it stands, it goes the way the hand goes, and a hand going
+/// round in circles rolls it — and, let go, left as it is for [`REST_SECS`] and
+/// then brought back face on over [`BACK_SECS`], easing in and out, the
+/// shortest way.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Handling {
     pub turn: Turn,
+    /// When it was let go, and how it stood then.
     let_go: Option<(f64, Turn)>,
+    /// While it spins: when it was last turned.
     spun_at: Option<f64>,
 }
 
+/// How long the player stays as it was let go.
 pub const REST_SECS: f64 = 2.0;
+/// How long it takes to come back face on.
 pub const BACK_SECS: f64 = 1.2;
+/// How long one turn takes while it spins.
 pub const SPIN_SECS: f64 = 4.0;
 
 impl Handling {
+    /// Turned by the hand: `right` and `down` are how far it went across the
+    /// screen, in radians. The player turns about the line across the
+    /// screen square to the way the hand went, so the side under the hand
+    /// goes with it.
     pub fn turn_by(&mut self, right: f32, down: f32) {
         let angle = (right * right + down * down).sqrt();
         if angle > 0.0 {
@@ -201,12 +273,15 @@ impl Handling {
         self.let_go = None;
     }
 
+    /// Let go at `now`.
     pub fn let_go(&mut self, now: f64) {
         if !self.at_rest() {
             self.let_go = Some((now, self.turn));
         }
     }
 
+    /// Where it stands at `now`, and how long until it next moves: `None`
+    /// once it is at rest, 0 while it is coming back.
     pub fn settle(&mut self, now: f64) -> Option<f64> {
         let (at, turn) = self.let_go?;
         let since = now - at;
@@ -222,6 +297,9 @@ impl Handling {
         Some(0.0)
     }
 
+    /// Turning about the screen's upright while something is written to it, so
+    /// it plainly is busy. From wherever it stands, and in the screen's terms,
+    /// so a hand that turns it meanwhile is not undone.
     pub fn spin(&mut self, now: f64) {
         let since = self.spun_at.map_or(0.0, |at| (now - at).clamp(0.0, 0.25));
         let angle = (since / SPIN_SECS * std::f64::consts::TAU) as f32;
@@ -230,17 +308,21 @@ impl Handling {
         self.let_go = None;
     }
 
+    /// Done spinning: back face on at once, without the rest a hand's
+    /// letting go has.
     pub fn stop_spinning(&mut self, now: f64) {
         if self.spun_at.take().is_some() && !self.at_rest() {
             self.let_go = Some((now - REST_SECS, self.turn));
         }
     }
 
+    /// Face on, as it stands when nobody has it.
     pub fn at_rest(&self) -> bool {
         self.turn == Turn::FACE_ON
     }
 }
 
+/// Easing in and out, slow at both ends: 0 … 1 to 0 … 1.
 fn ease(t: f64) -> f64 {
     if t < 0.5 {
         4.0 * t * t * t
@@ -249,18 +331,28 @@ fn ease(t: f64) -> f64 {
     }
 }
 
+/// The body, as half its width, height and depth, with the height as one.
 const HALF: [f32; 3] = [0.30, 0.50, 0.052];
+/// The rounding of the corners seen from the front, and of the edges seen
+/// from the side.
 const CORNER: f32 = 0.07;
 const EDGE: f32 = 0.04;
+/// The screen: its half width and height, and the height of its middle.
 const SCREEN: [f32; 2] = [0.235, 0.175];
 const SCREEN_Y: f32 = 0.235;
+/// The round control: its middle, the outer edge of the ring, and the button
+/// inside it.
 const WHEEL_Y: f32 = -0.2;
 const WHEEL_R: f32 = 0.19;
 const BUTTON_R: f32 = 0.068;
+/// The band of light mirrored in the screen: how bright, how wide, where it
+/// stands face on (on the diagonal, -1 at the bottom left, 1 at the top
+/// right), and how far a turn moves it.
 const REFLECTION: f32 = 0.45;
 const REFLECTION_WIDTH: f32 = 0.18;
 const REFLECTION_AT: f32 = 0.55;
 const REFLECTION_TRAVEL: f32 = 2.5;
+/// How much of the canvas the body's height takes.
 const FILL: f32 = 0.8;
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -276,6 +368,9 @@ fn normalised(a: [f32; 3]) -> [f32; 3] {
     [a[0] / length, a[1] / length, a[2] / length]
 }
 
+/// How far a point in the body's frame is from its surface — negative
+/// inside. A rectangle rounded at its corners, pushed out into a slab and
+/// rounded again along its edges.
 fn distance(p: [f32; 3], shape: &Shape) -> f32 {
     let half = shape.half;
     let inset = shape.edge;
@@ -298,6 +393,9 @@ fn normal(p: [f32; 3], shape: &Shape) -> [f32; 3] {
     ])
 }
 
+/// How bright the surface is at a point in the body's frame, whose normal
+/// is `n` there and which is seen along `view`, lit from `light` — all three
+/// in the body's frame.
 fn brightness(
     p: [f32; 3],
     n: [f32; 3],
@@ -330,6 +428,8 @@ fn brightness(
     (0.08 + 0.25 * lambert + 0.22 * fall + 0.75 * shine).min(1.0)
 }
 
+/// The face outside the screen: the round control, a light, or nothing but
+/// the face itself, pale and lit.
 fn face(x: f32, y: f32, lambert: f32, shape: &Shape) -> f32 {
     if let Some((middle, ring, button)) = shape.control {
         let from_wheel = (x * x + (y - middle).powi(2)).sqrt();
@@ -362,6 +462,11 @@ fn face(x: f32, y: f32, lambert: f32, shape: &Shape) -> f32 {
     0.35 + 0.6 * lambert
 }
 
+/// The player at one angle, as a picture of light: one byte of brightness per
+/// pixel, and whether that pixel is the player at all.
+///
+/// Worked out by walking a ray out of every pixel until it meets the body —
+/// fifteen thousand rays for the size it is drawn at, a few milliseconds.
 pub fn picture(
     turn: Turn,
     width: usize,
@@ -413,35 +518,63 @@ pub fn picture(
     (grey, covered)
 }
 
+/// Where a point of the body lands in the picture, face on, for the tests:
+/// the same turn the rays are walked back through, forwards.
 #[cfg(test)]
 fn seen(p: [f32; 3], yaw: f32) -> [f32; 3] {
     Turn::about([0.0, 1.0, 0.0], yaw).apply(p)
 }
 
+/// Everything the device column says below the picture, worked out once.
+///
+/// Reading the library to compare it with the device is a walk over every
+/// track in it, and the figures do not change while the column is open —
+/// unless the device does, which is what `for_device` is there to notice.
 #[derive(Debug, Clone, Default)]
 pub struct Summary {
+    /// The device this was worked out for: where it is mounted, and how many
+    /// tracks it had. Either changing means it is out of date.
     pub for_device: (PathBuf, usize),
     pub tracks: usize,
     pub albums: usize,
     pub artists: usize,
     pub seconds: f64,
+    /// How much of the disk the music itself takes.
     pub music_bytes: u64,
+    /// Each format and how many tracks are in it, the commonest first.
     pub formats: Vec<(String, usize)>,
     pub serial: Option<String>,
+    /// When the device's database was last written, as `YYYY-MM-DD`.
     pub written: Option<String>,
+    /// Library tracks the device does not have, and how much they are.
     pub missing: usize,
     pub missing_bytes: u64,
+    /// Of those, how many this model could not play, and in what.
     pub unplayable: usize,
     pub unplayable_formats: Vec<String>,
+    /// Whether the device's „zuletzt hinzugefügt" is what the library's
+    /// newest tracks are now — set after the figures, from the device's own
+    /// playlists; see `GuiApp::refresh_device_summary`.
     pub newest_current: bool,
+    /// Tracks on the device whose tags the library has changed, and the
+    /// device's playlists the next full sync takes off.
     pub retag: usize,
+    /// Of those, the ones that only get their Sound Check.
     pub sound_only: usize,
+    /// Tracks only on the device whose names the next sync spells as the
+    /// library does.
     pub respell: usize,
+    /// The device's database is not in the order its menus need, and the
+    /// next sync writes it again even with nothing else to do.
     pub reorder: bool,
     pub old_lists: usize,
+    /// Converted copies on the device not in the form now chosen under menu
+    /// → ipod → „umwandeln in" — see `sync::stale_conversions`.
     pub reconvert: usize,
 }
 
+/// The same fingerprint the sync goes by, so the number here is the number
+/// a transfer would offer to copy.
 fn fingerprint(track: &Track) -> String {
     format!(
         "{}\u{1}{}\u{1}{}\u{1}{}",
@@ -453,6 +586,8 @@ fn fingerprint(track: &Track) -> String {
 }
 
 impl Summary {
+    /// Work the figures out. `plays` says whether this model can play a
+    /// format, by the word the library stores for it.
     pub fn of(
         mount: PathBuf,
         on_device: &[Track],
@@ -533,6 +668,8 @@ impl Summary {
     }
 }
 
+/// How long a whole device plays, in the two largest units that say it, „42
+/// min".
 pub fn spoken_length(seconds: f64) -> String {
     let minutes = (seconds / 60.0).round() as u64;
     let (days, hours, mins) = (minutes / 1440, (minutes / 60) % 24, minutes % 60);
@@ -545,6 +682,7 @@ pub fn spoken_length(seconds: f64) -> String {
     }
 }
 
+/// The formats as one line.
 pub fn formats_line(formats: &[(String, usize)]) -> String {
     formats
         .iter()
@@ -553,6 +691,8 @@ pub fn formats_line(formats: &[(String, usize)]) -> String {
         .join("  ·  ")
 }
 
+/// How much of the bar each part takes: the music, whatever else is on the
+/// disk, and what is free — as shares of the whole, adding up to one.
 pub fn shares(total: u64, free: u64, music: u64) -> [f32; 3] {
     if total == 0 {
         return [0.0, 0.0, 1.0];
@@ -568,6 +708,8 @@ pub fn shares(total: u64, free: u64, music: u64) -> [f32; 3] {
     ]
 }
 
+/// Tracks being taken off the device: which, in a word, how much room they
+/// give back, and — once „entfernen" is pressed — where the answer arrives.
 pub struct Removal {
     pub ids: Vec<u32>,
     pub what: String,
@@ -606,6 +748,8 @@ mod tests {
         }
     }
 
+    /// The player is there, in the middle, and has a front and a back: the
+    /// screen is the darkest thing on it face on, and gone from behind.
     #[test]
     fn the_player_is_drawn_and_turns() {
         let (w, h) = (80, 100);
@@ -628,6 +772,8 @@ mod tests {
         assert_ne!(back, front);
     }
 
+    /// The screen mirrors a band of light that moves as the player turns,
+    /// and from behind there is no glass at all.
     #[test]
     fn the_screen_mirrors_light_as_it_turns() {
         let (w, h) = (80, 100);
@@ -647,6 +793,8 @@ mod tests {
         assert!(moved > screen.len() / 10, "it moves: {moved} of {}", screen.len());
     }
 
+    /// Each shuffle is drawn as itself: a different outline from the player
+    /// and from each other.
     #[test]
     fn the_shuffles_are_other_shapes() {
         let (w, h) = (80, 80);
@@ -662,10 +810,13 @@ mod tests {
         assert!(across(&outlines[4]) > 2 * across(&outlines[1]));
     }
 
+    /// How far a turn is from face on, in radians.
     fn off(turn: Turn) -> f32 {
         2.0 * turn.0[0].clamp(-1.0, 1.0).acos()
     }
 
+    /// Turned by hand and let go: as it was for two seconds, then back face
+    /// on, the short way round, easing — and still once it is there.
     #[test]
     fn let_go_it_comes_back_face_on() {
         use std::f32::consts::PI;
@@ -690,6 +841,8 @@ mod tests {
         assert!((off(held.turn) - 0.3).abs() < 1e-4);
     }
 
+    /// While written to it spins a turn every `SPIN_SECS`, from where it
+    /// stands; done, it goes back face on at once, without the rest.
     #[test]
     fn it_spins_while_busy_and_comes_back() {
         use std::f32::consts::PI;
@@ -712,6 +865,9 @@ mod tests {
         assert_eq!(still, Handling::default());
     }
 
+    /// Like a ball under the hand: tipped over first, a drag sideways still
+    /// moves the side facing the viewer sideways — it turns about the
+    /// screen's upright, not its own long side.
     #[test]
     fn it_goes_the_way_the_hand_goes() {
         use std::f32::consts::FRAC_PI_2;
@@ -730,6 +886,7 @@ mod tests {
         assert!(side[0].abs() > 0.05, "{side:?}");
     }
 
+    /// A turn and back is no turn; the way back is the shortest.
     #[test]
     fn turns_undo_and_take_the_short_way() {
         let t = Turn::about([0.3, 1.0, -0.2], 2.0);
@@ -742,6 +899,8 @@ mod tests {
         assert_eq!(far.toward(Turn::FACE_ON, 1.0).stood(), Turn::FACE_ON.stood());
     }
 
+    /// Turned about the crosswise axis it is another picture, still in the
+    /// middle of the canvas.
     #[test]
     fn it_turns_over_the_top() {
         let (w, h) = (80, 100);

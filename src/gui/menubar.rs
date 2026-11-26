@@ -1,3 +1,15 @@
+//! kessler in the macOS menu bar: the app's icon made small, as the input
+//! menu's „A" is — a rounded box, a square the k cut out of it.
+//!
+//! Two steps, chosen under darstellung → menüleiste → `anzeige`: `aus`, nothing
+//! there and nothing spent, and `k`. Each drew a new picture for the menu bar
+//! many times a second, and the menu bar redrew it, which cost more than a
+//! third of a core while music played.
+//!
+//! A click plays and pauses; a right-click (or ctrl) opens a small menu: what
+//! is playing, then ←, play and → as keys, as in the window's header, the
+//! volume, then the window and quit.
+
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -5,20 +17,32 @@ use eframe::egui;
 
 use super::glyphs::Mask;
 
+/// The box, in pixels: sixteen points square, twice over for Retina — a square
+/// as the app's icon is one; twenty-two points wide until then, as the input
+/// menu's box.
 const BOX_WIDE: usize = 32;
 const BOX_TALL: usize = 32;
 
+/// The box's corners, in pixels: as round as the „A"'s box. A superellipse
+/// fitted best with the circle's own exponent, so it is no squircle, only
+/// rounder than it looked. Seven since the box is a square: the icon's corners,
+/// which reach about 22 % of its side.
 const BOX_RADIUS: f32 = 7.0;
 
+/// How tall the k's ink stands in the box, in pixels: two thirds of it, as
+/// the „A" stands in its box.
 const LETTER_INK: usize = 19;
 
+/// What stands in the menu bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Off,
+    /// The k, still, whatever plays.
     Letter,
 }
 
 impl Mode {
+    /// What goes in the config file.
     pub fn name(self) -> &'static str {
         match self {
             Self::Off => "aus",
@@ -33,6 +57,7 @@ impl Mode {
         }
     }
 
+    /// The other one, for the menu's row.
     pub fn next(self) -> Self {
         match self {
             Self::Off => Self::Letter,
@@ -41,6 +66,9 @@ impl Mode {
     }
 }
 
+/// Where the menu under the symbol on a Mac shows the cover of what plays:
+/// beside the title, as a player's small window does; above it, as wide as
+/// the menu; or not at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoverAt {
     Beside,
@@ -49,6 +77,7 @@ pub enum CoverAt {
 }
 
 impl CoverAt {
+    /// What goes in the config file.
     pub fn name(self) -> &'static str {
         match self {
             Self::Beside => "daneben",
@@ -65,6 +94,7 @@ impl CoverAt {
         }
     }
 
+    /// What the menu says.
     pub fn said(self) -> &'static str {
         match self {
             Self::Beside => tr!("neben dem titel"),
@@ -81,6 +111,7 @@ impl CoverAt {
         }
     }
 
+    /// The number the other side knows it by.
     fn number(self) -> i32 {
         match self {
             Self::Off => 0,
@@ -89,6 +120,9 @@ impl CoverAt {
         }
     }
 
+    /// How many points a side the cover takes in the menu, 220 wide with
+    /// 18 on either side: beside the title as tall as three lines of the
+    /// menu's text, as the menu measures them.
     fn points(self) -> u32 {
         match self {
             Self::Beside => crate::media::tray_cover_points().unwrap_or(BESIDE_POINTS),
@@ -98,8 +132,14 @@ impl CoverAt {
     }
 }
 
+/// Three lines of a 14-point menu face and the point between each: where
+/// the menu cannot say.
 const BESIDE_POINTS: u32 = 53;
 
+/// The cover the menu should show, and how: the file, where it stands,
+/// and — screened — in the window's own colours, as every picture in the
+/// window is (darstellung → bilder): the field behind, the dots in the ink,
+/// the second tone between.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoverWish {
     pub path: Option<std::path::PathBuf>,
@@ -117,6 +157,9 @@ pub struct CoverScreen {
     pub negative: bool,
 }
 
+/// The cover's pixels, twice its points a side for a Retina screen, with
+/// rounded corners as the window's covers have them; `None` when the file
+/// does not read.
 fn cover_pixels(path: &std::path::Path, points: u32, screen: Option<CoverScreen>) -> Option<(Vec<u8>, usize)> {
     let picture = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
     let side = (points * 2) as usize;
@@ -159,6 +202,8 @@ fn cover_pixels(path: &std::path::Path, points: u32, screen: Option<CoverScreen>
     Some((rgba, side))
 }
 
+/// Clear the corners outside a quarter circle of `radius` pixels, the edge
+/// softened over one pixel.
 fn round_corners(rgba: &mut [u8], side: usize, radius: f32) {
     let reach = radius.ceil() as usize;
     for y in 0..reach.min(side) {
@@ -176,6 +221,8 @@ fn round_corners(rgba: &mut [u8], side: usize, radius: f32) {
     }
 }
 
+/// A picture for the menu bar: black, the coverage in alpha, `wide` by
+/// `tall` pixels.
 #[derive(Clone)]
 struct Picture {
     wide: usize,
@@ -189,16 +236,23 @@ impl Picture {
     }
 }
 
+/// The symbol, as far as the window is concerned.
 #[derive(Default)]
 pub struct MenuBar {
     shown: Option<(Mode, crate::lang::Lang)>,
     said: Option<(bool, String, u8, bool, String)>,
+    /// Whether the symbol was last said to be light — on Linux.
     inked: Option<bool>,
+    /// The cover last handed to the Mac's menu, and the count of the
+    /// handings, so a slow one does not land after a newer one.
     covered: Option<CoverWish>,
     cover_round: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl MenuBar {
+    /// The cover in the Mac's menu, made again on a thread of its own
+    /// whenever the track, the place or the dress changes: reading and
+    /// screening a cover is a few milliseconds, too many for a frame.
     pub fn cover(&mut self, wish: CoverWish) {
         if !cfg!(target_os = "macos") || !crate::media::tray_available() || self.covered.as_ref() == Some(&wish) {
             return;
@@ -223,6 +277,8 @@ impl MenuBar {
         let _ = std::thread::Builder::new().name("kessler-tray-cover".into()).spawn(made);
     }
 
+    /// Bring the menu bar in line with the setting and with what plays. Every
+    /// frame; it does something only when one of them has changed.
     #[allow(clippy::too_many_arguments)]
     pub fn sync(
         &mut self,
@@ -284,10 +340,15 @@ impl MenuBar {
     }
 }
 
+/// The k cut out of the box.
 fn boxed(letter: &Mask, box_wide: usize) -> Picture {
     cut_out(&letter.cover, letter.width, letter.height, true, box_wide)
 }
 
+/// The box with `cover` — `wide` by `tall` — cut out of it, in its middle;
+/// `by_weight` sets it halfway between its outline's middle and where its
+/// ink balances, as the icon sets its k, whose stem would otherwise pull it
+/// left.
 fn cut_out(cover: &[u8], wide: usize, tall: usize, by_weight: bool, box_wide: usize) -> Picture {
     let across = if by_weight { (weight_across(cover, wide) + wide as f32 / 2.0) / 2.0 } else { wide as f32 / 2.0 };
     let left = (box_wide as f32 / 2.0 - across).round() as isize;
@@ -308,6 +369,8 @@ fn cut_out(cover: &[u8], wide: usize, tall: usize, by_weight: bool, box_wide: us
     Picture { wide: box_wide, tall: BOX_TALL, rgba }
 }
 
+/// How much of pixel (`x`, `y`) the rounded box covers, the whole picture:
+/// four looks each way.
 fn box_cover(x: usize, y: usize, wide: usize) -> f32 {
     const LOOKS: usize = 4;
     let (left, top, right, bottom) = (0.0, 0.0, wide as f32, BOX_TALL as f32);
@@ -330,6 +393,7 @@ fn box_cover(x: usize, y: usize, wide: usize) -> f32 {
     inside as f32 / (LOOKS * LOOKS) as f32
 }
 
+/// Where a cover's ink balances, across.
 fn weight_across(cover: &[u8], wide: usize) -> f32 {
     let (mut sum, mut moment) = (0.0f32, 0.0f32);
     for (at, &c) in cover.iter().enumerate() {
@@ -343,6 +407,8 @@ fn weight_across(cover: &[u8], wide: usize) -> f32 {
 mod tests {
     use super::*;
 
+    /// The menu's cover: twice its points a side, round at the corners,
+    /// and screened in nothing but the three colours it was given.
     #[test]
     fn the_menu_cover_is_screened_in_the_window_colours() {
         let dir = std::env::temp_dir().join(format!("kessler-tray-cover-{}", std::process::id()));
@@ -391,6 +457,8 @@ mod tests {
         }
     }
 
+    /// The box is full in its middle, empty in its corners and outside, and
+    /// what is cut out of it is gone from it.
     #[test]
     fn the_box_has_its_corners_and_its_hole() {
         assert_eq!(box_cover(BOX_WIDE / 2, BOX_TALL / 2, BOX_WIDE), 1.0);

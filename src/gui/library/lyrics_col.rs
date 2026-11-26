@@ -1,7 +1,18 @@
+//! The lyrics column — see [`crate::gui::lyrics`] for its state.
+
 use super::*;
 
+/// How long a blank line between verses is, as a share of a row.
 const VERSE_AIR: f32 = 0.6;
 
+/// The words of the song playing, or of the track under the cursor when nothing
+/// plays.
+///
+/// The title at the head, the artist under it and where the words come
+/// from over them — „aus lrclib", as „aus wikipedia" stands over the
+/// artist's paragraph. Timed words follow the song: the line being sung is
+/// in the accent, as what plays is everywhere else, and the column keeps it
+/// in the middle. At the foot, „neu suchen", for words that came wrong.
 pub(super) fn lyrics_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     app.follow_the_words();
     let top = ui.cursor().min;

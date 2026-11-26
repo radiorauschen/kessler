@@ -1,7 +1,10 @@
+//! The lyrics column: whose words it shows, and asking for them.
+
 use crate::gui::*;
 use crate::library::lyrics;
 
 impl GuiApp {
+    /// `y`: the words of the song into the side, or out of it again.
     pub fn toggle_lyrics(&mut self) {
         if self.lyrics_open {
             self.lyrics_open = false;
@@ -22,6 +25,8 @@ impl GuiApp {
         self.leave_the_left();
     }
 
+    /// Whose words the column shows: what is playing, to read along; when
+    /// nothing plays, the track under the cursor.
     pub fn shown_song(&self) -> Option<Track> {
         if self.on_air.is_some() {
             return self.aired_song();
@@ -32,6 +37,9 @@ impl GuiApp {
             .filter(|t| !t.title.trim().is_empty())
     }
 
+    /// Keep the column on the song `shown_song` says: the file's own words,
+    /// else what was kept from LRCLIB, else ask it — once a song. Every
+    /// frame while the column is open; a comparison when nothing changed.
     pub fn follow_the_words(&mut self) {
         let Some(track) = self.shown_song() else {
             self.lyrics.of = None;
@@ -62,6 +70,8 @@ impl GuiApp {
         }
     }
 
+    /// Take in LRCLIB's answer when it comes, keep it, and show it if the
+    /// song is still the one shown.
     pub(in crate::gui) fn poll_lyrics(&mut self) {
         let Some((song, rx)) = &self.lyrics.looking else { return };
         let answer = match rx.try_recv() {
@@ -88,6 +98,7 @@ impl GuiApp {
         }
     }
 
+    /// „neu suchen": forget what was kept for the song shown and ask again.
     pub fn look_up_lyrics(&mut self) {
         let Some((artist, title)) = self.lyrics.of.clone() else { return };
         let _ = std::fs::remove_file(lyrics::cache_path(&self.config.lyrics_dir(), &artist, &title));

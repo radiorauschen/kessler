@@ -1,7 +1,15 @@
+//! The iPod's column: its picture, its figures and what can be done to it.
+
 use super::*;
 
+/// How big the turning player is drawn, as a square.
 pub(super) const DEVICE_ART: f32 = 132.0;
 
+/// The device, in the fourth column: the player turning at the head, and
+/// under it what can be read off the device and what it lacks.
+///
+/// It borrows the column the way a list being put in order does, and gives it
+/// back the same way — „schliessen" in its head, under the pointer.
 pub(super) fn device_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     app.refresh_device_summary();
     let (Some(device), Some(summary)) = (app.attached.as_ref(), app.device_summary.clone()) else {
@@ -230,6 +238,8 @@ pub(super) fn device_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     taken.response.rect
 }
 
+/// One fact about the device: what it is on the left, the figure on the
+/// right — read across, the way a line in a telephone book is.
 pub(super) fn device_fact(
     ui: &mut Ui,
     width: f32,
@@ -261,12 +271,19 @@ pub(super) fn device_fact(
     );
 }
 
+/// The device's name as one fact among the others, but clickable: then a
+/// field in its place, the name marked, the next key replacing it; enter
+/// writes it to the device, escape leaves it — see
+/// [`GuiApp::rename_device`].
 fn name_row(app: &mut GuiApp, ui: &mut Ui, width: f32, name: &str, m: Metrics, palette: &Palette) {
     if typed_row(ui, width, tr!("name"), name, app.naming_device.as_ref(), m, palette).clicked() && app.naming_device.is_none() {
         app.start_naming_device();
     }
 }
 
+/// A row that names something and is written anew in place: `label` at the
+/// left, at the right `shown` — or, while `typing`, what is typed, with its
+/// caret and under it how to end. Clicked, the caller begins the typing.
 pub(super) fn typed_row(
     ui: &mut Ui,
     width: f32,
@@ -328,6 +345,9 @@ pub(super) fn typed_row(
     response
 }
 
+/// How full the device is, drawn the way the timeline is drawn: the music in
+/// the accent, whatever else is on the disk in the secondary tone, and the
+/// rest the rule's own grey. Under it, what each part is, in the label face.
 pub(super) fn device_bar(
     ui: &mut Ui,
     width: f32,
@@ -366,6 +386,8 @@ pub(super) fn device_bar(
     say(ui, width, &said, Role::Label, palette.faint, m);
 }
 
+/// A word that does something, in the ink, on a row of its own — the way is set
+/// in the artist column. Not in the accent, which is for what plays.
 pub(super) fn device_action(ui: &mut Ui, width: f32, word: &str, m: Metrics, palette: &Palette) -> bool {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
     let state = RowState::default();
@@ -386,6 +408,8 @@ pub(super) fn device_action(ui: &mut Ui, width: f32, word: &str, m: Metrics, pal
     response.clicked()
 }
 
+/// [`device_action`] with a note after it, small and in the facts' colour, as
+/// „flac" stands after a title: „aktualisieren  (aktualisiert vor 3 tagen)".
 pub(super) fn device_action_noted(ui: &mut Ui, width: f32, word: &str, note: &str, m: Metrics, palette: &Palette) -> bool {
     let top = ui.cursor().min.y;
     let clicked = device_action(ui, width, word, m, palette);
@@ -400,10 +424,17 @@ pub(super) fn device_action_noted(ui: &mut Ui, width: f32, word: &str, note: &st
     clicked
 }
 
+/// A link: „›", a short space, and where it goes, cut short when it is long
+/// (the typeface has no thin space, so the gap is set rather than typed). As
+/// [`device_action`] for the rest: the light plate under the pointer, true when
+/// clicked.
 pub(super) fn link_action(ui: &mut Ui, width: f32, word: &str, m: Metrics, palette: &Palette) -> bool {
     link_line(ui, width, word, true, m, palette)
 }
 
+/// The same line as [`link_action`], where it may go nowhere: a source with
+/// no page to open is set as the others are, so the list reads as one, but
+/// wears no plate and takes no click.
 pub(super) fn link_line(ui: &mut Ui, width: f32, word: &str, goes: bool, m: Metrics, palette: &Palette) -> bool {
     let sense = if goes { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), sense);
@@ -424,10 +455,15 @@ pub(super) fn link_line(ui: &mut Ui, width: f32, word: &str, goes: bool, m: Metr
     response.clicked()
 }
 
+/// What stands before a link.
 pub(super) const LINK_ARROW: &str = "›";
+/// Between the arrow and the link: a short space.
 pub(super) const LINK_ARROW_GAP: f32 = 3.0;
+/// How long a link may be before it is cut, in characters.
 const LINK_MOST: usize = 32;
 
+/// A link's words, cut short with when longer than [`LINK_MOST`] or than `room`
+/// allows.
 pub(super) fn link_words(ui: &Ui, word: &str, room: f32) -> String {
     let mut chars: Vec<char> = word.chars().collect();
     if chars.len() > LINK_MOST {
@@ -443,6 +479,17 @@ pub(super) fn link_words(ui: &Ui, word: &str, room: f32) -> String {
     shown
 }
 
+/// The player in `rect`: worked out as light by
+/// [`crate::gui::device::picture`], put into dots by the same raster the covers
+/// use, and tinted the accent — so it is plainly one of the window's own
+/// pictures and not a photograph pasted in.
+///
+/// Face on and still, drawn once; drawn again only while a hand turns it,
+/// while music is written to it and it spins, or while it comes back — see
+/// [`crate::gui::device::Handling`]. The texture is kept
+/// and written over, not made again.
+/// How often the player is drawn while it spins: often enough to read as
+/// turning, not so often that a long sync costs what playing the scope does.
 const SPIN_STEP: std::time::Duration = std::time::Duration::from_millis(40);
 
 pub(super) fn device_art(app: &mut GuiApp, ui: &Ui, rect: Rect, palette: &Palette) {
@@ -546,6 +593,9 @@ pub(super) fn device_art(app: &mut GuiApp, ui: &Ui, rect: Rect, palette: &Palett
     }
 }
 
+/// Taking tracks off the device, asked about first: what goes, and how much
+/// room it gives back, then „entfernen" or „abbrechen". While it runs, only
+/// a line saying so — there is nothing to stop half way.
 pub(super) fn removal_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) {
     let Some(removal) = app.removal.as_ref() else { return };
     let going = removal.going.is_some();
