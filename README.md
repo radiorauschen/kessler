@@ -65,6 +65,12 @@ and it is written in rust with egui and sqlite.
 
 <br>
 
+<p align="center"><sub>index and letter bar</sub></p>
+
+![the artists under their first letters, and the letter bar beside them, the arrow at the letter shown](docs/screenshots/index.webp)
+
+<br>
+
 <p align="center"><sub>radio view</sub></p>
 
 ![the radio: the stations kept, the one on the air, its schedule and the songs kept from it](docs/screenshots/radio.webp)
@@ -73,7 +79,7 @@ and it is written in rust with egui and sqlite.
 
 <p align="center"><sub>podcast view</sub></p>
 
-![the podcasts: the ones followed, a show and its episodes, and the episode playing](docs/screenshots/podcasts.webp)
+![the podcasts: the ones followed, under their first letters, the newest episodes by day, and one episode open](docs/screenshots/podcasts.webp)
 
 <br>
 
