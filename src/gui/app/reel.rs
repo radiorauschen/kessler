@@ -1,18 +1,37 @@
+//! Every colour scheme, one after the other, on the view as it stands,
+//! caught and written out as one short film — each scheme light, then
+//! dark, then the next — to show what the schemes look like at a glance,
+//! on a project page for instance. As a GIF (`alt` + `shift` + `g`), or as
+//! an MP4 through ffmpeg (`alt` + `shift` + `m`), which keeps the window's
+//! own sharpness and every colour; behind ⌥ under „über" as well.
+
 use crate::gui::*;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
+/// How long each scheme stands before it is caught: the colours are put
+/// in at once, but covers screened in them and the status line's words
+/// take a few frames to arrive.
 const SETTLE_SECS: f64 = 0.45;
 
+/// How long each half of a scheme stands in the film, in milliseconds.
 const SHOWN_MS: u32 = 800;
 
+/// The widest a GIF's frame is kept, in pixels: wider than any project
+/// page shows a picture, and a GIF of a window at twice the size runs to
+/// tens of megabytes.
 const GIF_WIDEST: u32 = 1280;
 
+/// The widest an MP4's frame is kept: a window on a large screen at twice
+/// the size, as it stands; only larger than that is brought down.
 const MP4_WIDEST: u32 = 2880;
 
+/// How hard the GIF encoder works for its 256 colours: 1 is the best and
+/// slowest, 30 the fastest. Text stays clean at 10.
 const QUANTISE_SPEED: i32 = 10;
 
+/// What the film is written as.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Film {
     Gif,
@@ -28,26 +47,39 @@ impl Film {
     }
 }
 
+/// One frame.
 type Still = image::RgbaImage;
 
+/// The run, while it goes.
 pub struct Reel {
     film: Film,
+    /// What to put back afterwards.
     theme: Theme,
     brightness: Brightness,
+    /// The schemes still to come, each light half followed by its dark one.
     ahead: VecDeque<Theme>,
+    /// The scheme on screen now, since when, and whether its picture has
+    /// been asked for.
     now: Option<(Theme, f64, bool)>,
+    /// The GIF's frames, kept here: small, and the encoder wants them all.
     stills: Vec<Still>,
+    /// The MP4's frames go to disk as they come, each on a thread of its
+    /// own — at full size a few dozen of them would fill a gigabyte.
     frames: PathBuf,
     saving: Vec<std::thread::JoinHandle<std::result::Result<(), String>>>,
 }
 
+/// The file written, or what went wrong, from the thread that writes it.
 pub type Written = mpsc::Receiver<std::result::Result<PathBuf, String>>;
 
 impl GuiApp {
+    /// Whether the schemes are being run through: the colours then change
+    /// at once rather than fading, and the keyboard waits.
     pub(in crate::gui) fn reeling(&self) -> bool {
         self.reel.is_some()
     }
 
+    /// Start, or stop if it is running.
     pub(in crate::gui) fn toggle_reel(&mut self, film: Film) {
         if self.reel.is_some() {
             self.end_reel();
@@ -80,6 +112,9 @@ impl GuiApp {
         }));
     }
 
+    /// One frame of the run: put the next scheme up, ask for its picture
+    /// once it has settled, take the picture when it comes, and at the end
+    /// hand the pictures to a thread to be written.
     pub(in crate::gui) fn tend_the_reel(&mut self, ctx: &egui::Context) {
         self.take_reel_written(ctx);
         let Some(reel) = self.reel.as_mut() else { return };
@@ -135,6 +170,7 @@ impl GuiApp {
         }
     }
 
+    /// The scheme there was before, put back as it was.
     fn end_reel(&mut self) {
         if let Some(reel) = self.reel.take() {
             self.theme = reel.theme;
@@ -149,6 +185,8 @@ impl GuiApp {
         }
     }
 
+    /// Put the colours back and write the film on a thread of its own: a
+    /// few dozen frames of a whole window take a while to encode.
     fn write_reel(&mut self, reel: Reel) {
         self.theme = reel.theme;
         self.brightness = reel.brightness;
@@ -170,6 +208,7 @@ impl GuiApp {
         });
     }
 
+    /// Whether the thread is done, and if so, say so and show the file.
     fn take_reel_written(&mut self, ctx: &egui::Context) {
         let Some(written) = &self.reel_written else { return };
         let answer = match written.try_recv() {
@@ -192,6 +231,9 @@ impl GuiApp {
     }
 }
 
+/// A picture of the window, brought down to `widest` if it is wider.
+/// The window's picture, once it has been taken: since egui 0.37 it comes
+/// to a callback rather than among the frame's events.
 static CAUGHT: std::sync::Mutex<Option<std::sync::Arc<egui::ColorImage>>> = std::sync::Mutex::new(None);
 
 fn still_of(image: &egui::ColorImage, widest: u32) -> Still {
@@ -205,6 +247,7 @@ fn still_of(image: &egui::ColorImage, widest: u32) -> Still {
     image::imageops::resize(&full, widest, height, image::imageops::FilterType::CatmullRom)
 }
 
+/// The frames as a GIF that goes round for ever.
 fn write_gif(path: &Path, stills: Vec<Still>) -> image::ImageResult<()> {
     use image::codecs::gif::{GifEncoder, Repeat};
     let file = std::io::BufWriter::new(std::fs::File::create(path)?);
@@ -214,6 +257,9 @@ fn write_gif(path: &Path, stills: Vec<Still>) -> image::ImageResult<()> {
     encoder.encode_frames(stills.into_iter().map(|s| image::Frame::from_parts(s, 0, 0, delay)))
 }
 
+/// The frames as an MP4: the PNGs once they are all on disk, strung
+/// together by ffmpeg in H.264 — the format every browser and GitHub play —
+/// at a quality where text stays crisp, in even sizes as the format wants.
 fn write_mp4(
     path: &Path,
     frames: &Path,
@@ -241,6 +287,9 @@ fn write_mp4(
     made
 }
 
+/// What ffmpeg is told: one picture every [`SHOWN_MS`], played at 30
+/// frames a second, sharp (`crf` 16, tuned for still pictures), in the
+/// colours every player knows (`yuv420p`), ready to play while it loads.
 fn mp4_arguments(frames: &Path, path: &Path) -> Vec<std::ffi::OsString> {
     let rate = format!("1000/{SHOWN_MS}");
     let mut arguments: Vec<std::ffi::OsString> = [

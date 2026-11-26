@@ -1,7 +1,22 @@
+//! The track column, with the record headings it groups by.
+
 use super::*;
 
+/// How near its end „zuletzt" has to be scrolled before the next tracks
+/// are fetched: a screenful or so ahead, so they are there before the end is.
 const MORE_RECENT_WITHIN: f32 = 600.0;
 
+/// What the two left-hand heads of the track list sort by: `nr`, then `titel`.
+///
+/// One of them always holds the shelf's own order — künstler:in, jahr, platte,
+/// nummer — and the other holds nothing at all and is a plain word. Which is
+/// which depends on whether the numbers are on screen, because the numbers are
+/// what that order looks like: inside a record they count up with it. Take the
+/// column away and the title's head takes the order over, so the order the
+/// window starts in is never left without a head to show it.
+///
+/// Together they are the whole rule, and the rule is: never two arrows on this
+/// side of the list, and never none.
 pub(super) fn left_heads(numbered: bool) -> (Option<SortField>, Option<SortField>) {
     if numbered {
         (Some(SortField::Artist), None)
@@ -52,17 +67,26 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     let mut double_clicked: Option<usize> = None;
     let mut lifted: Option<usize> = None;
     let mut sort_by: Option<SortField> = None;
+    /// What a click on a row meant, which depends on what was held down.
     enum Pick {
+        /// Plain: this row alone.
         One,
+        /// Shift: everything from the anchor to here.
         Through,
+        /// Cmd or ctrl: this row in or out, the rest untouched.
         Also,
     }
     let mut pick = Pick::One;
     let mut menu_at: Option<(usize, egui::Pos2)> = None;
+    /// What was done to an album's heading, when the albums are in the list.
     enum HeadAction {
+        /// Clicked: its tracks, all of them, picked.
         Pick(usize, usize),
+        /// Double-clicked: the whole record, and only it, into the queue.
         Play(usize, usize),
+        /// Pulled: its tracks carried.
         Lift(usize, usize),
+        /// Right-clicked: the album's own menu.
         Menu(usize, egui::Pos2),
     }
     let mut head_action: Option<HeadAction> = None;
@@ -431,10 +455,27 @@ pub(super) fn tracks_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     taken.response.rect
 }
 
+/// The air above a heading that follows another record's tracks. Four times the
+/// gap between two rows was tried and taken back: ten points read better. How big the heading's cover is, is a setting: `heading_cover_size`.
 pub(super) const ALBUM_HEAD_ABOVE: f32 = 10.0;
 
+/// The air between a heading's cover and its words, and under the heading.
 pub(super) const ALBUM_HEAD_GAP: f32 = 14.0;
 
+/// Where each record's run of tracks begins in the list, and how long it is.
+///
+/// A record is its grouping artist and its title, folded the way the library
+/// folds names, so a capital letter does not split one record in two. Only
+/// runs that stand together are records: the list comes in the shelf's order,
+/// where they do.
+///
+/// A compilation shown whole (`compiled`, see `GuiApp::widen_compilations`) is
+/// one record whoever is on each track: by its artists it would be a heading
+/// over every row. [`album_runs`], worked out once for as long as the list is
+/// the same: it folds every track's names, and twice a frame over 9,000 tracks
+/// that was a good part of a frame. What could change a run — the ids, the
+/// names that make one, which tracks are a compilation's — is what the
+/// remembered answer is known by.
 fn runs_of(
     ui: &Ui,
     tracks: &[crate::db::models::Track],
@@ -489,6 +530,9 @@ pub(super) fn album_runs(
     runs
 }
 
+/// What a record's heading says of the columns switched on: the year, the
+/// genre, when it arrived — each once, for the record, rather than on every
+/// one of its rows. Empty values are left out.
 pub(super) fn heading_facts(
     on: &[crate::gui::columns::TrackColumn],
     run: &[crate::db::models::Track],
@@ -523,6 +567,9 @@ pub(super) fn heading_facts(
         .collect()
 }
 
+/// A record's bitrate for its heading: „320 kbit/s", or the span „192–320
+/// kbit/s" where its tracks differ — a variable bitrate, or files from
+/// different sources. Nothing where no track says one.
 pub(super) fn heading_bitrate(run: &[crate::db::models::Track]) -> Option<String> {
     let rates = run.iter().filter_map(|t| t.bitrate).filter(|kbit| *kbit > 0);
     let (low, high) = rates.fold(None, |span: Option<(u32, u32)>, kbit| {
@@ -531,30 +578,60 @@ pub(super) fn heading_bitrate(run: &[crate::db::models::Track]) -> Option<String
     Some(if low == high { tr!("{} kbit/s", low) } else { tr!("{}–{} kbit/s", low, high) })
 }
 
+/// A record's heading in the track list: its cover, and beside it its name,
+/// under that who made it — when the list is not already one artist's — and
+/// under that, smaller, the facts: how many tracks, the bitrate, the year,
+/// the genre. Name and artist are what the record is; the facts only about
+/// it, so they stand apart from the two rather than run on after the artist.
+///
+/// It answers the hand the way the record's row in the album column does: a
+/// click takes all its tracks, a double-click plays it, a pull carries it, a
+/// right-click opens the album's menu.
 #[allow(clippy::too_many_arguments)]
+/// How many lines a heading's words take: the name, the facts, and the artist
+/// between them where there is one to name — or, beside a cover too small for
+/// three (see [`two_lines_beside`]), the name and one line with the rest.
 pub(super) fn head_lines(with_artist: bool, two_lines: bool) -> usize {
     if with_artist && !two_lines { 3 } else { 2 }
 }
 
+/// How tall a cover has to be for three lines beside it: as tall as their
+/// ink at the roomiest rows — two line steps, and a line's letters from cap
+/// to descender, about seven tenths of a row. The rows' own air above the
+/// first line and below the last is not words, and counting it would turn
+/// the usual cover to two lines in a face with a full line step.
 pub(crate) fn three_lines_tall() -> f32 {
     let row = crate::gui::theme::ROW_ROOMY;
     (row * (2.0 * crate::gui::theme::head_line() + LINE_INK)).ceil()
 }
 
+/// A line's letters, cap height to descender, as a share of a row.
 const LINE_INK: f32 = 0.7;
 
+/// Whether a heading is set in two lines rather than three: beside a cover
+/// smaller than three lines are tall, which three would overhang. Without a
+/// cover, three — nothing for them to overhang. So the cover's size alone
+/// chooses, and there is no switch of its own for it.
 pub(crate) fn two_lines_beside(cover: Option<f32>) -> bool {
     cover.is_some_and(|size| size < three_lines_tall())
 }
 
+/// How tall the block of `lines` lines is, the first at a row's height and
+/// each further one a heading's line step down.
 fn head_block(lines: usize, m: Metrics) -> f32 {
     m.row * (1.0 + crate::gui::theme::head_line() * lines.saturating_sub(1) as f32)
 }
 
+/// The block with `more` lines of facts after the first, each the small face's
+/// step under the one before.
 fn words_block(lines: usize, more: usize, m: Metrics) -> f32 {
     head_block(lines, m) + text::SMALL_LINE * more as f32
 }
 
+/// A heading's facts in one line: how many tracks — unless that is asked
+/// away, see `UiConfig::heading_count` — then what the record's columns say,
+/// the year, the genre, when it came; and always last the bitrate, a fact
+/// about the files rather than the record.
 pub(super) fn facts_line(facts: &[String], count: Option<usize>, bitrate: Option<&str>) -> String {
     let mut under: Vec<String> = Vec::new();
     if let Some(count) = count {
@@ -569,6 +646,8 @@ pub(super) fn facts_line(facts: &[String], count: Option<usize>, bitrate: Option
     under.join(" · ")
 }
 
+/// The facts as the lines they take in `room`: one where they fit, else two,
+/// broken after the last „ · " that still fits — never inside a fact.
 pub(super) fn split_facts(ui: &Ui, said: &str, room: f32) -> Vec<String> {
     let wide = |words: &str| label_width(ui, words);
     if wide(said) <= room {
@@ -582,9 +661,20 @@ pub(super) fn split_facts(ui: &Ui, said: &str, room: f32) -> Vec<String> {
     }
 }
 
+/// How wide a line of facts is at label size, remembered across frames.
+///
+/// Every heading's facts are measured each frame, off screen too, because
+/// whether they take one line or two decides the heading's height. egui keeps
+/// a laid-out line only while it is drawn, so the headings off screen were
+/// laid out afresh each frame, and all of them in the first frame after the
+/// view changed — a sixteenth of a second with a large library. The widths
+/// are kept for as long as the face and the scale are the same: a probe's
+/// width stands for both.
 fn label_width(ui: &Ui, words: &str) -> f32 {
     use std::cell::RefCell;
     use std::collections::HashMap;
+    /// More than this many and they are let go of and measured again: the
+    /// facts of a library that has been looked through for a long time.
     const KEPT_MOST: usize = 50_000;
     thread_local! {
         static WIDTHS: RefCell<(u64, HashMap<String, f32>)> = RefCell::new((0, HashMap::new()));
@@ -605,6 +695,8 @@ fn label_width(ui: &Ui, words: &str) -> f32 {
     })
 }
 
+/// How wide a heading's words may be: the column's content, less the cover
+/// and its gap where they stand beside it.
 fn words_room(cover: Option<f32>, width: f32, m: Metrics) -> f32 {
     let room = (width - m.marker_pad_x * 2.0).max(1.0);
     match head_cover_layout(cover, width, 1, m) {
@@ -613,6 +705,15 @@ fn words_room(cover: Option<f32>, width: f32, m: Metrics) -> f32 {
     }
 }
 
+/// How tall [`album_head`] is: the cover, or the lines without one, the air
+/// round it, and under the plate the air one row's marker keeps from the next —
+/// the first track's own inset makes up the other half, so the heading stands
+/// as far from its tracks as they do from each other. Known before it is drawn,
+/// so one off screen can be passed over.
+///
+/// `stack` is how far the words have gone from beside the cover to under it,
+/// 0 … 1 (see [`heads_stack`]): between the two the height goes from the one
+/// to the other, so what stands below moves down or up rather than jumping.
 pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, more: usize, stack: f32, m: Metrics) -> f32 {
     let (size, _) = head_cover_layout(cover, width, lines, m);
     let block = words_block(lines, more, m);
@@ -622,16 +723,30 @@ pub(super) fn album_head_height(cover: Option<f32>, width: f32, lines: usize, mo
     tall + head_pad_top(cover, m) + m.marker_pad_x + m.marker_inset_y
 }
 
+/// The air above a heading's first line inside its plate: round a cover the
+/// rows' own air at the side, so the cover stands in an even frame; without
+/// one none, so the record's name stands on a row's line as the first row of
+/// every other column does — padded, it stood a few points below them.
 fn head_pad_top(cover: Option<f32>, m: Metrics) -> f32 {
     if cover.is_some() { m.marker_pad_x } else { 0.0 }
 }
 
+/// How far the heads' words have gone from beside their covers to under them,
+/// 0 … 1, for the whole list at once: whether they stand under depends only on
+/// the column's width and the covers' size, the same for every head. Eased
+/// over the time a column slides in, so when the queue comes in and the words
+/// go under, they do it as the column moves rather than in one frame.
 pub(super) fn heads_stack(ctx: &egui::Context, cover: Option<f32>, width: f32, m: Metrics) -> f32 {
     let Some(_) = cover else { return 0.0 };
     let (_, stacked) = head_cover_layout(cover, width, 3, m);
     super::slide(ctx, egui::Id::unique("heads-stacked"), stacked, false)
 }
 
+/// How big a heading's cover is in a column `width` wide — never wider than the
+/// column's content — and whether the words go under it rather than beside:
+/// from [`STACKED_FROM`] up, where a picture that large makes the lines
+/// beside it look stranded, and once it takes more than a third of the
+/// column, where the name beside it had too little room.
 fn head_cover_layout(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -> (f32, bool) {
     let room = (width - m.marker_pad_x * 2.0).max(1.0);
     match cover {
@@ -643,8 +758,10 @@ fn head_cover_layout(cover: Option<f32>, width: f32, lines: usize, m: Metrics) -
     }
 }
 
+/// From how big a heading's cover its lines stand under it, not beside.
 const STACKED_FROM: f32 = 140.0;
 
+/// The air between a cover and the words under it.
 pub(super) const ALBUM_HEAD_UNDER: f32 = 10.0;
 
 pub(super) fn album_head(
@@ -779,6 +896,7 @@ pub(super) fn album_head(
     response
 }
 
+/// A track's row grown up to the head over it, where it has one.
 fn with_head(row: Rect, head_top: Option<f32>) -> Rect {
     head_top.map_or(row, |top| Rect::from_min_max(egui::pos2(row.left(), top.min(row.top())), row.max))
 }

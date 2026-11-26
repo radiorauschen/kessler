@@ -1,6 +1,17 @@
+//! Pictures for the search field that move only on the clock's ticks.
+//!
+//! The scope draws twenty frames a second, and every one of them is the whole
+//! window drawn again; that is most of what kessler costs while music plays.
+//! These change at most four times a second, on the same ticks the time under
+//! the title moves on anyway, so they cost next to nothing: a snake that eats
+//! its way through the field, a zoom into the Mandelbrot set that goes as deep
+//! as the track is long, the game of life seeded with the cover screened into
+//! dots. All on the same coarse grid as life.
+
 use super::*;
 use std::collections::VecDeque;
 
+/// What the search field shows while music plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::gui) enum FieldPicture {
     Scope,
@@ -10,10 +21,13 @@ pub(in crate::gui) enum FieldPicture {
     Ball,
     Book,
     Saga,
+    /// Two needles behind the field — see `meter`, which draws them in the
+    /// field itself: no picture for the other places that show these.
     Meter,
 }
 
 impl FieldPicture {
+    /// What goes in the config file.
     pub(in crate::gui) fn name(self) -> &'static str {
         match self {
             Self::Scope => "vektorskop",
@@ -27,6 +41,10 @@ impl FieldPicture {
         }
     }
 
+    /// Anything unknown is the scope, as it was before there was a choice —
+    /// „vektorskop 2.0" too, which it was the coarse kind of. The cover and the
+    /// punched tape were quiet pictures, and stay quiet: life, which the cover
+    /// still seeds.
     pub(in crate::gui) fn from_name(name: &str) -> Self {
         match name.trim() {
             "schlange" => Self::Snake,
@@ -40,6 +58,7 @@ impl FieldPicture {
         }
     }
 
+    /// What the menu says.
     pub(in crate::gui) fn said(self) -> &'static str {
         match self {
             Self::Scope => tr!("vektorskop"),
@@ -53,6 +72,8 @@ impl FieldPicture {
         }
     }
 
+    /// The next one round, `None` after the last: the menu's row goes on to
+    /// „nichts" from there.
     pub(in crate::gui) fn next(self) -> Option<Self> {
         match self {
             Self::Scope => Some(Self::Snake),
@@ -67,8 +88,14 @@ impl FieldPicture {
     }
 }
 
+/// How often the quiet pictures move, in seconds: on the ticks of the time
+/// under the title, which asks for a frame four times a second in front
+/// anyway — see `GuiApp::update`.
 const TICK: f64 = 0.25;
 
+/// The steps a second the quiet pictures can be set to take, all of them alike:
+/// once a second, twice, four on the clock's own ticks — no frame more than the
+/// field empty — or eight. Not more: each step is the whole window drawn again.
 pub(in crate::gui) const FIELD_RATES: [u32; 4] = [1, 2, 4, 8];
 
 pub(in crate::gui) fn field_rate(asked: u32) -> u32 {
@@ -80,6 +107,9 @@ pub(in crate::gui) fn field_rate(asked: u32) -> u32 {
     }
 }
 
+/// The quiet pictures' step for this frame, in seconds: `[ui] field_rate` a
+/// second, once a second where the scope is set to move with the clock. The
+/// same on a station.
 pub(in crate::gui) fn field_tick(app: &GuiApp) -> f64 {
     if app.config.ui.scope_rate == super::SECOND_RATE {
         1.0
@@ -88,11 +118,15 @@ pub(in crate::gui) fn field_tick(app: &GuiApp) -> f64 {
     }
 }
 
+/// Whether the quiet pictures step only once a second: then the time under
+/// the title does too, and the window draws once a second.
 pub(in crate::gui) fn on_the_second(app: &GuiApp) -> bool {
     let quiet = !matches!(FieldPicture::from_name(&app.config.ui.field_picture), FieldPicture::Scope | FieldPicture::Meter);
     app.config.ui.field_spectrum && quiet && field_rate(app.config.ui.field_rate) <= 1
 }
 
+/// Whether the quiet pictures need frames of their own: not where they step
+/// on the clock's quarter seconds while a track plays.
 pub(in crate::gui) fn asks_for_frames(app: &GuiApp) -> bool {
     app.player.current_track().is_none() || (field_tick(app) - TICK).abs() > 1e-9
 }
@@ -101,6 +135,7 @@ fn tick_for(app: &GuiApp) -> f64 {
     field_tick(app)
 }
 
+/// What the quiet pictures remember from one frame to the next.
 #[derive(Default)]
 pub(in crate::gui) struct FieldArt {
     snake: Option<Snake>,
@@ -108,18 +143,28 @@ pub(in crate::gui) struct FieldArt {
     zoom: Option<Zoom>,
     life: Option<Life>,
     ball: Option<Ball>,
+    /// The saga's scene of the last tick, the same way.
     saga: Option<(i64, (usize, usize), Vec<u8>)>,
+    /// How loud it was, tick by tick, while the saga went along.
     saga_heard: SagaHeard,
+    /// How many rows of cells the pictures are: [`GRID_ROWS`] in the search
+    /// field (0 says so too), more filling the window as the screen saver.
     rows: usize,
+    /// How many device pixels across a cell came out last time drawn, so
+    /// another picture can be drawn in cells as big.
     cell: usize,
+    /// The book set as a wall of letters: in the menu's head, where a line
+    /// holds a few words and justifying them opened gaps as wide as the words.
     wall: bool,
 }
 
 impl FieldArt {
+    /// Pictures `rows` cells tall, for the screen saver.
     pub(in crate::gui) fn with_rows(rows: usize) -> Self {
         Self { rows, ..Self::default() }
     }
 
+    /// The same, the book set as a wall of letters: for the menu's head.
     pub(in crate::gui) fn wall(self) -> Self {
         Self { wall: true, ..self }
     }
@@ -128,16 +173,21 @@ impl FieldArt {
         if self.rows == 0 { GRID_ROWS } else { self.rows }
     }
 
+    /// The device pixels across a cell when last drawn; `None` before.
     pub(in crate::gui) fn cell(&self) -> Option<usize> {
         (self.cell > 0).then_some(self.cell)
     }
 
+    /// The snake goes `way` from its next step on, steered by hand: the arrow
+    /// keys with `x` held. Into a wall or into itself, and it starts again
+    /// small.
     pub(in crate::gui) fn steer(&mut self, way: (i32, i32)) {
         if let Some(snake) = self.snake.as_mut() {
             snake.steered = Some(way);
         }
     }
 
+    /// `x` let go: the snake finds its own way again.
     pub(in crate::gui) fn let_go(&mut self) {
         if let Some(snake) = self.snake.as_mut() {
             snake.steered = None;
@@ -145,6 +195,8 @@ impl FieldArt {
     }
 }
 
+/// What plays, for knowing when it changed: a track's id, or a station's
+/// address, hashed.
 pub(in crate::gui) fn playing_key(app: &GuiApp) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -156,6 +208,8 @@ pub(in crate::gui) fn playing_key(app: &GuiApp) -> u64 {
     hasher.finish()
 }
 
+/// How loud the last moment was: the root of the mean square of both
+/// channels, nought to about one.
 fn loudness(heard: &crate::player::audio::Heard) -> f32 {
     let pairs = heard.recent_pairs();
     if pairs.is_empty() {
@@ -165,23 +219,39 @@ fn loudness(heard: &crate::player::audio::Heard) -> f32 {
     (sum / pairs.len() as f32).sqrt()
 }
 
+/// What a quiet picture needs to know of the moment, apart from what it
+/// remembers itself: so it can be drawn where there is no window — on the
+/// thread of a keyboard's screen.
 pub(in crate::gui) struct Moment {
+    /// What plays — see [`playing_key`].
     pub key: u64,
+    /// The clock, in seconds.
     pub now: f64,
+    /// How long a step is, in seconds.
     pub tick: f64,
+    /// How loud the last moment was.
     pub level: f32,
+    /// How far along the track is, nought to one; none on a station.
     pub progress: Option<f64>,
+    /// The cover of what plays, for life to be seeded with.
     pub cover: Option<std::path::PathBuf>,
+    /// Screened from the negative, for a scheme darker than its ground.
     pub negative: bool,
 }
 
+/// What came of drawing a picture besides the picture.
 #[derive(Default)]
 pub(in crate::gui) struct Drawn {
     pub grey: Option<Vec<u8>>,
+    /// The book's place has moved far enough to be written down.
     pub save: bool,
+    /// The saga's opening is running: frames more often than its steps.
     pub opening: bool,
 }
 
+/// The picture for this frame, `width` by `height` pixels, as the scope's
+/// light is: nought for nothing, 255 for full ink. `None` where there is
+/// nothing to show.
 pub(in crate::gui) fn grey_for(
     app: &mut GuiApp,
     ui: &Ui,
@@ -212,6 +282,8 @@ pub(in crate::gui) fn grey_for(
     drawn.grey
 }
 
+/// [`grey_for`] without the window: what the picture remembers, where the
+/// book has been read to, and the moment.
 pub(in crate::gui) fn grey_of(
     art: &mut FieldArt,
     reading: &mut Reading,
@@ -289,46 +361,81 @@ pub(in crate::gui) fn grey_of(
     Drawn { grey, ..Drawn::default() }
 }
 
+/// „Also sprach Zarathustra", the second edition of 1893 as the Internet
+/// Archive read it off its scanned pages, cleaned of the scan's headers,
+/// footers and page numbers. The odd misread word remains.
 static BOOK: &str = include_str!("zarathustra.de.txt");
 
+/// How many rows of cells the field is for the book: three of Misaki's lines of
+/// eight, the field filled with words like a page, where the other pictures
+/// have [`GRID_ROWS`].
 const BOOK_ROWS: usize = 24;
 
+/// How tall a line is: Misaki's eight rows, the last of them empty and so
+/// the space between lines.
 const LINE_ROWS: usize = 8;
 
+/// How many ticks read on before the place is written to the config file,
+/// so a quit loses a couple of minutes at most and the file is not written
+/// four times a second.
 const BOOK_SAVE_EVERY: u32 = 480;
 
+/// Where in the book the field has read to, beyond the place in the config
+/// file: how many rows of dots the first line has gone up by, and the tick
+/// last read on, so the field, the menu's head and the screen saver read on
+/// once a tick between them, not each of them.
 #[derive(Default)]
 pub(in crate::gui) struct Reading {
     skip: usize,
     tick: Option<i64>,
     unsaved: u32,
+    /// How many lines have gone up since the program started.
     lines: u64,
+    /// When the saga's opening began, and whether it is over — once in a
+    /// run of the program, see [`saga_opening`].
     opening: Option<f64>,
     opened: bool,
+    /// The tick the figure began to walk in at — see [`Entry`].
     entered: Option<i64>,
+    /// Where each place that shows the book has read to — see [`Flow`].
     flows: Vec<Flow>,
 }
 
+/// One place the book is shown in — the search field, the menu's head, the
+/// screen saver, told apart by how its lines are set.
 struct Flow {
     columns: usize,
     setting: Setting,
+    /// Where its first line begins.
     at: usize,
+    /// How many of [`Reading::lines`] it has gone up by, and the tick it
+    /// was last shown at.
     lines: u64,
     tick: i64,
 }
 
+/// How many ticks a place may go unshown and still go on where it was;
+/// after that it begins at the place in the config file again.
 const FLOW_KEPT_TICKS: i64 = 8;
 
+/// The place, made sound: a config written by hand, or with another book,
+/// may say anything.
 fn book_place(at: usize) -> usize {
     if at < BOOK.len() && BOOK.is_char_boundary(at) { at } else { 0 }
 }
 
+/// How a line of the book is set across the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Setting {
+    /// The dots left over shared out between the words; one word alone stands
+    /// at the left.
     Justified,
+    /// Letter after letter to the right edge and on in the next line, the words
+    /// broken anywhere, without a hyphen: a wall of text.
     Wall,
 }
 
+/// A word as its letters, each as columns of Misaki's dots.
 fn letters(text: &str) -> Vec<Vec<u8>> {
     text.chars()
         .map(|c| {
@@ -342,6 +449,11 @@ fn wide(word: &[Vec<u8>]) -> usize {
     word.iter().map(Vec::len).sum()
 }
 
+/// One line of the book from `at`, `columns` dots wide, set as `setting`
+/// says; a word that does not fit hyphenated where [`hyphen_points`]
+/// allows, a word too long for the line broken between its letters. Its
+/// columns of dots, and where the next line begins — the book's beginning
+/// again after its end.
 fn line_from(at: usize, columns: usize, setting: Setting) -> (Vec<u8>, usize) {
     let mut i = book_place(at);
     let mut words: Vec<Vec<Vec<u8>>> = Vec::new();
@@ -408,8 +520,12 @@ fn line_from(at: usize, columns: usize, setting: Setting) -> (Vec<u8>, usize) {
     (set_across(&words, columns), next)
 }
 
+/// The space between words, in dots: a letter of Latin.
 const WORD_SPACE: usize = 4;
 
+/// `words` set across `columns` dots, the dots left over shared out
+/// between them, the first gaps a dot wider where they do not share out
+/// evenly. One word alone stands at the left.
 fn set_across(words: &[Vec<Vec<u8>>], columns: usize) -> Vec<u8> {
     let inked: usize = words.iter().map(|word| wide(word)).sum();
     let gaps = words.len().saturating_sub(1);
@@ -425,6 +541,12 @@ fn set_across(words: &[Vec<Vec<u8>>], columns: usize) -> Vec<u8> {
     out
 }
 
+/// Where a German word may be hyphenated, as byte offsets into it: by the
+/// rules of thumb, not a dictionary — one consonant goes with the vowel
+/// after it, of several the last does; ch, ck, sch, ph, th and qu stay
+/// together, and so do vowels that follow one another. At least two
+/// letters either side, and only inside the word's letters, not its
+/// punctuation.
 fn hyphen_points(word: &str) -> Vec<usize> {
     let letters: Vec<(usize, char)> = word.char_indices().collect();
     let first = letters.iter().position(|(_, c)| c.is_alphabetic());
@@ -480,6 +602,11 @@ fn hyphen_points(word: &str) -> Vec<usize> {
     points
 }
 
+/// On through the book to tick `tick_now`: a row of dots up a quarter of a
+/// second, four on the slower ticks of a second, a few ticks at most made
+/// up after a pause; past a whole line, the next line is the first.
+/// `columns` is how wide the lines are where it is being read. Only while
+/// the field shows it, which is only while something plays.
 fn read_on(reading: &mut Reading, book_at: &mut usize, tick_now: i64, tick: f64, columns: usize, setting: Setting) -> (usize, bool) {
     let was = reading.tick.replace(tick_now);
     let first = was.is_some_and(|was| tick_now > was);
@@ -525,6 +652,9 @@ fn read_on(reading: &mut Reading, book_at: &mut usize, tick_now: i64, tick: f64,
     (at, save)
 }
 
+/// The field filled with the book from `at`, edge to edge, line under
+/// line, the first gone up by `skip` rows: a dot a cell, set as `setting`
+/// says.
 fn book_page(at: usize, skip: usize, grid: &Grid, setting: Setting) -> Vec<u8> {
     let mut lines = Vec::new();
     let mut next = at;
@@ -540,19 +670,27 @@ fn book_page(at: usize, skip: usize, grid: &Grid, setting: Setting) -> Vec<u8> {
     })
 }
 
+/// The coarse cells every quiet picture is drawn in: the field sixteen
+/// cells tall, whatever its height, the grid in the middle of it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Grid {
     cell: usize,
     columns: usize,
     rows: usize,
+    /// Where the first cell begins: before the field's edge where the
+    /// cells run over it.
     left: isize,
     top: isize,
     size: (usize, usize),
 }
 
+/// How many rows of cells the field is, whatever its height.
 pub(super) const GRID_ROWS: usize = 16;
 
 impl Grid {
+    /// Cells over the whole field and past its edges, which cut the last of
+    /// them: the field is a mask over the picture. Until then only whole cells,
+    /// and what was left over stood empty round them.
     fn of(width: usize, height: usize, rows: usize) -> Self {
         let cell = (height / rows.max(4)).max(1);
         let columns = width.div_ceil(cell).max(4);
@@ -567,6 +705,8 @@ impl Grid {
         }
     }
 
+    /// Only whole cells, in the middle of the field: for what has figures
+    /// that must not be cut.
     fn whole(width: usize, height: usize, rows: usize) -> Self {
         let cell = (height / rows.max(4)).max(1);
         let columns = (width / cell).max(4);
@@ -581,6 +721,11 @@ impl Grid {
         }
     }
 
+    /// The book's page: whole columns, a cell of air at each side, the same
+    /// left and right; top and bottom the lines run out of the field. A line is
+    /// set a column wider than this ([`Self::line`]): every letter ends in an
+    /// empty column, and with the last one's inside the page the right margin
+    /// was a dot wider than the left.
     fn page(width: usize, height: usize, rows: usize) -> Self {
         let whole = Self::whole(width, height, rows);
         let columns = whole.columns.saturating_sub(2).max(4);
@@ -593,10 +738,12 @@ impl Grid {
         }
     }
 
+    /// How many columns a line of the page is set in.
     fn line(&self) -> usize {
         self.columns + 1
     }
 
+    /// The field with the cells `lit` says filled in, edge to edge.
     fn paint(&self, lit: impl Fn(usize, usize) -> bool) -> Vec<u8> {
         let (width, height) = self.size;
         let mut grey = vec![0u8; width * height];
@@ -617,12 +764,15 @@ impl Grid {
     }
 }
 
+/// Ordered dots, four by four: the threshold for a cell, nought to one.
 const BAYER: [[f32; 4]; 4] = [[0.0, 8.0, 2.0, 10.0], [12.0, 4.0, 14.0, 6.0], [3.0, 11.0, 1.0, 9.0], [15.0, 7.0, 13.0, 5.0]];
 
 fn bayer(column: usize, row: usize) -> f32 {
     (BAYER[row % 4][column % 4] + 0.5) / 16.0
 }
 
+/// The cover of what plays, read once for each new path: what life is
+/// seeded with.
 #[derive(Default)]
 struct Cover {
     path: Option<std::path::PathBuf>,
@@ -642,6 +792,8 @@ impl Cover {
     }
 }
 
+/// A snake on a grid of cells, which goes after a dot, eats it and grows; a
+/// loud moment makes it swerve. One step a tick.
 struct Snake {
     key: u64,
     size: (usize, usize),
@@ -656,15 +808,20 @@ struct Snake {
     steps: u64,
     calm: f32,
     seed: u64,
+    /// The way the hand wants it to go, while `x` is held.
     steered: Option<(i32, i32)>,
+    /// How many rows it was asked for, to start again with.
     asked: usize,
 }
 
+/// How many rows of cells the field is, whatever its height.
 const SNAKE_ROWS: usize = 6;
 
+/// How long the snake starts, and how long it may get, against the cells.
 const SNAKE_FIRST: usize = 3;
 const SNAKE_MOST_SHARE: f32 = 0.4;
 
+/// Every so many steps it grows by one of its own, as the track goes on.
 const SNAKE_GROWS_EVERY: u64 = 16;
 
 impl Snake {
@@ -725,6 +882,8 @@ impl Snake {
         inside && (!self.body.contains(&at) || tail == Some(&at))
     }
 
+    /// Up to tick `tick`, a step for each tick gone by since the last — at
+    /// most a few, so a window that was away does not race to catch up.
     fn walk_to(&mut self, tick: i64, level: f32) {
         let behind = match self.stepped {
             Some(was) if tick > was => (tick - was).min(4),
@@ -769,6 +928,7 @@ impl Snake {
         self.go(way);
     }
 
+    /// One step `way`: eat what is there, grow or let the tail follow.
     fn go(&mut self, way: (i32, i32)) {
         let head = self.body[0];
         self.heading = way;
@@ -815,12 +975,21 @@ impl Snake {
     }
 }
 
+/// Where the zoom goes, and how far in it gets, as the width of the field in
+/// the plane. A Misiurewicz point: spirals all the way down, and no point
+/// near it takes more than a hundred-odd rounds to escape — the seahorse
+/// valley took thousands down there, which would have cost the frames the
+/// pictures here are meant to save. Deep enough to look like nothing seen
+/// before, shallow enough for the arithmetic of a 64-bit float.
 const ZOOM_AT: (f64, f64) = (-0.101_096_363_845_62, 0.956_286_510_809_14);
 const ZOOM_WIDEST: f64 = 3.5;
 const ZOOM_DEEPEST: f64 = 2e-11;
 
+/// On the air there is no track to be far along in: one dive every so long.
 const ZOOM_AIRED_SECS: f64 = 600.0;
 
+/// A zoom into the Mandelbrot set, as deep as the track is far along; worked
+/// out again only when the depth or the size changes.
 #[derive(Default)]
 struct Zoom {
     made: Option<(u64, usize, usize, usize, Vec<u8>)>,
@@ -840,6 +1009,8 @@ impl Zoom {
     }
 }
 
+/// The rounds each cell's middle takes to escape at `depth` (nought to one),
+/// `most` for a point that does not.
 fn escapes(grid: &Grid, depth: f64) -> (Vec<u32>, u32) {
     let span = ZOOM_WIDEST * (ZOOM_DEEPEST / ZOOM_WIDEST).powf(depth);
     let most = (100.0 + 40.0 * (ZOOM_WIDEST / span).log10()).clamp(100.0, 600.0) as u32;
@@ -862,6 +1033,11 @@ fn escapes(grid: &Grid, depth: f64) -> (Vec<u32>, u32) {
     (rounds, most)
 }
 
+/// The set at `depth` in the coarse cells, the set itself solid and round it
+/// tones that go from ink to none and back as the cells take longer to escape:
+/// each escaping cell toned by its place among the others of this picture, so
+/// there are as many rings at every depth, and the tones screened by blue
+/// noise.
 fn mandelbrot(width: usize, height: usize, depth: f64, rows: usize) -> Vec<u8> {
     let grid = Grid::of(width, height, rows * 2);
     let (rounds, most) = escapes(&grid, depth);
@@ -882,8 +1058,13 @@ fn mandelbrot(width: usize, height: usize, depth: f64, rows: usize) -> Vec<u8> {
     grid.paint(|column, row| tone[row * grid.columns + column] > crate::gui::dither::blue_share(column, row))
 }
 
+/// How many rings of tone the escaping cells are shared out in.
 const ZOOM_RINGS: f32 = 5.0;
 
+/// The game of life on the field, round at the edges, one generation a tick;
+/// seeded with the cover screened into dots, so the cover is there at the start
+/// of the track and comes apart as it plays. A loud moment drops a glider
+/// somewhere; a field gone still or empty is seeded again.
 struct Life {
     key: u64,
     grid: Grid,
@@ -929,6 +1110,7 @@ impl Life {
         self.seed
     }
 
+    /// The cover's middle band, screened by ordered dots into live cells.
     fn seed_with(&mut self, cover: &image::GrayImage, negative: bool) {
         let (cw, ch) = (cover.width() as usize, cover.height() as usize);
         if cw == 0 || ch == 0 {
@@ -947,12 +1129,14 @@ impl Life {
         }
     }
 
+    /// A fifth of the cells alive, at random.
     fn scatter(&mut self) {
         for at in 0..self.cells.len() {
             self.cells[at] = self.random().is_multiple_of(5);
         }
     }
 
+    /// A glider somewhere, going a random way.
     fn glider(&mut self) {
         const SHAPE: [(usize, usize); 5] = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
         let x0 = (self.random() % self.columns as u64) as usize;
@@ -966,6 +1150,7 @@ impl Life {
         }
     }
 
+    /// Up to tick `tick`, a generation for each tick gone by, at most a few.
     fn live_to(&mut self, tick: i64, level: f32) {
         let behind = match self.lived {
             Some(was) if tick > was => (tick - was).min(4),
@@ -1013,6 +1198,9 @@ impl Life {
     }
 }
 
+/// A ball, shaded as if lit from the upper left, rolling round the field as the
+/// logo of a DVD player waiting for a disc does, a cell a tick; at every wall
+/// it bounces off, it is screened another way.
 struct Ball {
     grid: Option<Grid>,
     at: (i32, i32),
@@ -1021,11 +1209,16 @@ struct Ball {
     rolled: Option<i64>,
 }
 
+/// How many cells across the ball is, at most; the field is `GRID_ROWS`.
 const BALL_CELLS: i32 = 8;
 
+/// The ways the ball is screened, one after the other, a wall at a time:
+/// ordered dots, lines across, lines down, lines aslant, clustered dots,
+/// noise, a checkerboard.
 const BALL_SCREENS: usize = 7;
 
 impl Ball {
+    /// Somewhere in the field, going some way: the same for the same track.
     fn new(key: u64) -> Self {
         let way = (if key & 1 == 0 { 1 } else { -1 }, if key & 2 == 0 { 1 } else { -1 });
         Self { grid: None, at: ((key >> 8 & 0xff) as i32, (key >> 16 & 0xf) as i32), way, screen: (key >> 24) as usize % BALL_SCREENS, rolled: None }
@@ -1035,6 +1228,8 @@ impl Ball {
         self.grid.map_or(BALL_CELLS, |grid| BALL_CELLS.min(grid.rows as i32 - 1).min(grid.columns as i32 - 1))
     }
 
+    /// A field of another size keeps the ball where it was, as far as it
+    /// still fits: the field opens and closes under the pointer.
     fn fit(&mut self, width: usize, height: usize, rows: usize) {
         if self.grid.is_some_and(|grid| grid.size == (width, height)) {
             return;
@@ -1046,6 +1241,7 @@ impl Ball {
         self.at.1 = self.at.1.clamp(0, grid.rows as i32 - side);
     }
 
+    /// Up to tick `tick`, a cell for each tick gone by, at most a few.
     fn roll_to(&mut self, tick: i64) {
         let behind = match self.rolled {
             Some(was) if tick > was => (tick - was).min(4),
@@ -1076,6 +1272,8 @@ impl Ball {
         }
     }
 
+    /// How light the ball is at cell (`x`, `y`) of its own square, nought to
+    /// one, or `None` outside it.
     fn light(side: i32, x: i32, y: i32) -> Option<f32> {
         let across = |v: i32| (v as f32 + 0.5) / side as f32 * 2.0 - 1.0;
         let (dx, dy) = (across(x), across(y));
@@ -1090,11 +1288,14 @@ impl Ball {
         Some(lit)
     }
 
+    /// Whether cell (`x`, `y`) is in the ball with a neighbour across or
+    /// down that is not.
     fn on_rim(side: i32, x: i32, y: i32) -> bool {
         Self::light(side, x, y).is_some()
             && [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dy)| Self::light(side, x + dx, y + dy).is_none())
     }
 
+    /// Where screen `screen` puts a cell's threshold, nought to one.
     fn threshold(screen: usize, x: usize, y: usize) -> f32 {
         const CLUSTER: [[f32; 4]; 4] = [[12.0, 5.0, 6.0, 13.0], [4.0, 0.0, 1.0, 7.0], [11.0, 3.0, 2.0, 8.0], [15.0, 10.0, 9.0, 14.0]];
         match screen {
@@ -1133,13 +1334,20 @@ impl Ball {
     }
 }
 
+/// „kessler saga": the figure walking, as drawn cell by cell, 15 frames.
 static SAGA: &str = include_str!("saga.txt");
 
+/// How many cells tall the scene is: a row of air, the figure's 26, and the
+/// row it walks on. As many cells as the figure has dots: everything that
+/// goes by is drawn in the same dots as it, never finer.
 const SAGA_ROWS: usize = 28;
 const FIGURE_WIDE: usize = 15;
 const FIGURE_TALL: usize = 26;
+/// The row the scene's ground is on, from the top.
 const FLOOR: i64 = SAGA_ROWS as i64 - 1;
 
+/// One frame of the figure: its ink, and the ground inside it (the face),
+/// which stays ground whatever goes by behind.
 struct Figure {
     ink: Vec<bool>,
     hole: Vec<bool>,
@@ -1154,12 +1362,15 @@ impl Figure {
         (self.ink[at], self.hole[at])
     }
 
+    /// Whether (`x`, `y`) is ink, or ground right beside it: what goes by
+    /// behind is cut back a cell round the figure, so it reads in front.
     fn clears(&self, x: i64, y: i64) -> bool {
         let (ink, hole) = self.at(x, y);
         ink || hole || (-1..=1).any(|dy| (-1..=1).any(|dx| self.at(x + dx, y + dy).0))
     }
 }
 
+/// The figure's frames, read once.
 fn figures() -> &'static [Figure] {
     static FRAMES: std::sync::OnceLock<Vec<Figure>> = std::sync::OnceLock::new();
     FRAMES.get_or_init(|| {
@@ -1205,6 +1416,7 @@ fn figures() -> &'static [Figure] {
     })
 }
 
+/// A number for `place` in a layer `salt`, the same every time.
 fn mix(place: i64, salt: u64) -> u64 {
     let mut h = (place as u64).wrapping_add(salt.wrapping_mul(0x9e37_79b9_7f4a_7c15));
     h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -1212,11 +1424,16 @@ fn mix(place: i64, salt: u64) -> u64 {
     h ^ (h >> 31)
 }
 
+/// How loud the music was, tick by tick, while the saga went along: what comes
+/// into the scene at its right edge is as busy as the music was then, and stays
+/// so until it has gone out at the left.
 #[derive(Default)]
 pub(in crate::gui) struct SagaHeard {
     levels: VecDeque<(i64, f32)>,
 }
 
+/// How many ticks of loudness are kept: more than any layer takes to cross
+/// a wide field.
 const SAGA_HEARD_KEPT: usize = 4096;
 
 impl SagaHeard {
@@ -1230,14 +1447,19 @@ impl SagaHeard {
         }
     }
 
+    /// How loud it was at `tick`: the last loudness noted by then.
     fn at(&self, tick: i64) -> Option<f32> {
         let at = self.levels.partition_point(|&(was, _)| was <= tick);
         at.checked_sub(1).map(|i| self.levels[i].1)
     }
 }
 
+/// How long a stretch of the walk is, in ticks: some stretches are nearly
+/// empty, so the figure walks through open country now and then.
 const SAGA_STRETCH: i64 = 160;
 
+/// One plane of the scene and how fast it goes by: `num` / `den` cells a
+/// tick, and the number its things are drawn from.
 #[derive(Clone, Copy)]
 struct Plane {
     num: i64,
@@ -1253,21 +1475,34 @@ const LANDMARKS: Plane = Plane { num: 1, den: 2, salt: 9 };
 const GROUND: Plane = Plane { num: 1, den: 1, salt: 4 };
 const FRONT: Plane = Plane { num: 2, den: 1, salt: 6 };
 
+/// The scene at one tick: where each plane has got to, and how full the
+/// world is where.
 struct Scene<'a> {
     tick: i64,
     columns: i64,
     heard: &'a SagaHeard,
+    /// The tick the figure reached the middle at: nothing that came in
+    /// before it is there — see [`Entry`].
     since: Option<i64>,
+    /// What this part of the walk is, how far into it the tick is, and how
+    /// long it is — a part, or more for a still stretch.
     turn: Turn,
     into: i64,
     span: i64,
 }
 
 impl Scene<'_> {
+    /// How far a turn has come on, nought to one: up over its first
+    /// [`TURN_EASE`] ticks, down over its last, so the night falls and the
+    /// rain sets in rather than being there all at once.
     fn ramp(&self) -> f32 {
         eased(self.into, self.span)
     }
 
+    /// How still the world was when something came in at `came`: nought as
+    /// always, up to one in the middle of a still stretch. What came in
+    /// before stays until it has gone out at the left, so the country
+    /// empties as it goes by rather than all at once.
     fn quiet_at(&self, came: i64) -> f32 {
         match turn_at(came, self.since) {
             (Turn::Still, into, span) => eased(into, span),
@@ -1275,6 +1510,9 @@ impl Scene<'_> {
         }
     }
 
+    /// How far the view has drawn back from the figure: one as always, up
+    /// to [`FARTHEST`] in a wide turn — in half steps, a few ticks each,
+    /// out after a while and in again before its end.
     fn zoom(&self) -> f32 {
         if self.turn != Turn::Wide {
             return 1.0;
@@ -1290,10 +1528,14 @@ impl Scene<'_> {
         (self.tick * plane.num).div_euclid(plane.den)
     }
 
+    /// When the plane's cell `world` came in at the right edge.
     fn came_in(&self, plane: Plane, world: i64) -> i64 {
         ((world - self.columns) * plane.den).div_euclid(plane.num)
     }
 
+    /// How busy the world is at `world` of a plane, nought to one: the
+    /// stretch of the walk it came in on — one in three nearly empty — and
+    /// how loud the music was then (quiet, a few things; loud, many).
     fn fullness(&self, plane: Plane, world: i64) -> f32 {
         let came = self.came_in(plane, world);
         if self.since.is_some_and(|since| came < since) {
@@ -1305,11 +1547,14 @@ impl Scene<'_> {
         stretch * music * still
     }
 
+    /// Whether the thing in a plane's `chunk`, `wide` cells across, is
+    /// there, at `likely` in a full world.
     fn keeps(&self, plane: Plane, chunk: i64, wide: i64, likely: f32) -> bool {
         let chance = (mix(chunk, plane.salt + 90) % 1000) as f32 / 1000.0;
         chance < likely * self.fullness(plane, chunk * wide)
     }
 
+    /// How loud the music was when the plane's cell `world` came in.
     fn loud_at(&self, plane: Plane, world: i64) -> f32 {
         let came = self.came_in(plane, world);
         if self.since.is_some_and(|since| came < since) {
@@ -1319,16 +1564,21 @@ impl Scene<'_> {
     }
 }
 
+/// A plane's chunk, the cell in it, and its number, at screen column `x`.
 fn chunk_of(scene: &Scene, plane: Plane, x: i64, wide: i64) -> (i64, i64, u64, i64) {
     let world = x + scene.offset(plane);
     let chunk = world.div_euclid(wide);
     (chunk, world.rem_euclid(wide), mix(chunk, plane.salt), world)
 }
 
+/// In a still stretch, what is far off fades cell by cell as into haze,
+/// rather than taking minutes to go by.
 fn hazed(scene: &Scene, world: i64, y: i64) -> bool {
     scene.turn == Turn::Still && (mix(world * 64 + y, 76) % 1000) as f32 / 1000.0 < scene.ramp() * 0.97
 }
 
+/// Far off and slowest, half there in dots: towers of capsules on a shaft,
+/// as the metabolists stacked them; domes; lattice masts; slabs of windows.
 fn far(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 16;
     let (chunk, x, h, world) = chunk_of(scene, FAR, x, WIDE);
@@ -1391,6 +1641,8 @@ fn far(scene: &Scene, x: i64, y: i64) -> bool {
     lit && (world + y).rem_euclid(2) == 0
 }
 
+/// In the sky, only while the music is loud: a few birds, their wings up
+/// and down a tick at a time.
 fn birds(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 28;
     let (chunk, x, h, world) = chunk_of(scene, SKY, x, WIDE);
@@ -1403,6 +1655,8 @@ fn birds(scene: &Scene, x: i64, y: i64) -> bool {
     (x == bx && y == by) || ((x - bx).abs() == 1 && y == wing) || ((x - bx).abs() == 2 && up && y == by - 2)
 }
 
+/// High up and slower than anything: now and then a cloud, thin as the
+/// far things are.
 fn clouds(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 48;
     let (chunk, x, h, world) = chunk_of(scene, HIGH, x, WIDE);
@@ -1418,6 +1672,9 @@ fn clouds(scene: &Scene, x: i64, y: i64) -> bool {
     lump && (world + y).rem_euclid(2) == 0
 }
 
+/// In between: timber frames under a gable, a brace across some bays; masts
+/// with a wire slung between them; heaps of rubble; stepped walls; the arch
+/// of a ruin; a palisade.
 fn middle(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 22;
     const POLE: i64 = 10;
@@ -1524,6 +1781,9 @@ fn middle(scene: &Scene, x: i64, y: i64) -> bool {
     }
 }
 
+/// Seldom, and big: a stack of capsules taller than anything, a water tower
+/// on its legs, a crane with its hook let down, a tower of roofs — and
+/// rarer, a front under a broken pediment, a ball on a cube.
 fn landmarks(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 120;
     let (chunk, x, h, _) = chunk_of(scene, LANDMARKS, x, WIDE);
@@ -1603,6 +1863,7 @@ fn landmarks(scene: &Scene, x: i64, y: i64) -> bool {
     }
 }
 
+/// Near, going by at the figure's own pace: stones, grit, tufts.
 fn ground(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 7;
     let (chunk, x, h, world) = chunk_of(scene, GROUND, x, WIDE);
@@ -1632,6 +1893,8 @@ fn ground(scene: &Scene, x: i64, y: i64) -> bool {
     (0..wide).contains(&x) && y > FLOOR - tall && y <= FLOOR && !corner
 }
 
+/// Nearest, fastest and seldom: a block of rock or a post going by in
+/// front of the figure.
 fn front(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 64;
     let (chunk, x, h, world) = chunk_of(scene, FRONT, x, WIDE);
@@ -1652,6 +1915,8 @@ fn front(scene: &Scene, x: i64, y: i64) -> bool {
     }
 }
 
+/// A front under a pediment broken open at its top, a ball set in the
+/// gap: its windows in rows, a door under an arch.
 fn pediment_front(x: i64, y: i64) -> bool {
     let (left, right, eave) = (6, 32, FLOOR - 15);
     let middle = (left + right) / 2;
@@ -1674,6 +1939,7 @@ fn pediment_front(x: i64, y: i64) -> bool {
     wall || windows || door
 }
 
+/// A ball on a cube, a column beside them with too big a capital.
 fn ball_on_cube(x: i64, y: i64) -> bool {
     let cube = (14..=26).contains(&x) && (FLOOR - 9..=FLOOR).contains(&y) && (x == 14 || x == 26 || y == FLOOR - 9 || (x + y) % 4 == 0);
     let (dx, dy) = (x - 20, y - (FLOOR - 15));
@@ -1685,25 +1951,44 @@ fn ball_on_cube(x: i64, y: i64) -> bool {
     cube || ball || shaft || capital || base
 }
 
+/// How long one part of the walk is, in ticks — two minutes at four a
+/// second. Most of them are the walk as always; now and then one is
+/// something else, see [`Turn`].
 const ERA: i64 = 480;
 
+/// How many ticks a turn takes to come on, and to go.
 const TURN_EASE: i64 = 40;
 
+/// In a wide turn: how long the view waits before it draws back, how many
+/// ticks each half step takes, and how far back it goes — four cells of the
+/// scene to a cell, the figure a few dots tall.
 const ZOOM_WAIT: i64 = 30;
 const ZOOM_STEP: i64 = 3;
 const FARTHEST: f32 = 4.0;
 
+/// What a part of the walk is. Rare, all of them but the walk as always:
+/// most parts are plain, and of the rest none comes round twice in a row
+/// often.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Turn {
     Plain,
+    /// The view draws back until the figure is a few dots tall, crossing
+    /// wide ground past buildings far bigger than anything else in the
+    /// saga; then comes close again.
     Wide,
+    /// A small dog-like creature trots in from behind, walks beside the
+    /// figure for a while, and runs on ahead.
     Companion,
+    /// Night falls: stars, and a thin moon.
     Night,
     Rain,
     Snow,
+    /// A long stretch where next to nothing comes by: open ground, a grain
+    /// on it now and then, small stars in the sky. Three parts at least.
     Still,
 }
 
+/// What the part `era` would be on its own: the same every time.
 fn drawn_turn(era: i64) -> Turn {
     match mix(era, 70) % 100 {
         0..=4 => Turn::Wide,
@@ -1716,6 +2001,10 @@ fn drawn_turn(era: i64) -> Turn {
     }
 }
 
+/// What the part `era` of the walk is: the same every time for the same
+/// part. About one part in three is something other than plain; a still
+/// one goes on through the two parts after it too — what is far off takes
+/// minutes to go by, and the stillness wants time to be felt.
 fn turn_of(era: i64) -> Turn {
     if drawn_turn(era - 1) == Turn::Still || drawn_turn(era - 2) == Turn::Still {
         Turn::Still
@@ -1724,6 +2013,8 @@ fn turn_of(era: i64) -> Turn {
     }
 }
 
+/// The turn at `tick`, how far into it, and how long it is: none in a part
+/// that began before the figure had come in at `since`.
 fn turn_at(tick: i64, since: Option<i64>) -> (Turn, i64, i64) {
     let era = tick.div_euclid(ERA);
     let counts = |era: i64| !since.is_some_and(|since| era * ERA < since);
@@ -1744,11 +2035,17 @@ fn turn_at(tick: i64, since: Option<i64>) -> (Turn, i64, i64) {
     (turn, tick - first * ERA, (last - first + 1) * ERA)
 }
 
+/// Nought to one over the first [`TURN_EASE`] ticks of `span`, one to
+/// nought over its last.
 fn eased(into: i64, span: i64) -> f32 {
     let from_edge = into.min(span - 1 - into).max(0);
     (from_edge as f32 / TURN_EASE as f32).min(1.0)
 }
 
+/// One dog-like creature, its make drawn from `look`: a body as long as it
+/// is, legs long or short, ears up or hanging, its tail up, down or
+/// wagging. Facing right, its feet on the ground at `(0, FLOOR)`; `step`
+/// moves its legs, `(x, y)` is asked about.
 fn creature(look: u64, step: i64, x: i64, y: i64) -> bool {
     let long = 5 + (look % 6) as i64;
     let legs = 1 + ((look >> 4) % 3) as i64;
@@ -1782,6 +2079,8 @@ fn creature(look: u64, step: i64, x: i64, y: i64) -> bool {
     (trunk || skull || nose || ear || tail_at || legs_at) && !eye
 }
 
+/// Now and then, behind the figure: a creature coming the other way, or one
+/// going its way but slower, which the figure passes. Very seldom.
 fn creatures(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 300;
     for (plane, facing_right) in [(TOWARD, false), (ALONG, true)] {
@@ -1799,9 +2098,14 @@ fn creatures(scene: &Scene, x: i64, y: i64) -> bool {
     false
 }
 
+/// A creature walking the other way, quicker past than the ground; one
+/// going the same way, at a trot slower than the figure's.
 const TOWARD: Plane = Plane { num: 3, den: 2, salt: 23 };
 const ALONG: Plane = Plane { num: 1, den: 2, salt: 24 };
 
+/// In a companion turn: where the creature walks, `ahead` columns before the
+/// figure's back, coming in from the left edge at its start and running on
+/// out at the right at its end.
 fn companion(scene: &Scene, ahead: i64, x: i64, y: i64) -> bool {
     if scene.turn != Turn::Companion {
         return false;
@@ -1820,6 +2124,8 @@ fn companion(scene: &Scene, ahead: i64, x: i64, y: i64) -> bool {
     creature(look, step, x - at, y)
 }
 
+/// At night: stars, some of them going out and on again, thicker as the
+/// night comes on, and a thin moon up at the right.
 fn night(scene: &Scene, x: i64, y: i64) -> bool {
     let night = scene.turn == Turn::Night;
     if !(night || scene.turn == Turn::Still) || y >= FLOOR - 6 {
@@ -1847,6 +2153,8 @@ fn night(scene: &Scene, x: i64, y: i64) -> bool {
     moon || shines
 }
 
+/// Rain, slanting; snow, drifting down slowly. Behind everything, thinning
+/// in and out with the turn.
 fn weather(scene: &Scene, x: i64, y: i64) -> bool {
     if y >= FLOOR {
         return false;
@@ -1870,9 +2178,14 @@ fn weather(scene: &Scene, x: i64, y: i64) -> bool {
     }
 }
 
+/// Buildings for the wide view, far bigger than anything else: drawn in
+/// cells four of the scene's across, so they come out a dot thick when the
+/// view is drawn back all the way.
 const GIANT: Plane = Plane { num: 1, den: 1, salt: 21 };
 const GIANT_UNIT: i64 = 4;
 
+/// What stands on the wide ground at the scene's `(x, y)`: now and then
+/// nothing for a long way, else one of the buildings.
 fn giants(scene: &Scene, x: i64, y: i64) -> bool {
     const WIDE: i64 = 64;
     if y > FLOOR {
@@ -1888,6 +2201,10 @@ fn giants(scene: &Scene, x: i64, y: i64) -> bool {
     postmodern(h, world.rem_euclid(WIDE) - 10, row)
 }
 
+/// One of the big buildings, in its own cells: a tower under a broken
+/// pediment; a front with a round window and a keystone; arcades in curves,
+/// one before the other; a ziggurat with a ball on top and a column beside;
+/// solids stacked like toys; a square gate with a square turned in it.
 fn postmodern(h: u64, x: i64, y: i64) -> bool {
     match (h >> 8) % 6 {
         0 => {
@@ -1970,9 +2287,16 @@ fn postmodern(h: u64, x: i64, y: i64) -> bool {
     }
 }
 
+/// How long the word takes to come down to the middle, and how long it
+/// stands there, in seconds: about what the handheld of 1989 took.
 const OPENING_DROP: f64 = 2.4;
 const OPENING_HOLD: f64 = 1.2;
 
+/// Before the saga, the first time it is shown in a run of the program — with
+/// the first track that plays: a small „kessler" coming down from the top to
+/// the middle of the field and standing there a moment, as the maker's name
+/// does when a game starts on the grey handheld. In the figure's own dots.
+/// `None` once it is over.
 fn saga_opening(reading: &mut Reading, now: f64, (width, height): (usize, usize), rows: usize) -> Option<Vec<u8>> {
     if reading.opened {
         return None;
@@ -1987,6 +2311,8 @@ fn saga_opening(reading: &mut Reading, now: f64, (width, height): (usize, usize)
     Some(opening_page(&grid, (gone / OPENING_DROP).min(1.0)))
 }
 
+/// The word `down` of its way — nought to one — from above the field to
+/// its middle.
 fn opening_page(grid: &Grid, down: f64) -> Vec<u8> {
     let word = crate::misaki::columns("kessler");
     let all = word.iter().fold(0u8, |all, byte| all | byte);
@@ -2003,14 +2329,22 @@ fn opening_page(grid: &Grid, down: f64) -> Vec<u8> {
     })
 }
 
+/// How the figure comes in, the first time the saga is shown in a run of the
+/// program: from the tick `began`, in at most `most` ticks — a cell a tick
+/// where that is quick enough, as the ground goes by under it later, more where
+/// the field is wide or the steps slow.
 #[derive(Clone, Copy)]
 struct Entry {
     began: i64,
     most: i64,
 }
 
+/// How long the walk in may take, in seconds.
 const ENTRY_SECS: f64 = 12.0;
 
+/// The scene at tick `tick`: the figure in the middle, a frame a tick,
+/// everything else going by right to left, as far as it is near, as busy as
+/// the music was when it came in.
 fn saga(grid: &Grid, tick: i64, heard: &SagaHeard, entry: Option<Entry>) -> Vec<u8> {
     let frames = figures();
     let Some(figure) = frames.get(tick.rem_euclid(frames.len().max(1) as i64) as usize) else {
@@ -2110,6 +2444,9 @@ fn saga(grid: &Grid, tick: i64, heard: &SagaHeard, entry: Option<Entry>) -> Vec<
 mod tests {
     use super::*;
 
+    /// The book is set in lines as wide as the field, broken between
+    /// words, keeps to letters' boundaries, and comes round to its
+    /// beginning after its end.
     #[test]
     fn the_book_is_set_in_lines_and_comes_round() {
         assert!(BOOK.starts_with("Als Zarathustra dreissig Jahr alt war"));
@@ -2185,6 +2522,8 @@ mod tests {
         assert_eq!(FieldPicture::from_name(""), FieldPicture::Scope);
     }
 
+    /// The snake keeps to the field and never runs into itself, through
+    /// loud and quiet, however long the track.
     #[test]
     fn the_snake_stays_in_the_field_and_off_itself() {
         let mut snake = Snake::new(7, 220, 52, SNAKE_ROWS);
@@ -2200,6 +2539,8 @@ mod tests {
         assert_eq!(snake.grey().len(), 220 * 52);
     }
 
+    /// A tick already walked is not walked again: frames in between show
+    /// the same snake.
     #[test]
     fn the_snake_moves_only_on_ticks() {
         let mut snake = Snake::new(3, 120, 30, SNAKE_ROWS);
@@ -2211,6 +2552,8 @@ mod tests {
         assert_ne!(snake.body, before);
     }
 
+    /// Steered into the wall, the snake starts again; steered free, it
+    /// goes the way it is told, and never straight back.
     #[test]
     fn the_snake_goes_where_it_is_steered() {
         let mut snake = Snake::new(5, 120, 30, SNAKE_ROWS);
@@ -2225,6 +2568,8 @@ mod tests {
         }
     }
 
+    /// The zoom is worked out once for each depth, and has the set's edge
+    /// in it at every depth.
     #[test]
     fn the_zoom_shows_the_edge_all_the_way_down() {
         for depth in [0.0, 0.5, 1.0] {
@@ -2236,6 +2581,8 @@ mod tests {
         assert_eq!(zoom.grey(40, 10, 0.3, GRID_ROWS), a);
     }
 
+    /// The first time, the figure comes in from the left through an empty
+    /// field, stands in the middle, and only then things come by.
     #[test]
     fn the_figure_walks_in_and_the_world_comes_after() {
         let grid = Grid::whole(240, 28, SAGA_ROWS);
@@ -2254,6 +2601,8 @@ mod tests {
         assert_eq!(saga(&grid, 9000, &heard, Some(entry)), saga(&grid, 9000, &heard, None));
     }
 
+    /// The opening's word begins above the field and ends in its middle,
+    /// whole.
     #[test]
     fn the_word_comes_down_to_the_middle() {
         let grid = Grid::whole(300, 52, SAGA_ROWS);
@@ -2270,6 +2619,8 @@ mod tests {
         assert!(half.contains(&255) && half != grey);
     }
 
+    /// The book's ink stands as far from the field's left edge as from its
+    /// right, and the other pictures' cells reach every edge.
     #[test]
     fn the_page_has_even_margins_and_the_cells_reach_the_edge() {
         for (width, height) in [(238, 56), (239, 56), (241, 57), (119, 28), (300, 52), (333, 61)] {
@@ -2285,6 +2636,8 @@ mod tests {
         }
     }
 
+    /// Life seeded with a cover starts as the cover's dots, lives on, and
+    /// is seeded again rather than left empty.
     #[test]
     fn life_starts_from_the_cover_and_goes_on() {
         let cover = image::GrayImage::from_fn(64, 64, |x, _| image::Luma([if x < 32 { 0 } else { 255 }]));
@@ -2300,6 +2653,8 @@ mod tests {
         }
     }
 
+    /// The ball stays in the field, bounces, and is screened another way
+    /// at each wall.
     #[test]
     fn the_ball_bounces_and_changes_its_screen() {
         let mut ball = Ball::new(42);
@@ -2319,6 +2674,10 @@ mod tests {
         assert!(ball.at.0 + ball.side() <= ball.grid.unwrap().columns as i32);
     }
 
+    /// The scope's thin strokes come out as whole cells.
+    /// The saga's figure is read whole, every frame, with the ground of its
+    /// face inside it; it walks in the middle of the field and what goes by
+    /// moves.
     #[test]
     fn the_saga_walks_in_the_middle_while_the_world_goes_by() {
         let frames = figures();
@@ -2344,6 +2703,8 @@ mod tests {
         assert!(inked.last().is_some_and(|&y| y >= 50), "{inked:?}");
     }
 
+    /// Most parts of the walk are the walk as always; each of the others
+    /// comes now and then, none often.
     #[test]
     fn the_turns_are_rare() {
         let mut seen = std::collections::HashMap::new();
@@ -2357,6 +2718,9 @@ mod tests {
         }
     }
 
+    /// A still stretch lasts three parts at least, eases in once and out
+    /// once, and in its middle next to nothing is there but the figure and
+    /// small stars.
     #[test]
     fn a_still_stretch_is_long_and_nearly_empty() {
         let era = (1..).find(|&e| drawn_turn(e) == Turn::Still && turn_of(e - 1) != Turn::Still).unwrap();
@@ -2377,6 +2741,8 @@ mod tests {
         assert!(still * 5 < busy, "{still} inked in the still, {busy} in a plain part");
     }
 
+    /// In a wide part the view draws back until the figure is a few dots
+    /// tall, and comes close again before the part is over.
     #[test]
     fn the_view_draws_back_and_comes_close_again() {
         let heard = SagaHeard::default();
@@ -2394,6 +2760,8 @@ mod tests {
         assert!((3..=10).contains(&far), "{far} rows tall, drawn back");
     }
 
+    /// A companion walks beside the figure, ahead of it, in the middle of
+    /// its part; at the start it is not there yet.
     #[test]
     fn the_companion_walks_beside_the_figure() {
         let heard = SagaHeard::default();
@@ -2405,6 +2773,8 @@ mod tests {
         assert!(beside(ERA / 2));
     }
 
+    /// Every make of creature has a body, a head and legs, and its legs
+    /// move from one step to the next where they are long enough to.
     #[test]
     fn the_creatures_walk() {
         for look in 0..64u64 {

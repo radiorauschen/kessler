@@ -1,18 +1,43 @@
+//! An iPod on Linux, mounted and let go of by way of udisks.
+//!
+//! On GNOME and KDE the file manager mounts whatever is plugged in, and kessler
+//! finds the iPod where it was mounted. Under a tiling window manager — sway,
+//! i3, Hyprland — there is often nothing to do that, and an iPod plugged in
+//! stayed a disk nobody had opened: kessler never saw it. So kessler looks for
+//! one itself, by the name the kernel gives every iPod under
+//! `/dev/disk/by-id`, and asks udisks to mount it — as the file manager
+//! would, as the person sitting there, without a password.
+//!
+//! And on the way out it asks udisks too: unmounted, then powered off, so
+//! the iPod says it may be unplugged, as it does when a Mac ejects it. A
+//! plain `umount` left it showing „do not disconnect".
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
+/// Whether to mount an iPod nobody has: `Config::ipod_mount`, set by the
+/// window every frame and read by the thread that watches for devices.
 pub static AUTO: AtomicBool = AtomicBool::new(true);
 
+/// Devices let go of — ejected here — for as long as they are still plugged
+/// in: a disk that would not power off is still there, unmounted, and must
+/// not be mounted again the moment it was let go of.
 static LET_GO: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+/// Where the kernel lists every disk by what it says it is.
 const BY_ID: &str = "/dev/disk/by-id";
 
+/// Every iPod's disk is named so: `usb-Apple_iPod_<serial>-0:0`, its
+/// partitions with `-partN` after it.
 fn is_ipod(name: &str) -> bool {
     name.starts_with("usb-Apple_iPod")
 }
 
+/// The iPod partitions present but not mounted, as their device files —
+/// `/dev/sdb2` — that hold a file system kessler can read. A whole disk with
+/// partitions is never one of them; one without (some shuffles) can be.
 pub fn unmounted() -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(BY_ID) else {
         return Vec::new();
@@ -42,6 +67,8 @@ pub fn unmounted() -> Vec<PathBuf> {
     found
 }
 
+/// Of the iPod names under `/dev/disk/by-id`, the ones worth mounting: each
+/// partition, and a disk only where it has none.
 fn candidates(names: &[String]) -> Vec<&str> {
     names
         .iter()
@@ -53,6 +80,8 @@ fn candidates(names: &[String]) -> Vec<&str> {
         .collect()
 }
 
+/// Whether a device holds a file system an iPod is formatted with: FAT, for
+/// one set up on Windows or Linux, or HFS+, for one set up on a Mac.
 fn readable(device: &Path) -> bool {
     let Ok(out) = Command::new("lsblk").args(["-no", "FSTYPE"]).arg(device).output() else {
         return false;
@@ -61,6 +90,7 @@ fn readable(device: &Path) -> bool {
     matches!(kind.as_str(), "vfat" | "fat" | "fat32" | "hfsplus" | "hfs")
 }
 
+/// The devices of everything mounted now, from `/proc/mounts`.
 fn mounted_devices() -> Vec<PathBuf> {
     let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
         return Vec::new();
@@ -73,6 +103,8 @@ fn mounted_devices() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The device a mount point is mounted from, from `/proc/mounts`, which
+/// writes a space in a path as `\040`.
 pub fn device_of(mount_point: &Path) -> Option<PathBuf> {
     let mounts = std::fs::read_to_string("/proc/mounts").ok()?;
     device_in(&mounts, mount_point)
@@ -87,6 +119,7 @@ fn device_in(mounts: &str, mount_point: &Path) -> Option<PathBuf> {
     })
 }
 
+/// Whether udisks is there to be asked.
 pub fn available() -> bool {
     Command::new("udisksctl")
         .arg("help")
@@ -94,6 +127,7 @@ pub fn available() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
+/// Mount a device as the person sitting there; where it went, or why not.
 pub fn mount(device: &Path) -> Result<PathBuf, String> {
     let out = run(&["mount", "--no-user-interaction", "-b"], device)?;
     said_mounted_at(&out).ok_or(out)
@@ -105,6 +139,9 @@ fn said_mounted_at(said: &str) -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
+/// Unmount, then power the disk off so the iPod says it may go. A disk that
+/// will not power off — some readers cannot — is still unmounted, and that
+/// is enough to pull it out.
 pub fn eject(device: &Path) -> Result<(), String> {
     run(&["unmount", "--no-user-interaction", "-b"], device)?;
     if let Ok(mut let_go) = LET_GO.lock() {

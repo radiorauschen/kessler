@@ -1,11 +1,46 @@
+//! Turning a cover into dots.
+//!
+//! A halftone is one decision repeated: at this position, is the picture
+//! brighter than the threshold that belongs here? Everything below is a
+//! different answer to "what threshold belongs here", and each answer has a
+//! look of its own — a printed screen, a computer's ordered pattern, the
+//! scattered grain of an old Mac.
+//!
+//! Two properties matter and are tested rather than assumed. **Tone is kept**:
+//! a field of mid grey comes back with about half its dots set, whichever
+//! method drew it, or the wall of records would go light or dark when the
+//! method changed. And **the same cover always draws the same dots**, so a
+//! rebuild — a resized window, a changed setting — does not make the picture
+//! crawl.
+//!
+//! The output is a plain `Vec<bool>`: set means ink. What colour that ink is,
+//! and whether the gaps are paper or transparent, is the tile's business.
+
+/// How the dots are laid down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
+    /// The 8×8 ordered matrix — an even, faintly woven pattern. What Kessler
+    /// has always used, and the steadiest at small sizes.
     #[default]
     Ordered,
+    /// A clustered-dot screen at 45°, the way a newspaper is printed: the dots
+    /// grow and shrink rather than scattering, so mid tones read as grey from
+    /// a step back and as rosettes up close.
     Halftone,
+    /// Floyd–Steinberg: the error at each dot is handed on to its neighbours.
+    /// No pattern at all, which reads as photographic — and as noise when the
+    /// dots are large.
     Diffusion,
+    /// Atkinson's variant, from the first Macintosh: only three quarters of
+    /// the error is passed on, so highlights blow out and shadows block up.
+    /// Lighter, more contrast, and unmistakably 1984.
     Atkinson,
+    /// A threshold that jumps about at random — the same jumble every time for
+    /// the same picture, but with no structure to it. Film grain.
     Noise,
+    /// Blue noise: a threshold as scattered as the grain's, but with every dot
+    /// kept as far from the next as it can be — no clumps and no holes, no
+    /// pattern either. Calm and fine.
     BlueNoise,
 }
 
@@ -19,6 +54,7 @@ impl Screen {
         Screen::BlueNoise,
     ];
 
+    /// The name in the menu, and in the config file.
     pub fn name(self) -> &'static str {
         match self {
             Screen::Ordered => "geordnet",
@@ -30,6 +66,7 @@ impl Screen {
         }
     }
 
+    /// A few words on what it looks like, for the row under the name.
     pub fn about(self) -> &'static str {
         match self {
             Screen::Ordered => tr!("gleichmässiges gewebe"),
@@ -41,6 +78,8 @@ impl Screen {
         }
     }
 
+    /// Read one back out of the config file. Anything unrecognised — a typo, a
+    /// name from a later version — falls back rather than failing to start.
     pub fn from_name(name: &str) -> Screen {
         let name = name.trim().to_lowercase();
         Screen::ALL
@@ -50,13 +89,18 @@ impl Screen {
     }
 }
 
+/// How a picture is screened: by which method, and in two tones — dot or gap —
+/// or in three, with a second colour between the ink and the ground.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Look {
     pub screen: Screen,
+    /// How many tones a picture is screened in, the ground one of them: two
+    /// (ink alone), three, four.
     pub tones: u8,
 }
 
 impl Look {
+    /// What darstellung → bilder says.
     pub fn of(ui: &crate::config::UiConfig) -> Look {
         Look {
             screen: Screen::from_name(&ui.dither_method),
@@ -65,6 +109,10 @@ impl Look {
     }
 }
 
+/// The 8×8 ordered matrix, the one every halftone of this kind is made with.
+///
+/// Written out rather than generated: it is a fixed, published table, and the
+/// recursive definition that produces it is longer than the table.
 #[rustfmt::skip]
 const BAYER: [[u8; 8]; 8] = [
     [ 0, 32,  8, 40,  2, 34, 10, 42],
@@ -77,6 +125,11 @@ const BAYER: [[u8; 8]; 8] = [
     [63, 31, 55, 23, 61, 29, 53, 21],
 ];
 
+/// The clustered-dot screen, also 8×8 and also a published table.
+///
+/// Its thresholds spiral outwards from two centres rather than spreading
+/// evenly, which is what makes the dots grow into each other instead of
+/// scattering — a printing screen rather than a computer's.
 #[rustfmt::skip]
 const CLUSTER: [[u8; 8]; 8] = [
     [24, 10, 12, 26, 35, 47, 49, 37],
@@ -89,21 +142,41 @@ const CLUSTER: [[u8; 8]; 8] = [
     [32, 40, 54, 38, 31, 21, 19, 29],
 ];
 
+/// Spread a 0..63 table entry over the 0..255 that brightness uses.
+///
+/// The half-step keeps mid grey balanced rather than biased towards the
+/// ground — without it every picture comes out a shade too dark.
 fn spread(cell: u8) -> i16 {
     cell as i16 * 4 + 2
 }
 
+/// A threshold that depends on where you are and nothing else.
+///
+/// Deliberately not a random number generator: the same position must give the
+/// same answer every time the cover is rebuilt, or the picture crawls when the
+/// window is resized. This is a hash of the coordinates, which is as
+/// structureless as noise and as repeatable as a table.
+/// How many cells across the blue-noise tile is; it repeats past that,
+/// which at this size nobody sees.
 const BLUE_SIDE: usize = 64;
 
+/// The blue-noise threshold at (`x`, `y`), 0 … 254 — see [`blue_tile`].
 fn blue(x: u32, y: u32) -> i16 {
     let tile = blue_tile();
     i16::from(tile[(y as usize % BLUE_SIDE) * BLUE_SIDE + x as usize % BLUE_SIDE])
 }
 
+/// The blue-noise threshold at (`x`, `y`) as a share, nought to one — for
+/// pictures screened cell by cell rather than as images.
 pub fn blue_share(x: usize, y: usize) -> f32 {
     (f32::from(blue(x as u32, y as u32)) + 0.5) / 255.0
 }
 
+/// A tile of blue noise, made once by void and cluster (Ulichney): from a
+/// few dots scattered at random and pushed apart until none is crowded,
+/// every cell ranked by when it would be filled — the next dot always into
+/// the emptiest place, so at every level the dots stand as evenly apart as
+/// they can without lining up.
 fn blue_tile() -> &'static [u8] {
     static TILE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     TILE.get_or_init(|| {
@@ -182,6 +255,9 @@ fn scattered(x: u32, y: u32) -> i16 {
     (h % 255) as i16
 }
 
+/// The same grain as [`Screen::Noise`], drawn afresh for every `seed`: for a
+/// picture that moves, where one grain held still over it reads as a mask the
+/// picture turns behind, and a new grain each frame reads as film.
 pub fn noise(grey: &[u8], width: u32, height: u32, seed: u32) -> Vec<bool> {
     let count = (width as usize).saturating_mul(height as usize);
     if grey.len() < count || count == 0 {
@@ -191,6 +267,7 @@ pub fn noise(grey: &[u8], width: u32, height: u32, seed: u32) -> Vec<bool> {
     thresholded(grey, width, height, |x, y| scattered(x ^ salt, y.wrapping_add(salt.rotate_left(16))))
 }
 
+/// [`noise`] in `tones` tones — see [`screen_levels`].
 pub fn noise_levels(grey: &[u8], width: u32, height: u32, seed: u32, tones: u8) -> Vec<u8> {
     let count = (width as usize).saturating_mul(height as usize);
     if grey.len() < count || count == 0 {
@@ -200,6 +277,12 @@ pub fn noise_levels(grey: &[u8], width: u32, height: u32, seed: u32, tones: u8) 
     levelled(grey, width, height, tones, |x, y| scattered(x ^ salt, y.wrapping_add(salt.rotate_left(16))))
 }
 
+/// Draw a greyscale picture in `tones` tones, three or four: 0 the gap, the
+/// highest a dot of ink, those between the colours between. The same
+/// methods as [`screen`], each deciding between the two levels a pixel lies
+/// between rather than between nothing and ink: in three, a mid grey comes
+/// back as the second colour nearly everywhere, a light grey as that colour
+/// and ink mixed.
 pub fn screen_levels(grey: &[u8], width: u32, height: u32, method: Screen, tones: u8) -> Vec<u8> {
     let count = (width as usize).saturating_mul(height as usize);
     if grey.len() < count || count == 0 {
@@ -219,6 +302,8 @@ pub fn screen_levels(grey: &[u8], width: u32, height: u32, method: Screen, tones
     }
 }
 
+/// [`thresholded`] between `tones` levels: the brightness stretched over
+/// one step fewer, and the threshold deciding within the step it falls in.
 fn levelled(grey: &[u8], width: u32, height: u32, tones: u8, threshold: impl Fn(u32, u32) -> i16) -> Vec<u8> {
     let top = i16::from(tones.clamp(2, 4)) - 1;
     let mut out = Vec::with_capacity((width * height) as usize);
@@ -234,6 +319,7 @@ fn levelled(grey: &[u8], width: u32, height: u32, tones: u8, threshold: impl Fn(
     out
 }
 
+/// [`diffused`] to the nearest of `tones` levels instead of two.
 fn diffused_levels(grey: &[u8], width: u32, height: u32, tones: u8, spill: Spill, whole: i32) -> Vec<u8> {
     let top = i32::from(tones.clamp(2, 4)) - 1;
     let mut work: Vec<i32> = grey[..(width * height) as usize]
@@ -261,6 +347,9 @@ fn diffused_levels(grey: &[u8], width: u32, height: u32, tones: u8, spill: Spill
     out
 }
 
+/// Draw a greyscale picture as dots. `true` means ink.
+///
+/// `grey` is one byte per pixel, `width * height` of them.
 pub fn screen(grey: &[u8], width: u32, height: u32, method: Screen) -> Vec<bool> {
     let count = (width as usize).saturating_mul(height as usize);
     if grey.len() < count || count == 0 {
@@ -281,6 +370,7 @@ pub fn screen(grey: &[u8], width: u32, height: u32, method: Screen) -> Vec<bool>
     }
 }
 
+/// Every pixel decided on its own, against a threshold for its position.
 fn thresholded(
     grey: &[u8],
     width: u32,
@@ -297,6 +387,7 @@ fn thresholded(
     out
 }
 
+/// Where the error goes: (dx, dy, share).
 type Spill = &'static [(i32, i32, i32)];
 
 const FLOYD_STEINBERG: Spill = &[(1, 0, 7), (-1, 1, 3), (0, 1, 5), (1, 1, 1)];
@@ -310,6 +401,11 @@ const ATKINSON: Spill = &[
     (0, 2, 1),
 ];
 
+/// Every pixel decided against the middle, with the difference handed on.
+///
+/// `whole` is what the shares add up to *against*, not what they add up to:
+/// Atkinson's six eighths leave a quarter of the error behind on purpose, and
+/// that discarded quarter is the whole character of it.
 fn diffused(grey: &[u8], width: u32, height: u32, spill: Spill, whole: i32) -> Vec<bool> {
     let mut work: Vec<i32> = grey[..(width * height) as usize]
         .iter()
@@ -339,6 +435,20 @@ fn diffused(grey: &[u8], width: u32, height: u32, spill: Spill, whole: i32) -> V
     out
 }
 
+/// How coarse the dots are, given the size a tile is drawn at and where the
+/// person has put the slider.
+///
+/// At the middle of the slider a dot is one point across — two screen pixels
+/// on a retina display, one on anything else — which is the size that made the
+/// pattern even instead of beating against the pixel grid. The slider then
+/// runs about five stops either way: far enough down that the dots become a
+/// mosaic, far enough up that the picture comes back.
+///
+/// Rounded to a step so that dragging the window, or the slider, does not
+/// rebuild every cover for every pixel of the drag. The step grows with the
+/// value, because eight dots is a rounding error at five hundred and a quarter
+/// of the picture at thirty-two — and it is a whole number, because a step of
+/// 5.28 rounds nothing to anything.
 pub fn grain_for(tile: f32, pixels_per_point: f32, fineness: f32) -> u32 {
     let scale = 2f32.powf((fineness.clamp(0.0, 1.0) - 0.5) * 5.0);
     let finest = (tile * pixels_per_point.max(1.0)).clamp(GRAIN_MIN, GRAIN_MAX);
@@ -352,6 +462,8 @@ pub fn grain_for(tile: f32, pixels_per_point: f32, fineness: f32) -> u32 {
     ((wanted / step).round() * step).clamp(GRAIN_MIN, finest) as u32
 }
 
+/// Coarser than this is a mosaic of a dozen squares, not a cover; finer than
+/// this is more dots than the stored cover has pixels to say anything with.
 const GRAIN_MIN: f32 = 24.0;
 const GRAIN_MAX: f32 = 768.0;
 
@@ -359,6 +471,9 @@ const GRAIN_MAX: f32 = 768.0;
 mod tests {
     use super::*;
 
+    /// Three tones keep the tone as two do: black stays empty, white all
+    /// ink, a mid grey mostly the second colour, and every method agrees
+    /// about how much of each a grey asks for.
     #[test]
     fn three_tones_keep_the_tone() {
         let field = |v: u8| vec![v; 64 * 64];
@@ -380,6 +495,8 @@ mod tests {
         assert!(a.iter().all(|l| *l < 2));
     }
 
+    /// Four tones as well: black empty, white all ink, a third of the way
+    /// to white the first colour nearly everywhere, two thirds the second.
     #[test]
     fn four_tones_keep_the_tone() {
         let field = |v: u8| vec![v; 64 * 64];
@@ -395,6 +512,8 @@ mod tests {
         }
     }
 
+    /// A new grain for every frame, the same grain for the same frame, and
+    /// still as much ink as the picture asks for.
     #[test]
     fn every_frame_has_its_own_grain() {
         let grey = vec![128u8; 64 * 64];
@@ -407,6 +526,7 @@ mod tests {
         assert!((ink(&a) - 0.5).abs() < 0.05 && (ink(&b) - 0.5).abs() < 0.05);
     }
 
+    /// A field of one brightness, `n × n`.
     fn flat(value: u8, n: u32) -> Vec<u8> {
         vec![value; (n * n) as usize]
     }
@@ -415,6 +535,9 @@ mod tests {
         dots.iter().filter(|d| **d).count() as f32 / dots.len() as f32
     }
 
+    /// The property that matters most: whichever method draws it, mid grey
+    /// comes out about half ink. Without this the wall of records would go
+    /// lighter or darker when the method changed, which nobody asked for.
     #[test]
     fn every_method_keeps_the_tone() {
         for method in Screen::ALL {
@@ -429,6 +552,7 @@ mod tests {
         }
     }
 
+    /// And the ends stay the ends.
     #[test]
     fn black_is_empty_and_white_is_full() {
         for method in Screen::ALL {
@@ -440,6 +564,8 @@ mod tests {
         }
     }
 
+    /// Rebuilding a cover must not redraw it differently, or the picture
+    /// crawls every time the window is resized.
     #[test]
     fn the_same_picture_always_gives_the_same_dots() {
         let picture: Vec<u8> = (0..64 * 64).map(|i| ((i * 7) % 256) as u8).collect();
@@ -450,6 +576,11 @@ mod tests {
         }
     }
 
+    /// The same thing over a whole picture rather than a flat field: however
+    /// the dots are arranged, there have to be as many of them as the picture
+    /// is bright. Measured against a real cover this comes out within one and
+    /// a half per cent for every method — which is why switching method
+    /// changes the handwriting and not the brightness of the wall.
     #[test]
     fn every_method_keeps_the_tone_of_a_whole_picture() {
         let width = 96u32;
@@ -477,6 +608,7 @@ mod tests {
         }
     }
 
+    /// A gradient has to come out as a gradient: darker at the dark end.
     #[test]
     fn light_and_dark_stay_where_they_were() {
         let width = 64u32;
@@ -505,6 +637,7 @@ mod tests {
         }
     }
 
+    /// Two of the five lay down a repeating pattern; the other three must not.
     #[test]
     fn the_ordered_ones_repeat_and_the_others_do_not() {
         let grey = flat(128, 64);
@@ -532,6 +665,7 @@ mod tests {
         assert_eq!(Screen::from_name(""), Screen::Ordered);
     }
 
+    /// The slider's middle is what the program did before it had a slider.
     #[test]
     fn the_middle_of_the_slider_is_one_dot_per_point() {
         let tile = 192.0;
@@ -557,6 +691,7 @@ mod tests {
         );
     }
 
+    /// The cap that stops the fine end from turning into interference.
     #[test]
     fn nothing_finer_than_the_screen_can_show() {
         assert_eq!(grain_for(200.0, 1.0, 1.0), 200);
@@ -578,6 +713,8 @@ mod tests {
         }
     }
 
+    /// The blue-noise tile ranks every cell once: each threshold as often as
+    /// any other, and at a tenth of ink no two dots side by side.
     #[test]
     fn blue_noise_is_even_and_spread() {
         let tile = super::blue_tile();

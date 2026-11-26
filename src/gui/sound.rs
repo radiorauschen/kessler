@@ -1,16 +1,53 @@
+//! The music as a picture: a few bands, read off the samples themselves.
+//!
+//! Not the tags, not the position in the track — the sound on its way to the
+//! card, tapped in [`crate::player::audio`] and turned into something a window
+//! can draw. The search field asks it whether anything is playing, and draws
+//! its own pictures from the samples — see [`crate::gui::scope`] and
+//! [`crate::gui::pen`].
+//!
+//! Why a spectrum and not a level: a level is one number, and one number moves
+//! with the loudness knob as much as with the music. A handful of bands shows
+//! what the loudness is *made of* — a bass drum in the first two, a voice in
+//! the middle, a cymbal in the last — and that is what somebody watching a
+//! picture of music is actually looking for.
+//!
+//! Everything here is small on purpose. The transform is a radix-2 FFT over
+//! 1024 samples, which is some ten thousand multiplications a frame — less
+//! than one cover is dithered for, and it happens only while something is
+//! playing and something is drawing.
+
 use std::f32::consts::PI;
 
+/// How many samples go into one transform. A power of two, and about a
+/// fortieth of a second at CD rate.
 const WINDOW: usize = 1024;
 
+/// How many bands come out.
+///
+/// Sixteen, because that is what fits behind a search field as dots you can
+/// count, and because the ear has no use for more of them at this size.
 pub const BANDS: usize = 16;
 
+/// How fast a band may fall.
+///
+/// Rising is instant — a beat has to land on the frame it happened in — and
+/// falling takes about a fifth of a second, which is what makes the picture
+/// read as one movement rather than as a flicker. The same asymmetry every
+/// VU meter has had since they were made of metal.
 const FALL: f32 = 0.86;
 
+/// Below this, there is nothing to see.
 const HUSH: f32 = 0.004;
 
+/// The bands, as they stand now.
+///
+/// Kept by the window rather than worked out fresh: the falling is a memory of
+/// what the bands were a frame ago.
 #[derive(Debug, Clone)]
 pub struct Spectrum {
     pub bands: [f32; BANDS],
+    /// How loud it is overall, 0 … 1, with the same falling.
     pub level: f32,
 }
 
@@ -24,6 +61,11 @@ impl Default for Spectrum {
 }
 
 impl Spectrum {
+    /// Read the samples and move the bands towards what they say.
+    ///
+    /// `samples` is what the tap kept, oldest first. Fewer than a window's
+    /// worth — at the very start of a track, or with nothing playing — leaves
+    /// the picture falling towards nothing rather than jumping to it.
     pub fn hear(&mut self, samples: &[f32]) {
         let wanted = bands_of(samples);
         for (band, fresh) in self.bands.iter_mut().zip(wanted) {
@@ -37,11 +79,17 @@ impl Spectrum {
         };
     }
 
+    /// Whether there is anything to see.
     pub fn silent(&self) -> bool {
         self.level < HUSH
     }
 }
 
+/// The band energies of one window of samples, each 0 … 1.
+///
+/// The bands are laid out by octave rather than evenly: the ear hears pitch
+/// that way, and sixteen even slices of nought to twenty kilohertz would put
+/// everything anybody can hum in the first two of them.
 fn bands_of(samples: &[f32]) -> [f32; BANDS] {
     let mut out = [0.0; BANDS];
     if samples.len() < WINDOW {
@@ -70,6 +118,11 @@ fn bands_of(samples: &[f32]) -> [f32; BANDS] {
     out
 }
 
+/// Which bins belong to a band: an octave each, near enough.
+///
+/// Apart from `bands_of` so the layout can be checked without a transform —
+/// the bands have to cover every bin, in order, without a gap or an overlap,
+/// and an off-by-one here is invisible in the picture and wrong in the sound.
 fn edges(band: usize, half: usize) -> (usize, usize) {
     let scale = |b: usize| -> usize {
         let t = b as f32 / BANDS as f32;
@@ -81,6 +134,11 @@ fn edges(band: usize, half: usize) -> (usize, usize) {
     (lo, hi.max(lo + 1))
 }
 
+/// An in-place radix-2 Cooley–Tukey transform.
+///
+/// Written out rather than pulled in: it is thirty lines, it is the one piece
+/// of arithmetic in this program that every textbook agrees on, and a
+/// dependency for it would be a dependency on the audio path.
 fn fft(real: &mut [f32], imag: &mut [f32]) {
     let n = real.len();
     debug_assert!(n.is_power_of_two() && imag.len() == n);
@@ -126,6 +184,12 @@ fn fft(real: &mut [f32], imag: &mut [f32]) {
 mod tests {
     use super::*;
 
+    /// A sine at a known pitch lands in the band that pitch belongs to, and
+    /// in no other.
+    ///
+    /// The test that makes the picture worth drawing: without it a spectrum
+    /// is a row of bars moving plausibly, and plausible is exactly what
+    /// nobody can check by looking.
     #[test]
     fn a_tone_lands_in_its_own_band() {
         let rate = 44_100.0;
@@ -156,6 +220,7 @@ mod tests {
         }
     }
 
+    /// Silence draws nothing, and the bands cover every bin exactly once.
     #[test]
     fn the_bands_cover_the_whole_range_in_order() {
         assert_eq!(bands_of(&[0.0; WINDOW * 2]), [0.0; BANDS]);
@@ -171,6 +236,7 @@ mod tests {
         assert_eq!(edges(BANDS - 1, half).1, half, "the last band reaches the top");
     }
 
+    /// A beat lands on the frame it happened in, and falls away over a few.
     #[test]
     fn a_beat_lands_at_once_and_fades_slowly() {
         let mut spectrum = Spectrum::default();

@@ -7,17 +7,36 @@ use super::{artwork, metadata};
 use crate::db::Database;
 use crate::error::Result;
 
+/// Progress updates from the scanner.
 #[derive(Debug, Clone)]
 pub enum ScanProgress {
+    /// How many files the scan is about to work through, counted before it
+    /// starts. Without it "scanning" is a word with no end in sight; with it
+    /// the interface can say how far along it is.
     Counted { total: u32 },
+    /// Starting scan of a directory.
     StartingDir(String),
+    /// Scanned a file (current count, file path).
     FileScanned { count: u32, path: String },
+    /// Completed scanning.
     Complete { total: u32, added: u32, updated: u32 },
+    /// Music that was walked past because Kessler cannot play the format,
+    /// counted per extension and reported once at the end.
+    ///
+    /// Silence here is what made "Swinsian lists more tracks than we do" an
+    /// unanswerable question: the files were never mentioned, because they
+    /// were never opened.
     Foreign { counted: Vec<(String, u32)> },
+    /// Error scanning a specific file.
     FileError { path: String, error: String },
+    /// A track the library already had, read again — why, and what came out
+    /// different. For the log: „26 aktualisiert" on its own left the question
+    /// which ones and what about them.
     Updated(Update),
 }
 
+/// One track read again by a scan: what it is, why it was read, and what
+/// is different now. See [`ScanProgress::Updated`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Update {
     pub path: String,
@@ -27,13 +46,19 @@ pub struct Update {
     pub changes: Vec<Change>,
 }
 
+/// Why a scan read a file it had read before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reread {
+    /// The file is newer than when it was last read.
     Changed,
+    /// Its record's cover has not been settled yet — see `artwork::settled`.
     Cover,
+    /// It came out with neither artist nor album last time, and such a file
+    /// is read every time — see `scan_directory`.
     Nameless,
 }
 
+/// One field of a track that came out different, as it was and as it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub field: Field,
@@ -41,6 +66,7 @@ pub struct Change {
     pub now: String,
 }
 
+/// The fields a file says about itself, as far as the library keeps them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Title,
@@ -59,6 +85,9 @@ pub enum Field {
     Cover,
 }
 
+/// What came out different between what the library had and what the file
+/// says now. Only what the file says: plays, ratings and dates are the
+/// library's own and a scan leaves them alone.
 pub fn changes(was: &crate::db::models::Track, now: &crate::db::models::Track) -> Vec<Change> {
     fn opt<T: ToString>(v: Option<T>) -> String {
         v.map(|v| v.to_string()).unwrap_or_default()
@@ -90,6 +119,12 @@ pub fn changes(was: &crate::db::models::Track, now: &crate::db::models::Track) -
     out
 }
 
+/// How many playable files a directory tree holds.
+///
+/// A separate walk before the real one. It costs a directory listing and an
+/// extension check per file — next to nothing beside the scan itself, which
+/// opens and parses every one of them — and it buys a progress figure that
+/// means something.
 pub fn count_files(dir: &Path) -> u32 {
     WalkDir::new(dir)
         .follow_links(true)
@@ -99,14 +134,22 @@ pub fn count_files(dir: &Path) -> u32 {
         .count() as u32
 }
 
+/// What sweeping one directory came to.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Swept {
     pub files: u32,
     pub added: u32,
     pub updated: u32,
+    /// Music passed over for its format, counted per extension.
     pub foreign: Vec<(String, u32)>,
 }
 
+/// Add one directory's tally of passed-over formats to the running one.
+///
+/// A scan walks each music folder in turn and reports each one's count
+/// separately, so both the terminal and the window have to add them up. Doing
+/// that by appending would list `m4a` once per folder — three lines saying
+/// three different numbers, none of them the answer.
 pub fn merge_foreign(into: &mut Vec<(String, u32)>, more: Vec<(String, u32)>) {
     for (ext, count) in more {
         match into.iter_mut().find(|(had, _)| *had == ext) {
@@ -117,9 +160,12 @@ pub fn merge_foreign(into: &mut Vec<(String, u32)>, more: Vec<(String, u32)>) {
     into.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 }
 
+/// What reading one file into the library did.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ingested {
     Added,
+    /// Read again, with what came out different — nothing, often: see
+    /// [`Reread`] for why a file is read again without having changed.
     Updated {
         artist: String,
         title: String,
@@ -127,6 +173,13 @@ pub enum Ingested {
     },
 }
 
+/// Read one file and put what it says into the database, cover and all.
+///
+/// The single step a scan is made of, lifted out so that it is also the step
+/// taken after the tag editor has written to a file: what the library knows
+/// about a track is then read back from the track, exactly as a scan would
+/// have read it, rather than patched in place from what the form thought it
+/// had done.
 pub fn ingest_file(
     path: &Path,
     db: &Database,
@@ -135,12 +188,26 @@ pub fn ingest_file(
     ingest(path, db, artwork_dir, Arrival::Now)
 }
 
+/// When a track new to the library counts as having arrived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arrival {
+    /// Now, when it was found. Right for anything that comes into a library
+    /// that already exists — a record added through the window, or dropped
+    /// into the music folder and found at the next start.
+    ///
+    /// The file's own date is the wrong answer there, and it was the answer
+    /// for a long time: a copy keeps the date the file was *made* — on a Mac
+    /// even the program's own „hinzufügen" keeps it, and so does every
+    /// download that comes out of a zip — so a record added this morning
+    /// could be dated 2011 and never reach „zuletzt".
     Now,
+    /// Its own date. Right only for the first reading of an empty library,
+    /// where everything is being found at once and „now" would make it all
+    /// equally new — and „newest first" would have nothing to say.
     FromFile,
 }
 
+/// [`ingest_file`], saying when a new track arrived.
 pub fn ingest(
     path: &Path,
     db: &Database,
@@ -177,6 +244,8 @@ pub fn ingest(
     })
 }
 
+/// Scan a directory tree for music files and import them into the database.
+/// Sends progress updates through the provided channel.
 pub fn scan_directory(
     dir: &Path,
     db: &Database,
@@ -336,6 +405,16 @@ mod foreign_tests {
     }
 }
 
+/// One file, two names.
+///
+/// A library had a record whose every track showed twice. Two rows, two
+/// paths — `…/Music/Cave/…` and `…/Music/CAVE/…` — and on a Mac those open the
+/// same file, so the unique path never caught it.
+///
+/// Linux is not obliging enough to have a filesystem that ignores capitals, so
+/// the same shape is built with a symlink: one folder reachable under two
+/// names. It is the same question — is this file already in the library, asked
+/// of a name rather than of the file — and the same answer.
 #[cfg(test)]
 mod one_file_one_row_tests {
     use super::*;
@@ -358,6 +437,9 @@ mod one_file_one_row_tests {
             .collect()
     }
 
+    /// A record copied in keeps the date its files were made; in a library
+    /// that exists it has still arrived now, and „zuletzt" has to show it.
+    /// Only the first reading of an empty library goes by the files.
     #[test]
     fn a_new_track_arrives_now_unless_the_library_is_being_read_for_the_first_time() {
         let root = scratch("arrival");
@@ -391,6 +473,8 @@ mod one_file_one_row_tests {
         assert_eq!(year("a.mp3"), "2011");
     }
 
+    /// What a scan says it changed: only what the file says, each field as
+    /// it was and as it is, and the length only to the second.
     #[test]
     fn changes_name_what_the_file_says_differently() {
         let then = chrono::Local::now().naive_local();

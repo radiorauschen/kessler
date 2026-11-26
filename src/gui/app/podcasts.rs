@@ -1,3 +1,8 @@
+//! The podcasts in the window: what their view holds, and what the window does
+//! for it — searching through the search field, reading feeds, fetching an
+//! episode and playing it, its chapters, and keeping where it was left. See
+//! [`crate::podcast`] for the rest; the columns are `library::podcast_col`.
+
 use crate::db::models::Track;
 use crate::gui::*;
 use crate::podcast::{Chapter, Episode, Feed, Fetching, Kept, Show};
@@ -5,100 +10,199 @@ use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
+/// The id an episode plays under: no row of the library, so nothing that
+/// counts plays or scrobbles takes it for one. The radio's songs are -1.
 pub const EPISODE_ID: i64 = -2;
 
+/// How long the search field has to stand still before it is asked.
 const TYPED_SECS: f32 = 0.6;
 
+/// How often where an episode stands is written down while it plays.
 const KEEP_EVERY_SECS: u64 = 15;
 
+/// How long an episode just started is tried to be put where it is to go.
 const SEEK_GIVE_UP_SECS: u64 = 5;
 
+/// How many episodes the second column lists at first, and fetches more of each
+/// time it is scrolled to its end, as „zuletzt" in the library does. The sleep
+/// timer: at a time, or at the episode's end. `At` keeps the minutes it was set
+/// to, for the next step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sleep {
     At(Instant, u64),
     EpisodeEnd,
 }
 
+/// Over how many seconds the sound fades before the sleep timer pauses it.
 const SLEEP_FADE_SECS: f32 = 8.0;
 
+/// Seconds as minutes, rounded up — „12 min", or „1 min" for the last.
 fn text_minutes(seconds: u64) -> String {
     format!("{} min", seconds.div_ceil(60).max(1))
 }
 
+/// The second column's order as it was worked out, and for what — see
+/// `PodcastPanel::order`.
 type KeptOrder = (u64, Vec<(u32, u32)>);
 
+/// How much of an episode has to have come in before it plays as it is fetched:
+/// a megabyte, a minute or so of speech.
 const STREAM_FROM_BYTES: u64 = 1_000_000;
 
+/// The decoder on an episode's file while it is still being fetched.
 type GrowingDecoder = rodio::Decoder<std::io::BufReader<crate::player::growing::Growing>>;
 
+/// How long ago the last look may be for the view to read the feeds again
+/// as it opens.
 const LOOK_AGAIN_ON_OPEN_SECS: u64 = 5 * 60;
 
 pub const EPISODES_PAGE: usize = 80;
 
+/// An episode and its podcast as the column draws them: where they lie in
+/// the feeds, or made for the occasion (the fetched, the starred).
 pub type Seen<'a> = (std::borrow::Cow<'a, Episode>, std::borrow::Cow<'a, Show>);
 
+/// An episode under way: of which podcast, the fetch, and how far it is
+/// (bytes, of so many).
 pub type Underway = (Episode, Show, Receiver<Fetching>, (u64, u64));
 
 type Answer<T> = Receiver<std::result::Result<T, String>>;
 
+/// A podcast followed the search found something in, as the first column
+/// lists it.
 pub struct FoundShow {
     pub show: Show,
+    /// How many of its episodes match.
     pub episodes: usize,
 }
 
+/// What the view holds.
 #[derive(Default)]
 pub struct PodcastPanel {
+    /// Counted up whenever a feed is read in, so the list's order kept in
+    /// `order` knows when it is old.
     pub feeds_version: u64,
+    /// The order of the episodes the second column lists, kept from frame to
+    /// frame with what it was worked out for: the podcast's place among those
+    /// followed (or 0 for the one chosen) and the episode's place in its feed,
+    /// the newest first.
     order: std::cell::RefCell<Option<KeptOrder>>,
+    /// How many are „offen", and when that was counted.
     open_counted: std::cell::Cell<Option<(Instant, usize)>>,
+    /// Whether the columns show the podcasts.
     pub open: bool,
+    /// The podcasts followed and the places left, read when the view opens.
     pub kept: Kept,
+    /// What the last search found, while there is one in the field.
     pub found: Option<Vec<Show>>,
     pub searching: Option<Answer<Vec<Show>>>,
     pub typed_at: Option<Instant>,
+    /// What the search field asks of the podcasts, read as it is typed: the
+    /// followed and their episodes are looked through at once, the directory
+    /// once the typing stops.
     pub search: Option<crate::podcast::query::Query>,
+    /// Whether each episode looked at so far matches `search`, by its id —
+    /// its words folded once, not on every frame.
     matched: std::cell::RefCell<HashMap<String, bool>>,
+    /// The podcast whose episodes are shown; none, the newest of all those
+    /// followed.
     pub chosen: Option<Show>,
+    /// How many more than [`EPISODES_PAGE`] the second column lists, for
+    /// having been scrolled to its end.
     pub more: usize,
+    /// „heruntergeladen" chosen: the episodes fetched, of whichever podcast.
     pub only_fetched: bool,
+    /// „gemerkt": the episodes kept on purpose.
     pub only_starred: bool,
+    /// „offen" chosen: what is begun and not finished, and what is out since
+    /// the podcast was followed and not begun.
     pub only_open: bool,
+    /// „informationen" open in the queue's place, `i`.
     pub info_open: bool,
+    /// The column clicked last — the podcasts 0, the episodes 1, the episode 2,
+    /// the queue 3 —, which wears the darker plate on what is chosen in it, as
+    /// the column with the keyboard does in the music.
     pub focus: usize,
+    /// The sleep timer, while it runs: when the episode stops, and the volume
+    /// it began fading from.
     pub sleep: Option<Sleep>,
     pub sleep_fade_from: Option<u8>,
+    /// The feeds read this session, by their address, and those under way.
     pub feeds: HashMap<String, Feed>,
     pub reading: Vec<(String, Answer<crate::podcast::Reading>)>,
+    /// What each feed's server said it last was, to ask next time whether
+    /// it changed since.
     pub validators: HashMap<String, crate::podcast::Validators>,
+    /// The episode looked at in the third column, and of which podcast.
     pub episode: Option<(Episode, Show)>,
+    /// The episodes picked together, as tracks are: with a held command key one
+    /// more, with shift all from the one looked at. Two or more, and the third
+    /// column does to them all at once.
     pub picked: Vec<(Episode, Show)>,
+    /// The queue's own cursor, by episode id, as the music's queue has its
+    /// own: stepping through the queue moves only this, not the episode
+    /// looked at in the episodes and on its page.
     pub queue_cursor: Option<String>,
+    /// Its chapters, by the episode's id, once known; and those being read.
     pub chapters: Option<(String, Vec<Chapter>)>,
     pub chapters_reading: Option<(String, Receiver<Vec<Chapter>>)>,
+    /// Moved by the keyboard: the row it went to — an episode's id, or a
+    /// podcast's feed — to be scrolled into sight, once, as the list draws
+    /// it.
     pub follow: std::cell::RefCell<Option<String>>,
+    /// The podcast whose older episodes were asked for, held whole while
+    /// it is the one chosen (see `Feed::keep_newest`).
     pub whole: Option<String>,
+    /// The podcasts whose feeds would not answer in the round being read, said
+    /// together at the foot once it is done.
     pub unreached: Vec<String>,
+    /// The episode being fetched, of which podcast, and how far.
     pub fetching: Option<Underway>,
+    /// Episodes asked to be fetched without playing („herunterladen"), each in
+    /// turn, and the one under way — beside a fetch to play, not instead.
     pub to_fetch: std::collections::VecDeque<(Episode, Show)>,
     pub keeping: Option<Underway>,
+    /// Where to start the episode being fetched: a chapter clicked before it
+    /// was there.
     pub start_at: Option<f64>,
+    /// Where the episode just started is to go, once it plays: asked at
+    /// once, the seek came before the sound and was lost.
     pub seek_once_playing: Option<(f64, Instant)>,
+    /// The episode playing: its id, and its file.
     pub playing: Option<(String, std::path::PathBuf)>,
     pub kept_at: Option<Instant>,
+    /// When the feeds were last read again to look for new episodes.
     pub checked_at: Option<Instant>,
+    /// How many new episodes each podcast has, by its feed — counted again
+    /// when `recount` is set.
     pub new_by_show: HashMap<String, usize>,
     pub recount: bool,
+    /// A list asked for to be read in, while the picker is open.
     pub import: Option<Receiver<Option<std::path::PathBuf>>>,
+    /// The episode played while it is still fetched: the flag its file's reader
+    /// waits on, set once the fetch is over, and its id.
     pub streaming: Option<(std::sync::Arc<std::sync::atomic::AtomicBool>, String)>,
+    /// What kind of thing was sounding when the episode being fetched was asked
+    /// for — music, the radio, an episode, nothing — and whether it played.
+    /// Something else put on since, the episode does not take over when it
+    /// arrives; the music's next track is not that.
     pub fetch_asked_over: Option<(u8, bool)>,
+    /// When the episode being fetched was asked for, and when the round of
+    /// feeds now being read began — for the measurement.
     pub fetch_began: Option<Instant>,
     pub round_began: Option<Instant>,
+    /// The episode playing as it was asked for, and where it last stood and
+    /// how long it is — for putting it back at the head of the queue when
+    /// music or the radio takes over.
     pub playing_from: Option<(Episode, Show)>,
     pub last_place: (f64, f64),
+    /// The chapters of the episode playing, for the timeline — whichever
+    /// episode the third column is looking at.
     pub playing_chapters: Vec<Chapter>,
 }
 
 impl PodcastPanel {
+    /// A new search, or none: what was matched against the last goes.
     pub fn set_search(&mut self, search: Option<crate::podcast::query::Query>) {
         if self.search != search {
             self.search = search;
@@ -106,28 +210,39 @@ impl PodcastPanel {
         }
     }
 
+    /// The search while it looks through the episodes.
     fn episode_search(&self) -> Option<&crate::podcast::query::Query> {
         self.search.as_ref().filter(|q| q.at_home())
     }
 
+    /// Whether `episode` is listed under the search: always, where it does
+    /// not look through the episodes.
     fn passes(&self, episode: &Episode, show: &Show) -> bool {
         let Some(search) = self.episode_search() else { return true };
         *self.matched.borrow_mut().entry(episode.id.clone()).or_insert_with(|| search.episode_matches(episode, show))
     }
 
+    /// How many episodes of every podcast followed match the search, the
+    /// archived among them only where they are shown — what „alle" would
+    /// list under it.
     pub fn matching_total(&self, archived: bool) -> usize {
         self.kept.show.iter().map(|show| self.matching_in(show, archived)).sum()
     }
 
+    /// How many of `show`'s episodes held match the search, the archived
+    /// only where they are shown.
     pub fn matching_in(&self, show: &Show, archived: bool) -> usize {
         let Some(feed) = self.feeds.get(&show.feed) else { return 0 };
         feed.episodes.iter().filter(|e| (archived || !self.kept.is_archived(&e.id)) && self.passes(e, show)).count()
     }
 
+    /// Whether the episodes listed are narrowed by the search.
     pub fn narrowed(&self) -> bool {
         self.episode_search().is_some()
     }
 
+    /// Whether anything is under way that the view has to be drawn again
+    /// for.
     fn waiting(&self) -> bool {
         self.searching.is_some()
             || !self.reading.is_empty()
@@ -140,11 +255,22 @@ impl PodcastPanel {
             || self.import.is_some()
     }
 
+    /// The episodes the second column lists, each with its podcast: the one
+    /// chosen's in its feed's order, or under „alle" those of all followed, the
+    /// newest first — so many of them as have been asked for so far — and how
+    /// many there are in all.
+    ///
+    /// With `archived` false, the episodes archived are left out.
+    ///
+    /// Copied, for the keys and the actions; the column draws from
+    /// [`PodcastPanel::episodes_seen`], which copies nothing.
     pub fn episodes(&self, archived: bool) -> (Vec<(Episode, Show)>, usize) {
         let (page, total) = self.episodes_seen(archived);
         (page.into_iter().map(|(e, s)| (e.into_owned(), s.into_owned())).collect(), total)
     }
 
+    /// The same, where they lie: asked on every frame by the column, which
+    /// copied eighty episodes and more — their notes with them — each time.
     pub fn episodes_seen(&self, archived: bool) -> (Vec<Seen<'_>>, usize) {
         use std::borrow::Cow;
         if self.only_fetched || self.only_starred || self.only_open {
@@ -193,6 +319,9 @@ impl PodcastPanel {
         (page, indices.len())
     }
 
+    /// What the kept order depends on: which list, whether the archived
+    /// are in it, which feeds have been read, which podcasts are followed
+    /// and which episodes archived.
     fn order_key(&self, archived: bool) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -209,6 +338,10 @@ impl PodcastPanel {
         h.finish()
     }
 
+    /// An episode as its feed has it, where the feed is read and has it:
+    /// what is written down of one fetched or bookmarked is only enough to
+    /// list and play it — no notes, no wide picture — and its page would
+    /// read otherwise than the same episode's reached through „alle".
     fn as_in_feed(&self, episode: Episode, show: Show) -> (std::borrow::Cow<'_, Episode>, std::borrow::Cow<'_, Show>) {
         use std::borrow::Cow;
         let live = self.feeds.get(&show.feed).and_then(|feed| feed.episodes.iter().find(|e| e.id == episode.id));
@@ -223,6 +356,9 @@ impl PodcastPanel {
         }
     }
 
+    /// The list the second column shows, the newest first, borrowed where it
+    /// can be; with `archived` false, without the archived — known by a set,
+    /// not by looking through the archive for each.
     pub(in crate::gui) fn listed(&self, archived: bool) -> Vec<(std::borrow::Cow<'_, Episode>, std::borrow::Cow<'_, Show>)> {
         use std::borrow::Cow;
         let mut all: Vec<(Cow<'_, Episode>, Cow<'_, Show>)> = if self.only_fetched {
@@ -256,6 +392,9 @@ impl PodcastPanel {
         all
     }
 
+    /// The fetched episodes that are archived, while the archived are not
+    /// shown: how many, and what they take on the disk. „heruntergeladen" then
+    /// says so, rather than a size beside an empty list.
     pub fn fetched_hidden(&self, show_archived: bool) -> (usize, u64) {
         if show_archived {
             return (0, 0);
@@ -269,6 +408,7 @@ impl PodcastPanel {
             .fold((0, 0), |(n, bytes), m| (n + 1, bytes + m.len()))
     }
 
+    /// The episodes „offen", of every podcast followed, in no order.
     fn open_episodes(&self) -> Vec<(std::borrow::Cow<'_, Episode>, std::borrow::Cow<'_, Show>)> {
         use std::borrow::Cow;
         let left: HashMap<&str, &crate::podcast::Left> = self.kept.left.iter().map(|l| (l.id.as_str(), l)).collect();
@@ -283,6 +423,7 @@ impl PodcastPanel {
             .collect()
     }
 
+    /// How many are „offen", counted once a second at most.
     pub fn open_count(&self) -> usize {
         let now = std::time::Instant::now();
         if let Some((at, n)) = self.open_counted.get() {
@@ -299,14 +440,18 @@ impl PodcastPanel {
         self.listed(true).into_iter().map(|(e, s)| (e.into_owned(), s.into_owned())).collect()
     }
 
+    /// Whether `episode` is new: out since the podcasts were last looked at,
+    /// and neither begun, heard nor archived.
     pub fn is_new(&self, episode: &Episode) -> bool {
         crate::podcast::when(episode) > self.kept.seen_at && self.kept.left(&episode.id).is_none() && !self.kept.is_archived(&episode.id)
     }
 
+    /// How many new episodes there are, of all podcasts followed.
     pub fn new_total(&self) -> usize {
         self.new_by_show.values().sum()
     }
 
+    /// Count the new episodes of each podcast followed again.
     fn count_new(&mut self) {
         self.recount = false;
         let counts: HashMap<String, usize> = self
@@ -322,16 +467,20 @@ impl PodcastPanel {
         self.new_by_show = counts;
     }
 
+    /// Whether the feed at `url` is being read.
     pub fn reading_feed(&self, url: &str) -> bool {
         self.reading.iter().any(|(u, _)| u == url)
     }
 }
 
 impl GuiApp {
+    /// Whether the columns show the podcasts.
     pub fn showing_podcasts(&self) -> bool {
         self.podcasts.open
     }
 
+    /// „podcasts" in the masthead's switch: the radio and the iPod put
+    /// away, the search field let go of, and every feed followed read.
     pub fn show_podcasts(&mut self) {
         self.read_from(false, false);
         if let Err(e) = self.close_filter() {
@@ -356,6 +505,8 @@ impl GuiApp {
         self.archive_episodes();
     }
 
+    /// Let go of the episodes fetched longer ago than „geladene behalten" says,
+    /// as the view opens.
     pub(in crate::gui) fn archive_episodes(&mut self) {
         let Ok(days) = self.config.ui.podcast_keep.parse::<u64>() else { return };
         let mut spared: Vec<std::path::PathBuf> = self.podcasts.playing.iter().map(|(_, path)| path.clone()).collect();
@@ -368,6 +519,8 @@ impl GuiApp {
         }
     }
 
+    /// Every episode fetched let go of (menu → podcasts), the one playing
+    /// aside.
     pub(in crate::gui) fn forget_all_episodes(&mut self) {
         let playing = self.podcasts.playing.as_ref().map(|(_, path)| path.clone());
         crate::podcast::forget_all(playing.as_deref());
@@ -379,6 +532,7 @@ impl GuiApp {
         self.note(crate::gui::log::Kind::Podcast, tr!("heruntergeladene folgen gelöscht"));
     }
 
+    /// Back or ahead in the episode playing by `seconds`.
     pub fn skip_episode(&mut self, seconds: f64) {
         if !self.playing_episode() {
             return;
@@ -388,6 +542,8 @@ impl GuiApp {
         self.player.seek_to(at);
     }
 
+    /// The podcasts followed as an OPML file on the desktop (else in the home
+    /// folder), shown where it lies.
     pub(in crate::gui) fn export_podcasts(&mut self) {
         let kept = Kept::read();
         if kept.show.is_empty() {
@@ -410,6 +566,7 @@ impl GuiApp {
         }
     }
 
+    /// Ask for an OPML file, and follow every podcast it names.
     pub(in crate::gui) fn import_podcasts(&mut self) {
         if self.podcasts.import.is_some() {
             return;
@@ -422,6 +579,7 @@ impl GuiApp {
         self.podcasts.import = Some(rx);
     }
 
+    /// Take in the list asked for, once the picker has answered.
     fn take_podcast_import(&mut self) {
         let Some(asking) = &self.podcasts.import else { return };
         let picked = match asking.try_recv() {
@@ -460,6 +618,7 @@ impl GuiApp {
         self.note(crate::gui::log::Kind::Podcast, tr!("{} von {} podcasts neu gefolgt", added, found));
     }
 
+    /// Every podcast's picture let go of and fetched again.
     pub(in crate::gui) fn reload_podcast_pictures(&mut self) {
         crate::podcast::forget_artwork();
         crate::gui::library::forget_decoded_pictures();
@@ -475,6 +634,8 @@ impl GuiApp {
         self.set_notice(tr!("bilder werden neu geladen"));
     }
 
+    /// Back to the library (or wherever the switch goes): what was found
+    /// and what was read is let go of, the episode playing plays on.
     pub(in crate::gui) fn leave_podcasts(&mut self) {
         if !self.podcasts.open {
             return;
@@ -497,6 +658,10 @@ impl GuiApp {
         }
     }
 
+    /// The podcasts switched off: what was read of the feeds goes, every
+    /// episode of every one with all it says, and the memory with it —
+    /// switched on again, they are read afresh at once. Off they stayed in
+    /// memory as long as kessler ran.
     pub(in crate::gui) fn forget_feeds(&mut self) {
         self.podcasts.feeds = HashMap::new();
         self.podcasts.reading = Vec::new();
@@ -512,6 +677,8 @@ impl GuiApp {
         crate::podcast::give_back_memory();
     }
 
+    /// „ältere folgen laden": `show`'s feed read again and held whole while
+    /// it is the one chosen.
     pub(in crate::gui) fn load_older(&mut self, show: &Show) {
         self.podcasts.whole = Some(show.feed.clone());
         if !self.podcasts.reading_feed(&show.feed) {
@@ -519,6 +686,10 @@ impl GuiApp {
         }
     }
 
+    /// A feed followed has moved for good, to `to`: everything kept by its
+    /// old address takes the new one, so nobody has to follow it again
+    /// (as AntennaPod does on a permanent redirect; `itunes:new-feed-url`
+    /// too). Returns the new address.
     fn feed_moved(&mut self, from: &str, to: &str) -> String {
         let mut kept = Kept::read();
         if !kept.follows(from) || kept.follows(to) {
@@ -556,12 +727,20 @@ impl GuiApp {
         to.to_string()
     }
 
+    /// The search field changed while the podcasts show: asked once it
+    /// stands still.
     pub(in crate::gui) fn podcasts_typed(&mut self) {
         let search = self.query().and_then(|q| crate::podcast::query::Query::parse(&q));
         self.podcasts.set_search(search);
         self.podcasts.typed_at = Some(Instant::now());
     }
 
+    /// Every feed followed read again, quietly, for new episodes: at the start,
+    /// every half hour while kessler runs, and as the view opens after a while.
+    /// What was read stays shown until the new comes.
+    ///
+    /// Also asked for by hand: menu → podcasts, or „aktualisieren" at the head
+    /// of the podcasts' column.
     pub(in crate::gui) fn check_for_episodes(&mut self) {
         self.podcasts.checked_at = Some(Instant::now());
         self.archive_episodes();
@@ -584,14 +763,20 @@ impl GuiApp {
         }
     }
 
+    /// How often new episodes are looked for, as the podcasts' tab says; `None`
+    /// for only when asked.
     fn check_every(&self) -> Option<u64> {
         self.config.ui.podcast_check.parse::<u64>().ok().map(|minutes| minutes.max(1) * 60)
     }
 
+    /// Whether the feeds are being read just now.
     pub fn checking_for_episodes(&self) -> bool {
         !self.podcasts.reading.is_empty()
     }
 
+    /// What the podcasts are doing out of sight, for the foot's line where
+    /// last.fm says its: an episode being fetched and how far, or feeds being
+    /// read; nothing while neither.
     pub fn podcast_standing(&self) -> Option<String> {
         if !self.config.ui.podcasts {
             return None;
@@ -614,6 +799,7 @@ impl GuiApp {
         }
     }
 
+    /// Read `show`'s feed, unless it is read or being read.
     fn read_feed(&mut self, show: &Show) {
         if self.podcasts.feeds.contains_key(&show.feed) || self.podcasts.reading_feed(&show.feed) {
             return;
@@ -621,6 +807,7 @@ impl GuiApp {
         self.podcasts.reading.push((show.feed.clone(), crate::podcast::fetch_feed_later(&show.feed, None, true)));
     }
 
+    /// A podcast chosen in the first column, or „alle" (`None`).
     pub fn choose_podcast(&mut self, show: Option<Show>) {
         if let Some(show) = &show {
             self.read_feed(show);
@@ -641,6 +828,9 @@ impl GuiApp {
         self.podcasts.picked.clear();
     }
 
+    /// `i` in the podcasts: „informationen" in the queue's place, about the
+    /// podcast playing, or put away again. It takes the log's place too, as the
+    /// log takes its.
     pub fn podcast_info(&mut self) {
         if self.podcasts.info_open {
             self.close_podcast_info();
@@ -657,6 +847,8 @@ impl GuiApp {
         }
     }
 
+    /// „informationen" put away: the column goes, rather than the queue it
+    /// lay over coming out from under it — `w` brings the queue back.
     pub fn close_podcast_info(&mut self) {
         self.podcasts.info_open = false;
         if self.config.ui.podcast_queue {
@@ -665,6 +857,7 @@ impl GuiApp {
         }
     }
 
+    /// „heruntergeladen" chosen in the first column: the episodes fetched.
     pub fn choose_fetched(&mut self) {
         self.podcasts.chosen = None;
         self.podcasts.only_fetched = true;
@@ -674,6 +867,8 @@ impl GuiApp {
         self.podcasts.picked.clear();
     }
 
+    /// Let go of an episode's file, to have the room back; not of the one
+    /// playing.
     pub fn forget_episode(&mut self, episode: &Episode) {
         if self.playing_this_episode(&episode.id) {
             return;
@@ -691,6 +886,11 @@ impl GuiApp {
         }
     }
 
+    /// „datei löschen", asked for: playing, it stops first — where it was
+    /// is kept, so played again it is fetched anew and goes on from there —
+    /// and still coming in, its fetch is let go of with what came. The
+    /// one asked for wants the room back; only by itself, archived, is a
+    /// playing one's file left alone (see [`Self::forget_episode`]).
     pub fn delete_episode_file(&mut self, episode: &Episode) {
         if self.playing_this_episode(&episode.id) {
             self.keep_episode_place();
@@ -719,6 +919,8 @@ impl GuiApp {
         self.podcasts.recount = true;
     }
 
+    /// Archive `episode`, or take it out of the archive. Archived, its file
+    /// goes too where the podcasts' tab says so — not while it plays.
     pub fn archive_episode(&mut self, episode: &Episode) {
         let mut kept = Kept::read();
         let now = kept.toggle_archived(&episode.id);
@@ -732,6 +934,8 @@ impl GuiApp {
         self.set_notice(if now { tr!("archiviert") } else { tr!("nicht mehr archiviert") });
     }
 
+    /// The episodes picked archived all — or, were they all archived already,
+    /// all taken out of the archive.
     pub fn archive_picked(&mut self) {
         let picked = std::mem::take(&mut self.podcasts.picked);
         let mut kept = Kept::read();
@@ -757,6 +961,8 @@ impl GuiApp {
         self.set_notice(said);
     }
 
+    /// The episodes picked into the podcasts' queue, in the list's order, those
+    /// not in it already.
     pub fn queue_picked(&mut self) {
         let picked = std::mem::take(&mut self.podcasts.picked);
         let mut kept = Kept::read();
@@ -772,6 +978,8 @@ impl GuiApp {
         self.set_notice(tr!("{} folgen in der warteschlange", added));
     }
 
+    /// The files of the episodes picked let go of; not the one playing.
+    /// The episodes picked that are neither there nor being fetched.
     pub(in crate::gui) fn picked_to_fetch(&self) -> Vec<(Episode, Show)> {
         self.podcasts.picked.iter().filter(|(e, _)| !crate::podcast::cached(&e.url).is_file() && !self.fetching_now(&e.id)).cloned().collect()
     }
@@ -783,6 +991,8 @@ impl GuiApp {
         }
     }
 
+    /// What a right click on an episode in the second column offers — for the
+    /// ones picked, where it landed on one of several.
     pub(in crate::gui) fn episode_menu(&self, at: usize) -> Vec<(&'static str, bool)> {
         let archived = self.config.ui.podcast_show_archived;
         let (list, _) = self.podcasts.episodes(archived);
@@ -822,6 +1032,7 @@ impl GuiApp {
         ]
     }
 
+    /// What was chosen in that menu.
     pub(in crate::gui) fn episode_menu_chosen(&mut self, at: usize, chosen: usize) {
         let archived = self.config.ui.podcast_show_archived;
         let (list, _) = self.podcasts.episodes(archived);
@@ -861,6 +1072,8 @@ impl GuiApp {
         }
     }
 
+    /// The episode at `at` in the list and every one after it — older —
+    /// archived, so a long „alle" can be cleared down.
     fn archive_from(&mut self, at: usize) {
         let archived = self.config.ui.podcast_show_archived;
         let mut all = self.podcasts.every_episode();
@@ -888,6 +1101,8 @@ impl GuiApp {
         self.set_notice(tr!("{} folgen archiviert", newly.len()));
     }
 
+    /// The episode playing where it lives: the podcasts open, „alle" chosen,
+    /// and it looked at in the third column.
     pub(in crate::gui) fn show_playing_episode(&mut self) {
         let Some((episode, show)) = self.podcasts.playing_from.clone() else { return };
         if !self.showing_podcasts() {
@@ -897,6 +1112,9 @@ impl GuiApp {
         self.choose_episode(episode, show);
     }
 
+    /// Whether the episode looked at has gone from everywhere it could be shown
+    /// from: its podcast not followed nor chosen, not fetched, queued, kept or
+    /// playing.
     fn looked_at_is_gone(&self) -> bool {
         let Some((episode, show)) = &self.podcasts.episode else { return false };
         let kept = &self.podcasts.kept;
@@ -908,6 +1126,8 @@ impl GuiApp {
             && !self.playing_this_episode(&episode.id)
     }
 
+    /// The podcasts followed in the order the first column's head asks for:
+    /// whose newest episode came out last first, or by name.
     pub(in crate::gui) fn shows_in_order(&self) -> Vec<Show> {
         let mut shows = self.podcasts.kept.show.clone();
         match self.config.ui.podcast_order.as_str() {
@@ -921,6 +1141,12 @@ impl GuiApp {
         shows
     }
 
+    /// The first column under a search: the podcasts followed the search
+    /// found anything in — its name or author, or so many of its episodes —
+    /// in the column's order, and what the directory found besides them,
+    /// without those followed. The rest are left out: with a long list of
+    /// them, the directory's were pushed out of sight. `None` while the
+    /// column shows its own list, with nothing typed.
     pub(in crate::gui) fn podcasts_found(&self) -> Option<(Vec<FoundShow>, Vec<Show>)> {
         let search = self.podcasts.search.as_ref()?;
         let archived = self.config.ui.podcast_show_archived;
@@ -943,6 +1169,9 @@ impl GuiApp {
         Some((followed, directory))
     }
 
+    /// The podcasts the first column lists, in its order: those followed, or
+    /// under a search those it found something in and then the directory's.
+    /// What a podcast's right-click menu counts by.
     pub(in crate::gui) fn podcasts_listed(&self) -> Vec<Show> {
         match self.podcasts_found() {
             Some((followed, directory)) => followed.into_iter().map(|f| f.show).chain(directory).collect(),
@@ -950,6 +1179,9 @@ impl GuiApp {
         }
     }
 
+    /// How many episodes of the podcasts followed match the search, for
+    /// „folgen" among what it found; `None` where it does not look through the
+    /// episodes or none matches.
     pub(in crate::gui) fn found_episodes(&self) -> Option<usize> {
         if !self.podcasts.narrowed() {
             return None;
@@ -957,6 +1189,7 @@ impl GuiApp {
         Some(self.podcasts.matching_total(self.config.ui.podcast_show_archived)).filter(|n| *n > 0)
     }
 
+    /// The first column's order one step on: zuletzt, a–z, z–a.
     pub(in crate::gui) fn turn_podcast_order(&mut self) {
         self.config.ui.podcast_order = match self.config.ui.podcast_order.as_str() {
             "zuletzt" => "a-z",
@@ -967,6 +1200,7 @@ impl GuiApp {
         self.save_config();
     }
 
+    /// „offen" chosen in the first column.
     pub fn choose_open(&mut self) {
         self.podcasts.chosen = None;
         self.podcasts.only_fetched = false;
@@ -976,6 +1210,9 @@ impl GuiApp {
         self.podcasts.picked.clear();
     }
 
+    /// Put `episode` of `show` on the clipboard to be passed on: its title and
+    /// podcast, and an address anyone can open — its page, where the feed names
+    /// one, else its sound.
     pub fn share_episode(&mut self, ctx: &egui::Context, episode: &Episode, show: &Show) {
         let page = self
             .podcasts
@@ -990,6 +1227,7 @@ impl GuiApp {
         self.set_status(tr!("link kopiert"));
     }
 
+    /// „gemerkt" chosen in the first column.
     pub fn choose_starred(&mut self) {
         self.podcasts.chosen = None;
         self.podcasts.only_fetched = false;
@@ -999,6 +1237,7 @@ impl GuiApp {
         self.podcasts.picked.clear();
     }
 
+    /// Keep `episode` on purpose, or not any more.
     pub fn star_episode(&mut self, episode: &Episode, show: &Show) {
         let mut kept = Kept::read();
         let now = kept.toggle_starred(episode, show);
@@ -1007,6 +1246,8 @@ impl GuiApp {
         self.set_notice(if now { tr!("gemerkt: {}", episode.title) } else { tr!("nicht mehr gemerkt: {}", episode.title) });
     }
 
+    /// The episodes picked kept on purpose — or, were they all, not any
+    /// more.
     pub fn star_picked(&mut self) {
         let picked = std::mem::take(&mut self.podcasts.picked);
         let mut kept = Kept::read();
@@ -1020,6 +1261,7 @@ impl GuiApp {
         self.podcasts.kept = kept;
     }
 
+    /// `episode` heard to its end, or not heard after all.
     pub fn mark_heard(&mut self, episode: &Episode, heard: bool) {
         let mut kept = Kept::read();
         if heard {
@@ -1032,6 +1274,7 @@ impl GuiApp {
         self.podcasts.recount = true;
     }
 
+    /// The episodes picked heard — or, were they all, not heard.
     pub fn mark_picked_heard(&mut self) {
         let picked = std::mem::take(&mut self.podcasts.picked);
         let mut kept = Kept::read();
@@ -1048,6 +1291,8 @@ impl GuiApp {
         self.podcasts.recount = true;
     }
 
+    /// The sleep timer one step on: off, 15, 30, 60 minutes, the episode's end,
+    /// off.
     pub fn step_sleep(&mut self) {
         let minutes = |m: u64| Sleep::At(Instant::now() + std::time::Duration::from_secs(m * 60), m);
         self.podcasts.sleep = match self.podcasts.sleep {
@@ -1062,6 +1307,9 @@ impl GuiApp {
         }
     }
 
+    /// Five minutes more on the sleep timer, from the foot. Set for the
+    /// episode's end, it becomes what is left of the episode and five
+    /// minutes. Fading out already, the sound comes back.
     pub fn sleep_longer(&mut self) {
         let five = std::time::Duration::from_secs(5 * 60);
         self.podcasts.sleep = match self.podcasts.sleep {
@@ -1077,6 +1325,8 @@ impl GuiApp {
         }
     }
 
+    /// The sleep timer off, from the foot; fading out already, the sound
+    /// comes back.
     pub fn sleep_off(&mut self) {
         self.podcasts.sleep = None;
         if let Some(from) = self.podcasts.sleep_fade_from.take() {
@@ -1084,6 +1334,7 @@ impl GuiApp {
         }
     }
 
+    /// What the sleep timer says, for its row.
     pub fn sleep_said(&self) -> String {
         match self.podcasts.sleep {
             None => tr!("einschlafen: aus").to_string(),
@@ -1095,10 +1346,14 @@ impl GuiApp {
         }
     }
 
+    /// The sleep timer at the foot, while it runs: how long is left, in the
+    /// words of its own row — seen from every view, not only beside the
+    /// episode.
     pub fn sleep_standing(&self) -> Option<String> {
         self.podcasts.sleep.as_ref().map(|_| self.sleep_said())
     }
 
+    /// Fade out over the last seconds and pause, once the time is up.
     fn tend_sleep(&mut self, ctx: &egui::Context) {
         if self.podcasts.sleep.is_some() && self.podcasts.playing.is_none() && !self.playing_episode() && self.podcasts.fetching.is_none() {
             self.podcasts.sleep = None;
@@ -1128,6 +1383,8 @@ impl GuiApp {
         }
     }
 
+    /// Let go of the files of every episode archived (the podcasts' tab,
+    /// as „archivierte dateien löschen" is switched on).
     pub(in crate::gui) fn forget_archived(&mut self) {
         let kept = Kept::read();
         let playing = self.podcasts.playing.as_ref().map(|(id, _)| id.clone());
@@ -1138,6 +1395,7 @@ impl GuiApp {
         }
     }
 
+    /// Put `episode` into the podcasts' queue, or take it out.
     pub fn queue_episode(&mut self, episode: &Episode, show: &Show) {
         if self.playing_this_episode(&episode.id) && !self.podcasts.kept.is_queued(&episode.id) {
             self.set_notice(tr!("läuft gerade: {}", episode.title));
@@ -1150,6 +1408,8 @@ impl GuiApp {
         self.set_notice(if now { tr!("in der warteschlange: {}", episode.title) } else { tr!("aus der warteschlange: {}", episode.title) });
     }
 
+    /// Put down the episodes carried, or a row of the podcasts' queue, at `at`
+    /// in that queue. Ones already in it move there.
     pub(in crate::gui) fn drop_episodes(&mut self, at: usize) {
         let Some(carried) = self.dragging.take() else { return };
         let mut kept = Kept::read();
@@ -1200,6 +1460,8 @@ impl GuiApp {
         self.podcasts.kept = kept;
     }
 
+    /// A row of the podcasts' queue carried up or down by `by`, from the
+    /// keyboard, as the music's queue carries its rows.
     pub fn carry_queued_episode(&mut self, id: &str, by: i32) {
         let mut kept = Kept::read();
         let Some(from) = kept.queue.iter().position(|q| q.id == id) else { return };
@@ -1213,6 +1475,9 @@ impl GuiApp {
         self.podcasts.kept = kept;
     }
 
+    /// The rows of what comes, among `ids`, carried together up or down
+    /// by `by`, each keeping its place among the others; at an end they
+    /// stop.
     pub fn carry_queued_episodes(&mut self, ids: &[String], by: i32) {
         let mut kept = Kept::read();
         let mut moved = false;
@@ -1245,6 +1510,7 @@ impl GuiApp {
         }
     }
 
+    /// Take a played episode out of the queue's played rows.
     pub fn forget_spent(&mut self, id: &str) {
         let mut kept = Kept::read();
         kept.spent.retain(|s| s.id != id);
@@ -1252,6 +1518,7 @@ impl GuiApp {
         self.podcasts.kept = kept;
     }
 
+    /// Empty the podcasts' queue, what it has played with it.
     pub fn clear_episode_queue(&mut self) {
         let mut kept = Kept::read();
         kept.queue.clear();
@@ -1260,6 +1527,9 @@ impl GuiApp {
         self.podcasts.kept = kept;
     }
 
+    /// The next in the podcasts' queue played. It stays in the queue, saying
+    /// „lädt", until it starts — see [`Self::play_episode`]. Whether there was
+    /// one.
     fn play_next_queued(&mut self) -> bool {
         let Some((episode, show)) = Kept::read().queue.first().map(crate::podcast::Fetched::episode) else {
             return false;
@@ -1268,11 +1538,15 @@ impl GuiApp {
         true
     }
 
+    /// A queued episode played now. It keeps its place in the queue while
+    /// it is fetched, saying so, and leaves the queue once it starts; one
+    /// that cannot be fetched stays where it was.
     pub fn play_queued_episode(&mut self, episode: Episode, show: Show) {
         self.choose_episode(episode.clone(), show.clone());
         self.fetch_and_play(episode, show, None);
     }
 
+    /// Follow `show`, or let it go.
     pub fn follow_podcast(&mut self, show: &Show) {
         let mut kept = Kept::read();
         let now = kept.toggle(show);
@@ -1288,6 +1562,8 @@ impl GuiApp {
         self.set_notice(said);
     }
 
+    /// An episode looked at in the third column: its chapters, from the feed
+    /// or from the file it points at.
     pub fn choose_episode(&mut self, episode: Episode, show: Show) {
         if !episode.chapters.is_empty() {
             self.podcasts.chapters = Some((episode.id.clone(), episode.chapters.clone()));
@@ -1307,6 +1583,9 @@ impl GuiApp {
         self.podcasts.episode = Some((episode, show));
     }
 
+    /// „herunterladen": episodes fetched in the background, without playing, one
+    /// after the other, and kept once there — heard, their files stay (see
+    /// [`Kept::held`]). One there already is only marked to be kept.
     pub fn fetch_to_keep(&mut self, episodes: Vec<(Episode, Show)>) {
         let mut kept = Kept::read();
         let mut asked: Vec<String> = Vec::new();
@@ -1328,11 +1607,16 @@ impl GuiApp {
         }
     }
 
+    /// Whether the episode `id` is being fetched, to play or to keep, or
+    /// waits to be.
     pub fn fetching_now(&self, id: &str) -> bool {
         let panel = &self.podcasts;
         panel.fetching.as_ref().is_some_and(|(e, ..)| e.id == id) || panel.keeping.as_ref().is_some_and(|(e, ..)| e.id == id) || panel.to_fetch.iter().any(|(e, _)| e.id == id)
     }
 
+    /// Where an episode asked for with „herunterladen" stands, for its row and its
+    /// page: how far, or that it waits its turn. `None` where it is not
+    /// among them.
     pub fn keeping_said(&self, id: &str) -> Option<String> {
         if let Some((_, _, _, (have, of))) = self.podcasts.keeping.as_ref().filter(|(e, ..)| e.id == id) {
             let how_far = if *of > 0 { format!("{} %", have * 100 / of) } else { format!("{:.1} mb", *have as f64 / 1_000_000.0) };
@@ -1341,6 +1625,9 @@ impl GuiApp {
         self.podcasts.to_fetch.iter().any(|(e, _)| e.id == id).then(|| tr!("lädt gleich herunter").to_string())
     }
 
+    /// Once a frame: the next episode asked for with „herunterladen" started once
+    /// the one before is in, and the one under way followed — whether the
+    /// podcasts show or not.
     fn tend_fetches_to_keep(&mut self) {
         if self.podcasts.keeping.is_none() {
             while let Some((episode, show)) = self.podcasts.to_fetch.pop_front() {
@@ -1382,6 +1669,8 @@ impl GuiApp {
         }
     }
 
+    /// An episode asked for: fetched into the cache, then played (see
+    /// [`Self::tend_podcasts`]) — from `at` seconds, else where it was left.
     pub fn fetch_and_play(&mut self, episode: Episode, show: Show, at: Option<f64>) {
         if let Some((_, id)) = self.podcasts.streaming.take() {
             if self.playing_this_episode(&id) {
@@ -1416,6 +1705,8 @@ impl GuiApp {
         self.podcasts.fetching = Some((episode, show, rx, (0, 0)));
     }
 
+    /// What kind of thing sounds now — 0 nothing, 1 music, 2 the radio,
+    /// 3 an episode — and whether it plays.
     fn sounding_now(&self) -> (u8, bool) {
         let kind = if self.player.on_air().is_some() {
             2
@@ -1429,20 +1720,27 @@ impl GuiApp {
         (kind, self.player.state() == crate::player::PlaybackState::Playing)
     }
 
+    /// Whether music or the radio was put on since the episode being fetched
+    /// was asked for: then it is not to take over as it arrives.
     fn something_else_put_on(&self) -> bool {
         let now = self.sounding_now();
         let other = now.1 && now.0 != 3;
         other && self.podcasts.fetch_asked_over.as_ref().is_some_and(|before| *before != now)
     }
 
+    /// Whether an episode of the podcast at `feed` is playing — its row in
+    /// the first column lit as an artist's is while their track plays.
     pub fn sounding_podcast(&self, feed: &str) -> bool {
         self.playing_episode() && self.podcasts.playing_from.as_ref().is_some_and(|(_, show)| show.feed == feed)
     }
 
+    /// Whether `id` is the episode playing.
     pub fn playing_this_episode(&self, id: &str) -> bool {
         self.playing_episode() && self.podcasts.playing.as_ref().is_some_and(|(playing, _)| playing == id)
     }
 
+    /// A chapter clicked: there at once in the episode playing, else the
+    /// episode fetched and started there.
     pub fn play_chapter(&mut self, episode: Episode, show: Show, start: f64) {
         if self.playing_this_episode(&episode.id) {
             self.player.seek_to(start);
@@ -1454,6 +1752,10 @@ impl GuiApp {
         self.fetch_and_play(episode, show, Some(start));
     }
 
+    /// Play a fetched episode beside the queue, taken up where it was left.
+    ///
+    /// `growing`, the decoder on its file while that is still being fetched:
+    /// then it plays from the start, as far as has come in.
     fn play_episode(&mut self, episode: &Episode, show: &Show, path: std::path::PathBuf, growing: Option<GrowingDecoder>) {
         let played_before = self.podcasts.playing_from.clone();
         if let Some((before, file)) = self.podcasts.playing.take() {
@@ -1541,6 +1843,10 @@ impl GuiApp {
         }
     }
 
+    /// Start the episode being fetched once enough of it is in, where it is
+    /// to start from its start — one to be taken up further in waits for
+    /// all of it, as a seek past what has come in would wait for the fetch
+    /// — and while it plays, tell the player how far it may be skipped.
     fn stream_what_comes_in(&mut self) {
         let Some((episode, show, _, (have, of))) = &self.podcasts.fetching else { return };
         let (episode, show, have, of) = (episode.clone(), show.clone(), *have, *of);
@@ -1568,6 +1874,8 @@ impl GuiApp {
         self.play_episode(&episode, &show, path, Some(source));
     }
 
+    /// Where the chapters of the episode playing start, as shares of its length
+    /// — none for anything else.
     pub fn playing_chapter_starts(&self) -> Vec<f32> {
         if !self.playing_episode() || self.podcasts.playing.is_none() {
             return Vec::new();
@@ -1579,10 +1887,14 @@ impl GuiApp {
         self.podcasts.playing_chapters.iter().map(|c| (c.start / length).clamp(0.0, 1.0) as f32).collect()
     }
 
+    /// Whether what plays is an episode.
     pub fn playing_episode(&self) -> bool {
         self.player.current_track().is_some_and(|t| t.id == EPISODE_ID)
     }
 
+    /// Once a frame: a search whose typing has stopped goes out, what came
+    /// back is taken in, a fetched episode starts, and where the one playing
+    /// stands is written down now and then.
     pub(in crate::gui) fn tend_podcasts(&mut self, ctx: &egui::Context) {
         self.take_podcast_import();
         self.tend_sleep(ctx);
@@ -1880,6 +2192,8 @@ impl GuiApp {
         }
     }
 
+    /// Write down where the episode playing stands; heard to its end, its
+    /// file goes.
     fn keep_episode_place(&mut self) {
         let Some((id, _)) = self.podcasts.playing.clone() else { return };
         if !self.playing_episode() {
@@ -1903,6 +2217,10 @@ impl GuiApp {
 mod tests {
     use super::*;
 
+    /// An episode written down — fetched, or here bookmarked, which goes the
+    /// same way without needing its file — is listed as its feed has it,
+    /// notes and all, where the feed is read; as written down, without
+    /// them, where not.
     #[test]
     fn written_down_episodes_are_listed_as_their_feed_has_them() {
         let mut panel = PodcastPanel::default();
@@ -1917,6 +2235,8 @@ mod tests {
         assert_eq!(panel.listed(true)[0].0.about, "notes");
     }
 
+    /// „alle" lists the newest eighty of every podcast followed, eighty more
+    /// each time, the newest first across podcasts.
     #[test]
     fn all_comes_a_page_at_a_time() {
         let mut panel = PodcastPanel::default();

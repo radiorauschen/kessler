@@ -1,6 +1,10 @@
+//! The artist's column: whom it follows, what is asked and kept about
+//! them, the form, the run through everyone and the export.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// `a`: the artist's column into the fourth, or out of it again.
     pub fn toggle_artist(&mut self) {
         if self.artist_open {
             self.artist_open = false;
@@ -22,6 +26,11 @@ impl GuiApp {
         self.leave_the_left();
     }
 
+    /// Open the artist's column on `name`, whoever the cursor is on — what a
+    /// right click's „über künstler:in" does. The column goes back to
+    /// following as soon as a name is picked, the cursor moves or the music
+    /// goes on to another track: a column that stays on someone after you
+    /// have plainly moved on would be one you had to close to get back.
     pub fn about_artist(&mut self, name: &str) {
         let name = name.trim();
         if name.is_empty() {
@@ -33,6 +42,8 @@ impl GuiApp {
         self.artist_pin = Some((name.to_string(), self.artist_anchor()));
     }
 
+    /// Where the window stood when an artist was asked for by name — see
+    /// [`GuiApp::about_artist`].
     pub(in crate::gui) fn artist_anchor(&self) -> ArtistAnchor {
         (
             self.selected_artist(),
@@ -41,6 +52,10 @@ impl GuiApp {
         )
     }
 
+    /// Whom the artist's column is about: the name picked in the first
+    /// column; else the artist of the track under the cursor — the track's
+    /// own artist, not the record's, so a compilation shows who sings; else
+    /// of what is playing.
     pub fn shown_artist(&self) -> Option<String> {
         if self.showing_ipod() {
             return None;
@@ -77,6 +92,10 @@ impl GuiApp {
             .or_else(|| self.aired_artist())
     }
 
+    /// Keep the artist's column on whoever `shown_artist` says, reading what
+    /// is on disk about them and — the first time they are shown at all —
+    /// asking the sources. Every frame while the column is open; it costs a
+    /// comparison when nothing changed.
     pub fn follow_the_artist(&mut self) {
         if self
             .artist_pin
@@ -112,6 +131,8 @@ impl GuiApp {
         }
     }
 
+    /// Ask the sources about the artist shown, now — the first time by
+    /// itself, and whenever „neu suchen" is clicked.
     pub fn look_up_artist(&mut self) {
         let Some(name) = self.artist.name.clone() else {
             return;
@@ -126,10 +147,13 @@ impl GuiApp {
             name.clone(),
             crate::lang::current().key(),
             self.config.lastfm.api_key.clone(),
+            self.config.artists_dir(),
+            key,
         );
         self.artist.looking = Some((name, key, rx));
     }
 
+    /// Take in what a search found, and what picture was chosen from a file.
     pub(in crate::gui) fn poll_artist(&mut self) {
         use crate::library::artistinfo;
         let dir = self.config.artists_dir();
@@ -144,23 +168,17 @@ impl GuiApp {
                 Ok(answer) => {
                     self.artist.looking = None;
                     match answer {
-                        Ok((found, recognised, picture)) => {
-                            let summary = artistinfo::summary(&found, picture.is_some());
-                            match artistinfo::take_in(&dir, key, &name, found, recognised, picture) {
-                                Ok((info, pictured)) => {
-                                    if pictured {
-                                        self.artist.stamp += 1;
-                                    }
-                                    if recognised {
-                                        self.note(log::Kind::Artist, format!("{name}: {summary}"));
-                                    }
-                                    if self.artist.key == key {
-                                        self.artist.info = Some(info);
-                                    }
-                                    self.gaps.stale = true;
-                                }
-                                Err(e) => self.set_status(format!("{e}")),
+                        Ok(crate::gui::artist::Taken { info, pictured, recognised, summary }) => {
+                            if pictured {
+                                self.artist.stamp += 1;
                             }
+                            if recognised {
+                                self.note(log::Kind::Artist, format!("{name}: {summary}"));
+                            }
+                            if self.artist.key == key {
+                                self.artist.info = Some(info);
+                            }
+                            self.gaps.stale = true;
                             if !recognised {
                                 self.note(log::Kind::Artist, tr!("nichts gefunden über {}", name));
                             }
@@ -210,6 +228,8 @@ impl GuiApp {
         }
     }
 
+    /// : a picture of the artist chosen by hand, which a new search then leaves
+    /// alone.
     pub fn artist_picture_from_file(&mut self) {
         let Some(name) = self.artist.name.clone() else {
             return;
@@ -222,6 +242,12 @@ impl GuiApp {
         self.artist.picking = Some((self.artist.key, name, rx));
     }
 
+    /// : ask the sources about every artist in the library they have not been
+    /// asked about yet, in the background. Not while a run for years or genres
+    /// is asking MusicBrainz already — two would ask it twice as often as it
+    /// allows. `again`: everyone, not only those never asked about — the oldest
+    /// answers first, so a run stopped halfway has renewed what most needed it.
+    /// What was written by hand stays either way.
     pub fn start_artist_hunt(&mut self, again: bool) -> Result<()> {
         if self.artist_hunt.is_some() {
             return Ok(());
@@ -275,6 +301,7 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Stop it. What was found stays.
     pub fn stop_artist_hunt(&mut self) {
         if let Some(hunt) = self.artist_hunt.take() {
             hunt.stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -336,6 +363,8 @@ impl GuiApp {
         }
     }
 
+    /// `o`, for „others": the other artists into the fourth column, or
+    /// out of it again.
     pub fn toggle_gaps(&mut self) {
         if self.gaps.open {
             self.gaps.open = false;
@@ -345,6 +374,8 @@ impl GuiApp {
         }
     }
 
+    /// The other artists into the fourth column, counted afresh: whatever
+    /// was found about anyone since is in the count.
     pub fn show_gaps(&mut self) {
         if !self.all_sides() {
             if self.device_shown() {
@@ -362,6 +393,9 @@ impl GuiApp {
         self.leave_the_left();
     }
 
+    /// A recommendation clicked on: what is known about them, in the
+    /// artist's column in its place, looked up the way anyone is, with the
+    /// way back to them on top.
     pub fn visit_gap(&mut self, name: &str) {
         self.gaps.open = false;
         self.artist_trail.clear();
@@ -369,6 +403,8 @@ impl GuiApp {
         self.gaps.came_from = true;
     }
 
+    /// Count the gaps again, on a thread, when they are shown and something
+    /// new is known; and take in a count that is done.
     pub(in crate::gui) fn poll_gaps(&mut self) {
         if let Some(rx) = &self.gaps.counting {
             match rx.try_recv() {
@@ -399,6 +435,8 @@ impl GuiApp {
         self.gaps.counting = Some(rx);
     }
 
+    /// : every artist Kessler knows about as a page each, in a folder the
+    /// person picks — for a notes program, or to keep.
     pub fn export_artists(&mut self) {
         let (tx, rx) = mpsc::channel();
         let prompt = tr!("Wohin sollen die Künstler:innen?");
@@ -434,6 +472,7 @@ impl GuiApp {
         }
     }
 
+    /// : the form for what the person writes in themselves.
     pub fn edit_artist(&mut self) {
         let Some(name) = self.artist.name.clone() else {
             return;
@@ -442,6 +481,7 @@ impl GuiApp {
         self.artist_form = Some(artist::OwnForm::open(self.artist.key, &name, &own));
     }
 
+    /// Write the form down. Nothing a search found is touched.
     pub fn save_artist_form(&mut self) {
         let Some(form) = self.artist_form.take() else {
             return;

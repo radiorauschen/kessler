@@ -1,6 +1,15 @@
+//! The keyboard, and the forms that take it over.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// Keyboard handling.
+    ///
+    /// Every key goes through `consume_key`, which both reads it *and* takes
+    /// it out of the event queue. That matters for the arrow keys: egui's own
+    /// scroll areas and focus navigation act on them too, so merely reading
+    /// them left the arrows doing something subtly different from j/k/h/l.
+    /// Consuming makes the two sets identical.
     pub(in crate::gui) fn handle_keys(&mut self, ctx: &egui::Context) -> Result<()> {
         use egui::{Key, Modifiers};
 
@@ -601,6 +610,11 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Keys while a list is being named, renamed or thrown away.
+    ///
+    /// Enter answers, escape puts it away, and everything printable goes into
+    /// the name. The arrows move the caret rather than the columns behind:
+    /// while a panel is open the columns are not what the keyboard is for.
     pub(in crate::gui) fn handle_prompt_keys(&mut self, ctx: &egui::Context) -> Result<()> {
         use egui::{Key, Modifiers};
 
@@ -680,6 +694,11 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Keys while the tag editor has the keyboard.
+    ///
+    /// It has all of them. Playback keeps running but cannot be driven from
+    /// here — `s` is a letter in a title, and a form where some letters do
+    /// something else is a form nobody trusts.
     pub(in crate::gui) fn handle_edit_keys(&mut self, ctx: &egui::Context) -> Result<()> {
         use egui::{Key, Modifiers};
 
@@ -760,6 +779,8 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Keys while the artist's form is open: the tag editor's, and
+    /// shift-enter for a new line in the note.
     pub(in crate::gui) fn handle_artist_form_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;
@@ -835,6 +856,11 @@ impl GuiApp {
         }
     }
 
+    /// Keys while the filter line has the keyboard.
+    ///
+    /// Letters type. That means j/k/h/l cannot navigate here, so the arrows do
+    /// it alone — which is why the arrows had to be made to behave identically
+    /// to them in the first place.
     pub(in crate::gui) fn handle_filter_keys(&mut self, ctx: &egui::Context) -> Result<()> {
         use egui::{Key, Modifiers};
 
@@ -1010,6 +1036,8 @@ impl GuiApp {
     }
 }
 
+/// What the foot says when `c` and a digit ask for a view that is off
+/// already.
 fn already_off(n: u8) -> &'static str {
     match n {
         1 => tr!("musik ist schon aus — 1 schaltet sie ein"),
@@ -1018,6 +1046,7 @@ fn already_off(n: u8) -> &'static str {
     }
 }
 
+/// What the foot says about a view switched off, and how it comes back.
 fn off_note(n: u8) -> &'static str {
     match n {
         1 => tr!("musik ausgeschaltet — 1 schaltet sie wieder ein"),
@@ -1027,6 +1056,8 @@ fn off_note(n: u8) -> &'static str {
 }
 
 impl GuiApp {
+    /// Whether the view on digit `n` is switched on: 1 the music, 2 the
+    /// radio, 3 the podcasts.
     fn view_on(&self, n: u8) -> bool {
         match n {
             1 => self.config.ui.music,
@@ -1035,6 +1066,8 @@ impl GuiApp {
         }
     }
 
+    /// The view on digit `n` switched on or off, as under menu → allgemein,
+    /// and the foot saying so.
     fn switch_view(&mut self, n: u8, on: bool) {
         match n {
             1 => self.set_music(on),
@@ -1050,6 +1083,7 @@ impl GuiApp {
         self.set_status(said);
     }
 
+    /// The view on digit `n` opened, as the switch at the top opens it.
     fn open_view(&mut self, n: u8) {
         match n {
             1 => self.read_from(false, false),
@@ -1059,6 +1093,8 @@ impl GuiApp {
         }
     }
 
+    /// The right-click menu for the row the keyboard stands on, opened
+    /// beside that row, its first entry stood on.
     fn open_row_menu_by_key(&mut self, ctx: &egui::Context) {
         use crate::gui::library::cursor_row;
         use crate::gui::{About, RowMenu};
@@ -1114,8 +1150,15 @@ impl GuiApp {
     }
 }
 
+/// How many rows a page is, for `bild ab` and `bild auf` (and Emacs's
+/// ctrl + v, alt + v).
 const PAGE_ROWS: i32 = 10;
 
+/// Emacs's keys as the keys this window answers: ctrl + n p f b the arrows,
+/// ctrl + v and alt + v a page down and up, alt + < and > pos1 and ende,
+/// ctrl + s the slash that opens the search, ctrl + g escape. Rewritten in
+/// the frame's events, before anything reads them. Ctrl is the control key on
+/// a Mac too, as Emacs has it there, not the command key.
 fn emacs_keys(ctx: &egui::Context) {
     use egui::{Event, Key, Modifiers};
     ctx.input_mut(|i| {
@@ -1152,6 +1195,8 @@ fn emacs_keys(ctx: &egui::Context) {
 mod emacs_tests {
     use eframe::egui::{self, Event, Key, Modifiers};
 
+    /// Emacs's chords come out as the keys the window answers, and the
+    /// rest as they were.
     #[test]
     fn emacs_chords_become_the_windows_keys() {
         let key = |key: Key, modifiers: Modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };

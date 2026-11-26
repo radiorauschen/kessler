@@ -1,9 +1,22 @@
+//! Scrobbles waiting to be sent.
+//!
+//! A laptop listening to a record on a train has no network, and a scrobble
+//! that could not be sent is not a scrobble that did not happen. They go on a
+//! file, one per line, and are sent again the next time anything succeeds.
+//!
+//! The format is deliberately plain — tab-separated, one scrobble per line, the
+//! last field first in the header comment below — because it is written on a
+//! machine that may be about to lose power and read on one that may be running
+//! a different version. A line that cannot be read is dropped rather than
+//! taking the rest of the file with it.
+
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 
+/// One listened-to track, with when it started.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
     pub artist: String,
@@ -16,10 +29,17 @@ pub struct Pending {
 }
 
 impl Pending {
+    /// Whether Last.fm can file this at all.
+    ///
+    /// It files music under an artist and a title, and a file whose tags are
+    /// missing either has nothing to be filed under. This is not a send that
+    /// failed — there is nothing to send — and telling the two apart is the
+    /// difference between and, which is what the API's own answer sounds like.
     pub fn filable(&self) -> bool {
         !self.artist.is_empty() && !self.title.is_empty()
     }
 
+    /// Which tag is missing, in words, for the line that says so.
     pub fn why_not_filable(&self) -> String {
         match (self.artist.is_empty(), self.title.is_empty()) {
             (true, true) => tr!("eine datei ohne künstler:in und ohne titel im tag — nicht gesendet")
@@ -33,6 +53,8 @@ impl Pending {
         }
     }
 
+    /// The line this becomes on disk. Tabs separate, so every other character
+    /// — including the spaces in names — needs no escaping.
     fn to_line(&self) -> String {
         let clean = |text: &str| text.replace(['\t', '\n', '\r'], " ");
         let mut line = String::new();
@@ -67,11 +89,15 @@ impl Pending {
     }
 }
 
+/// The file of scrobbles that have not got through yet.
 #[derive(Debug, Clone)]
 pub struct Queue {
     path: PathBuf,
 }
 
+/// More than this and the oldest are dropped: Last.fm refuses scrobbles older
+/// than a fortnight anyway, and a queue that grows without limit after a long
+/// spell offline is a file nobody wants to find.
 const MOST_KEPT: usize = 500;
 
 impl Queue {
@@ -81,6 +107,7 @@ impl Queue {
         }
     }
 
+    /// Everything waiting, oldest first. A missing file is an empty queue.
     pub fn read(&self) -> Vec<Pending> {
         let Ok(text) = std::fs::read_to_string(&self.path) else {
             return Vec::new();
@@ -91,6 +118,10 @@ impl Queue {
             .collect()
     }
 
+    /// Replace the file with exactly this list.
+    ///
+    /// Written beside itself and renamed, so a crash halfway through leaves the
+    /// old queue rather than half a new one.
     pub fn write(&self, pending: &[Pending]) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -115,6 +146,7 @@ impl Queue {
         Ok(())
     }
 
+    /// Add one to the end.
     #[cfg(test)]
     pub fn push(&self, entry: &Pending) -> Result<()> {
         let mut all = self.read();
@@ -150,6 +182,12 @@ mod tests {
         }
     }
 
+    /// A file missing an artist or a title is not sent at all.
+    ///
+    /// The bug this exists for: such a track was sent anyway and Last.fm
+    /// answered, which reads like a broken connection and is in fact a missing
+    /// tag. Nothing about the message points at the file, which is the only
+    /// place the fix can be made.
     #[test]
     fn a_track_with_no_artist_or_no_title_is_not_filable() {
         let full = pending("Roygbiv", 1000);
@@ -194,6 +232,7 @@ mod tests {
         assert_eq!(back[1].started_at, 1300);
     }
 
+    /// A name with a tab in it would otherwise eat the fields after it.
     #[test]
     fn a_tab_in_a_title_cannot_break_the_line() {
         let path = scratch("tabs");
@@ -209,6 +248,7 @@ mod tests {
         assert_eq!(back[0].duration_secs, 251);
     }
 
+    /// One unreadable line must not cost the rest of the queue.
     #[test]
     fn a_broken_line_is_skipped_not_fatal() {
         let path = scratch("broken");
@@ -226,6 +266,7 @@ mod tests {
         assert_eq!(back[1].started_at, 1200);
     }
 
+    /// Sending everything empties the file rather than leaving an empty one.
     #[test]
     fn an_emptied_queue_leaves_no_file() {
         let path = scratch("empty");
@@ -237,6 +278,7 @@ mod tests {
         assert_eq!(queue.len(), 0);
     }
 
+    /// A month offline must not leave a file of a hundred thousand lines.
     #[test]
     fn the_queue_stops_growing_somewhere() {
         let path = scratch("cap");

@@ -1,3 +1,18 @@
+//! The system's own transport controls.
+//!
+//! On a Mac: the media keys, the Now Playing panel in Control Centre — which
+//! is also what AirPlay hands on to a HomePod or a television, cover and all —
+//! and the menu the Dock icon offers on a right-click. The framework calls for all
+//! three are in `macos.m`; what is here is the bridge and — more to the point
+//! — the decision of *when* to tell the system anything, which is the part
+//! that can be got wrong quietly and is therefore the part with tests.
+//!
+//! On Linux: the same keys and the panel's media controls, by way of MPRIS over
+//! D-Bus — see `linux.rs`.
+//!
+//! Everywhere else this is three functions that do nothing, so the window can
+//! call them without asking what it is running on.
+
 use std::ffi::CString;
 
 #[cfg(all(target_os = "linux", feature = "gui"))]
@@ -7,6 +22,7 @@ mod tray_linux;
 #[cfg(all(target_os = "linux", feature = "gui"))]
 pub mod remote;
 
+/// What the system asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(any(kessler_media, kessler_tray)), allow(dead_code))]
 pub enum Command {
@@ -16,17 +32,26 @@ pub enum Command {
     Next,
     Previous,
     Stop,
+    /// The window to the front — from the symbol's menu on Linux; on a Mac
+    /// the other side does it itself.
     #[cfg_attr(not(all(target_os = "linux", feature = "gui")), allow(dead_code))]
     Raise,
+    /// The whole program, as ⌘Q — the same.
     #[cfg_attr(not(all(target_os = "linux", feature = "gui")), allow(dead_code))]
     Quit,
+    /// The volume, in percent — from the symbol's menu: its slider on a Mac,
+    /// „lauter" and „leiser" in a Linux panel.
     #[cfg_attr(not(any(kessler_tray, all(target_os = "linux", feature = "gui"))), allow(dead_code))]
     Volume(u8),
+    /// The sleep timer one step on, from the symbol's menu while an episode
+    /// plays.
     #[cfg_attr(not(any(kessler_tray, all(target_os = "linux", feature = "gui"))), allow(dead_code))]
     Sleep,
 }
 
 impl Command {
+    /// The numbers are the bridge's whole vocabulary; they are written out on
+    /// both sides and must not drift.
     #[cfg_attr(not(any(kessler_media, kessler_tray)), allow(dead_code))]
     fn from_code(code: i32) -> Option<Self> {
         match code {
@@ -42,6 +67,7 @@ impl Command {
     }
 }
 
+/// What the system should say is playing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NowPlaying {
     pub playing: bool,
@@ -50,11 +76,26 @@ pub struct NowPlaying {
     pub album: String,
     pub duration: f64,
     pub elapsed: f64,
+    /// The album's cover, as the file the cover cache keeps it in — `None`
+    /// when there is none (yet). A path rather than the picture, so the
+    /// question "is this news" is one comparison and the picture is read
+    /// once, on the other side, when the path changes.
     pub artwork: Option<std::path::PathBuf>,
 }
 
+/// How far the panel's own clock may be out before it is worth correcting.
+///
+/// The panel counts on by itself while the rate is 1.0, so an update every
+/// frame would say nothing new sixty times a second. Only a jump — a seek, a
+/// new track, a pause — is news.
 const DRIFT: f64 = 2.0;
 
+/// Whether the system needs telling.
+///
+/// Pure, and separate from the call itself, because "when" is the question
+/// this module can actually get wrong: too often and it is talking to the
+/// window server sixty times a second, too seldom and the panel shows the
+/// track before last.
 fn worth_sending(last: Option<&NowPlaying>, next: Option<&NowPlaying>, since: f64) -> bool {
     match (last, next) {
         (None, None) => false,
@@ -79,6 +120,7 @@ fn worth_sending(last: Option<&NowPlaying>, next: Option<&NowPlaying>, since: f6
     }
 }
 
+/// Keeps the system's idea of what is playing up to date.
 #[derive(Debug, Default)]
 pub struct Reporter {
     last: Option<NowPlaying>,
@@ -90,6 +132,8 @@ impl Reporter {
         Self::default()
     }
 
+    /// Called every frame; talks to the system only when there is something
+    /// to say.
     pub fn report(&mut self, now: Option<NowPlaying>) {
         let since = self
             .sent
@@ -104,6 +148,15 @@ impl Reporter {
     }
 }
 
+/// What to do when the system sends a command.
+///
+/// The window draws when something happens, and a key pressed on the keyboard
+/// of a Mac while the pointer sits still is not, as far as the window is
+/// concerned, something happening: the command lands in the ring on the other
+/// side of the bridge and waits there until the next frame — which, with
+/// nothing playing, may be the next time somebody moves the mouse.
+///
+/// So the command itself has to be the thing that happens.
 type Waker = Box<dyn Fn() + Send + Sync>;
 
 static WAKE: std::sync::OnceLock<std::sync::Mutex<Option<Waker>>> =
@@ -113,12 +166,19 @@ fn waker() -> &'static std::sync::Mutex<Option<Waker>> {
     WAKE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+/// Register the nudge. The window passes its own repaint request.
 pub fn on_wake(wake: impl Fn() + Send + Sync + 'static) {
     if let Ok(mut slot) = waker().lock() {
         *slot = Some(Box::new(wake));
     }
 }
 
+/// Called from the other side of the bridge, on whichever thread the system
+/// used, the moment a command has been queued.
+///
+/// Nothing here may block: it runs inside a framework callback. Taking the
+/// lock is the only thing it does besides the nudge itself, and the only other
+/// taker is the one-off registration.
 #[no_mangle]
 pub extern "C" fn kessler_media_woken() {
     if let Ok(slot) = waker().lock() {
@@ -145,6 +205,9 @@ extern "C" {
     );
 }
 
+/// Hide the whole application, as ⌘H does. Returns false where that cannot
+/// be done — not a Mac, or a build without the bridge — so the caller can do
+/// the next best thing.
 pub fn hide_application() -> bool {
     #[cfg(kessler_media)]
     {
@@ -157,6 +220,9 @@ pub fn hide_application() -> bool {
     }
 }
 
+/// Show `rgba` — premultiplied, `width` × `height` — as the Dock icon while
+/// the application runs. False where that cannot be done this way, so the
+/// caller can hand the window its icon instead.
 pub fn set_dock_icon(rgba: &[u8], width: usize, height: usize) -> bool {
     #[cfg(kessler_media)]
     {
@@ -173,6 +239,10 @@ pub fn set_dock_icon(rgba: &[u8], width: usize, height: usize) -> bool {
     }
 }
 
+/// Register for the keys and hang the menu on the Dock icon.
+///
+/// Must be called once the application is up — the Dock asks the delegate for
+/// its menu, and there is no delegate before the first frame.
 pub fn start() {
     #[cfg(kessler_media)]
     unsafe {
@@ -182,6 +252,8 @@ pub fn start() {
     linux::start();
 }
 
+/// Whether a new track is said in a notification, and whether the window is
+/// in front, when it need not be. Linux only, for now; called every frame.
 pub fn set_notify(on: bool, in_front: bool) {
     #[cfg(all(target_os = "linux", feature = "gui"))]
     linux::set_notify(on, in_front);
@@ -189,6 +261,7 @@ pub fn set_notify(on: bool, in_front: bool) {
     let _ = (on, in_front);
 }
 
+/// The next command the system has for us, if any.
 pub fn poll() -> Option<Command> {
     #[cfg(kessler_media)]
     unsafe {
@@ -200,6 +273,7 @@ pub fn poll() -> Option<Command> {
     None
 }
 
+/// Tell the system what is playing. Prefer [`Reporter`], which knows when.
 fn update(now: Option<&NowPlaying>) {
     #[cfg(kessler_media)]
     {
@@ -271,13 +345,18 @@ extern "C" {
     fn kessler_tray_poll() -> i32;
     fn kessler_tray_cover_points() -> i32;
     fn kessler_tray_cover(rgba: *const u8, side: i32, at: i32);
+    /// Where the menu's slider was last let go of or moved to, in percent;
+    /// -1 when it has not been touched since the last asking.
     fn kessler_tray_volume() -> i32;
 }
 
+/// Whether this build can put a symbol in the menu bar at all — on Linux in the
+/// panel, see `tray_linux.rs`.
 pub fn tray_available() -> bool {
     cfg!(any(kessler_tray, all(target_os = "linux", feature = "gui")))
 }
 
+/// Put the symbol in the menu bar, or take it away. From the main thread.
 pub fn tray_show(show: bool) {
     #[cfg(kessler_tray)]
     unsafe {
@@ -289,6 +368,8 @@ pub fn tray_show(show: bool) {
     let _ = show;
 }
 
+/// Light on a dark panel, or dark on a light one. Only on Linux: a Mac's menu
+/// bar colours the symbol itself.
 pub fn tray_ink(light: bool) {
     #[cfg(all(target_os = "linux", feature = "gui"))]
     tray_linux::ink(light);
@@ -296,6 +377,8 @@ pub fn tray_ink(light: bool) {
     let _ = light;
 }
 
+/// How tall the cover beside the title in the Mac's menu stands, in
+/// points: three lines of the menu's text. From the main thread.
 pub fn tray_cover_points() -> Option<u32> {
     #[cfg(kessler_tray)]
     unsafe {
@@ -307,6 +390,10 @@ pub fn tray_cover_points() -> Option<u32> {
     None
 }
 
+/// The cover in the Mac's menu under the symbol: `side` × `side` pixels,
+/// four bytes each, twice its points; `at` 1 beside the title, 2 above it,
+/// 0 — or no pixels — for none. From any thread: the other side copies the
+/// pixels and sets them on the main thread.
 pub fn tray_cover(rgba: &[u8], side: usize, at: i32) {
     #[cfg(kessler_tray)]
     {
@@ -317,6 +404,9 @@ pub fn tray_cover(rgba: &[u8], side: usize, at: i32) {
     let _ = (rgba, side, at);
 }
 
+/// The symbol's picture: `wide` × `tall` pixels — twice its points, for
+/// Retina — four bytes a pixel, black with the coverage in alpha. From any
+/// thread — the other side copies it and sets it on the main thread.
 pub fn tray_image(rgba: &[u8], wide: usize, tall: usize) {
     #[cfg(kessler_tray)]
     {
@@ -332,6 +422,7 @@ pub fn tray_image(rgba: &[u8], wide: usize, tall: usize) {
     let _ = (rgba, wide, tall);
 }
 
+/// The words of the symbol's menu, and whether something plays.
 pub struct TrayWords<'a> {
     pub play: &'a str,
     pub pause: &'a str,
@@ -339,14 +430,22 @@ pub struct TrayWords<'a> {
     pub previous: &'a str,
     pub show: &'a str,
     pub quit: &'a str,
+    /// „vol", before the slider and the figure.
     pub volume: &'a str,
+    /// The two lines a Linux panel has instead of a slider.
     #[cfg_attr(not(all(target_os = "linux", feature = "gui")), allow(dead_code))]
     pub louder: &'a str,
     #[cfg_attr(not(all(target_os = "linux", feature = "gui")), allow(dead_code))]
     pub quieter: &'a str,
+    /// What the sleep timer says, while an episode plays; empty leaves its
+    /// row out.
     pub sleep: &'a str,
 }
 
+/// What the symbol's menu says: what is playing — `title`, one line, empty for
+/// nothing; `about`, its title, artist and record a line each, for the Mac's
+/// menu, which wraps them — whether it plays, the volume in percent, and its
+/// words.
 pub fn tray_state(playing: bool, title: &str, about: &str, volume: u8, words: &TrayWords) {
     #[cfg(kessler_tray)]
     {
@@ -393,6 +492,7 @@ pub fn tray_state(playing: bool, title: &str, about: &str, volume: u8, words: &T
     );
 }
 
+/// The next click on the symbol, as the command it stands for.
 pub fn tray_poll() -> Option<Command> {
     #[cfg(kessler_tray)]
     unsafe {
@@ -408,6 +508,8 @@ pub fn tray_poll() -> Option<Command> {
     None
 }
 
+/// A C string from anything, including text with a zero byte in it — which is
+/// not a thing a tag should hold, but is a thing a broken file can.
 #[cfg_attr(not(any(kessler_media, kessler_tray)), allow(dead_code))]
 fn text(value: &str) -> CString {
     CString::new(value.replace('\0', " ")).unwrap_or_default()
@@ -429,6 +531,8 @@ mod tests {
         }
     }
 
+    /// The numbers on the wire are the one thing both halves of the bridge
+    /// have to agree about.
     #[test]
     fn the_codes_are_fixed() {
         assert_eq!(Command::from_code(1), Some(Command::Play));
@@ -442,6 +546,9 @@ mod tests {
         assert_eq!(Command::from_code(99), None);
     }
 
+    /// The panel keeps its own clock, so a position that is only running on is
+    /// not news. Saying it anyway would mean talking to the system on every
+    /// frame for the rest of the track.
     #[test]
     fn a_position_that_merely_ran_on_is_not_news() {
         let before = playing("olson", 30.0);
@@ -450,6 +557,7 @@ mod tests {
         assert!(!worth_sending(Some(&before), Some(&after), 3.5));
     }
 
+    /// A seek is exactly the case the panel cannot work out for itself.
     #[test]
     fn a_jump_is_news() {
         let before = playing("olson", 30.0);
@@ -457,6 +565,7 @@ mod tests {
         assert!(worth_sending(Some(&before), Some(&playing("olson", 5.0)), 1.0));
     }
 
+    /// So is a different track, and so is stopping.
     #[test]
     fn a_new_track_or_a_pause_is_news() {
         let before = playing("olson", 30.0);
@@ -471,6 +580,10 @@ mod tests {
         assert!(worth_sending(None, Some(&before), 0.1));
     }
 
+    /// A cover that turns up while the track is playing — fetched from the
+    /// net a few seconds in — has to reach the panel, and the AirPlay speaker
+    /// behind it, without waiting for the next track. And one that goes has
+    /// to go there too.
     #[test]
     fn a_cover_arriving_is_news() {
         let bare = NowPlaying {
@@ -482,11 +595,14 @@ mod tests {
         assert!(!worth_sending(Some(&playing("olson", 30.0)), Some(&playing("olson", 30.5)), 0.5));
     }
 
+    /// A window with nothing playing must not keep saying so.
     #[test]
     fn silence_is_said_once() {
         assert!(!worth_sending(None, None, 10.0));
     }
 
+    /// A paused track does not drift, so nothing about it is news until it
+    /// moves.
     #[test]
     fn a_paused_track_stays_where_it_is() {
         let paused = NowPlaying {
@@ -500,6 +616,11 @@ mod tests {
         assert!(!worth_sending(Some(&paused), Some(&same), 600.0));
     }
 
+    /// The bug this guards: the key was pressed, the
+    /// command was waiting, and nothing moved until the mouse did.
+    ///
+    /// One test rather than two, because the thing it is about is a global:
+    /// a second test registering its own nudge would land in this one's count.
     #[test]
     fn a_command_nudges_the_window() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -518,6 +639,8 @@ mod tests {
         assert_eq!(nudges.load(Ordering::SeqCst), 2);
     }
 
+    /// A zero byte in a tag would cut the title off at the bridge, or fail to
+    /// convert at all.
     #[test]
     fn a_broken_title_still_crosses() {
         assert_eq!(text("olson").to_str(), Ok("olson"));
@@ -532,10 +655,12 @@ extern "C" {
     fn kessler_route_poll() -> i32;
 }
 
+/// Whether this build can tell when the headphones are gone.
 pub fn route_available() -> bool {
     cfg!(kessler_route)
 }
 
+/// Begin listening for where the sound goes. Once; later calls do nothing.
 pub fn route_start() {
     #[cfg(kessler_route)]
     unsafe {
@@ -543,6 +668,8 @@ pub fn route_start() {
     }
 }
 
+/// A pause, once, when the sound has gone over from headphones to the
+/// built-in speakers since the last asking.
 pub fn route_poll() -> Option<Command> {
     #[cfg(kessler_route)]
     unsafe {
@@ -566,6 +693,8 @@ extern "C" {
     fn kessler_touchbar_picture_wide() -> i32;
 }
 
+/// The MacBooks with a Touch Bar, by the model the system names them: the
+/// Pros of 2016 to 2020 that have one, and the 13-inch of 2022.
 const TOUCH_BAR_MODELS: &[&str] = &[
     "MacBookPro13,2",
     "MacBookPro13,3",
@@ -583,10 +712,12 @@ const TOUCH_BAR_MODELS: &[&str] = &[
     "Mac14,7",
 ];
 
+/// Whether `model` — as `hw.model` gives it — has a Touch Bar.
 fn has_touch_bar(model: &str) -> bool {
     TOUCH_BAR_MODELS.contains(&model.trim())
 }
 
+/// The model this Mac names itself by, as `hw.model`.
 #[cfg(kessler_touchbar)]
 fn hardware_model() -> Option<String> {
     let name = std::ffi::CString::new("hw.model").ok()?;
@@ -603,6 +734,7 @@ fn hardware_model() -> Option<String> {
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
+/// Whether this Mac has a Touch Bar and this build can fill it — asked once.
 pub fn touchbar_available() -> bool {
     #[cfg(kessler_touchbar)]
     {
@@ -616,6 +748,11 @@ pub fn touchbar_available() -> bool {
     }
 }
 
+/// Fill the Touch Bar with what plays while the window is in front, or give
+/// it back to the system. `lower` writes what plays small, as the window
+/// does; `whole` lets the picture fill the bar beside the cover; `station`
+/// leaves out the key back, which a station has no use for. From the main
+/// thread.
 pub fn touchbar_show(show: bool, lower: bool, whole: bool, station: bool) {
     #[cfg(kessler_touchbar)]
     unsafe {
@@ -625,6 +762,9 @@ pub fn touchbar_show(show: bool, lower: bool, whole: bool, station: bool) {
     let _ = (show, lower, whole, station);
 }
 
+/// The search field's picture on the Touch Bar, as `rgba` (`wide` × `tall`
+/// pixels, two to a point, unpremultiplied); `None` takes it away. From the
+/// main thread.
 pub fn touchbar_picture(picture: Option<(&[u8], usize, usize)>) {
     #[cfg(kessler_touchbar)]
     {
@@ -638,6 +778,9 @@ pub fn touchbar_picture(picture: Option<(&[u8], usize, usize)>) {
     let _ = picture;
 }
 
+/// How wide the Touch Bar laid out the picture, in points — the room it
+/// leaves between the title and the keys, or beside the cover. `None` before
+/// it has laid one out. From the main thread.
 pub fn touchbar_picture_wide() -> Option<usize> {
     #[cfg(kessler_touchbar)]
     {
@@ -648,6 +791,7 @@ pub fn touchbar_picture_wide() -> Option<usize> {
     None
 }
 
+/// The next key pressed on the Touch Bar, as the command it stands for.
 pub fn touchbar_poll() -> Option<Command> {
     #[cfg(kessler_touchbar)]
     unsafe {

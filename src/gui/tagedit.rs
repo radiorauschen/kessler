@@ -1,13 +1,26 @@
+//! The tag editor's state.
+//!
+//! Only what is being typed and what it means; the drawing is in
+//! [`super::library`] and the writing in [`crate::library::tags`].
+//!
+//! The one idea worth stating: a field is *touched* or it is not. Opening the
+//! editor on twelve tracks of one record shows one album name and twelve
+//! titles as "verschieden", and pressing enter must write neither of them —
+//! only what the person actually typed. Everything here follows from that.
+
 use crate::db::models::Track;
 use crate::library::metadata::Extras;
 use crate::library::tags::{Edit, Field};
 
+/// Where the word before byte `at` begins: back over the spaces, then over
+/// the word — as option and an arrow or backspace go on a Mac.
 pub fn word_before(text: &str, at: usize) -> usize {
     let head = &text[..at];
     let trimmed = head.trim_end();
     trimmed.rfind(char::is_whitespace).map_or(0, |i| i + trimmed[i..].chars().next().map_or(1, char::len_utf8))
 }
 
+/// Where the word after byte `at` ends: over the spaces, then over the word.
 pub fn word_after(text: &str, at: usize) -> usize {
     let tail = &text[at..];
     let skipped = tail.len() - tail.trim_start().len();
@@ -15,10 +28,21 @@ pub fn word_after(text: &str, at: usize) -> usize {
     at + skipped + rest.find(char::is_whitespace).unwrap_or(rest.len())
 }
 
+/// A line of text with a caret in it.
+///
+/// Small on purpose. Words go at once with option, there is no undo, and the
+/// only selection is all of it: this sits in a field the size of a track title,
+/// where the whole value is visible and retyping it is faster than anything
+/// finer. Cmd+a marks the whole value the way it does in every other field on a
+/// Mac — the next letter replaces it, backspace takes it away, cmd+c copies it,
+/// and an arrow puts the caret at that end instead (until then it emptied the
+/// field without a word).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Entry {
     text: String,
+    /// Byte offset into `text`, always on a character boundary.
     caret: usize,
+    /// All of `text` is marked, and the next key acts on all of it.
     marked: bool,
 }
 
@@ -33,6 +57,7 @@ impl Entry {
         }
     }
 
+    /// Mark everything, the way cmd+a does. Nothing to mark in an empty field.
     pub fn mark_all(&mut self) {
         self.marked = !self.text.is_empty();
         self.caret = self.text.len();
@@ -42,10 +67,12 @@ impl Entry {
         self.marked
     }
 
+    /// Let go of the mark and leave the text as it is.
     pub fn unmark(&mut self) {
         self.marked = false;
     }
 
+    /// If everything is marked, take it all away and say so.
     fn take_marked(&mut self) -> bool {
         if !self.marked {
             return false;
@@ -74,6 +101,7 @@ impl Entry {
         self.caret += s.len();
     }
 
+    /// Delete backwards. Returns whether there was anything to delete.
     pub fn backspace(&mut self) -> bool {
         if self.take_marked() {
             return true;
@@ -99,6 +127,8 @@ impl Entry {
         }
     }
 
+    /// Delete the word before the caret and the spaces between — option and
+    /// backspace on a Mac. Whether there was anything to delete.
     pub fn backspace_word(&mut self) -> bool {
         if self.take_marked() {
             return true;
@@ -112,6 +142,8 @@ impl Entry {
         true
     }
 
+    /// Delete the word after the caret and the spaces before it — option and
+    /// delete.
     pub fn delete_word(&mut self) {
         if self.take_marked() {
             return;
@@ -159,22 +191,35 @@ impl Entry {
     }
 }
 
+/// One field of the form.
 #[derive(Debug, Clone)]
 pub struct Row {
     pub field: Field,
     pub entry: Entry,
+    /// The tracks disagree about this field, and nothing has been typed yet.
+    /// Shown as "verschieden", and left alone when saving.
     pub mixed: bool,
+    /// Something has been typed here, so this field will be written.
     pub touched: bool,
 }
 
+/// The editor, while it is open.
 #[derive(Debug, Clone)]
 pub struct Editor {
+    /// The tracks being changed, by database id — indexes into a list that a
+    /// reload could renumber underneath us.
     pub tracks: Vec<i64>,
+    /// Their titles, for the line that says what is being edited.
     pub titles: Vec<String>,
     pub rows: Vec<Row>,
+    /// Which row has the keyboard.
     pub focus: usize,
 }
 
+/// The [`Extras`] of the tracks about to be edited, read from their files.
+/// Not for a selection of thousands: reading every file would hold the
+/// window for seconds, and an empty list lets [`Editor::open`] treat those
+/// fields as unknown.
 pub fn extras_of(tracks: &[&Track]) -> Vec<Extras> {
     const AT_MOST: usize = 400;
     if tracks.len() > AT_MOST {
@@ -184,6 +229,14 @@ pub fn extras_of(tracks: &[&Track]) -> Vec<Extras> {
 }
 
 impl Editor {
+    /// Open the editor on a set of tracks.
+    ///
+    /// A field every track agrees on is shown and can be edited as one value.
+    /// A field they disagree on comes up empty and marked.
+    ///
+    /// `extras` are the files' own [`Extras`], one per track; without them
+    /// (see [`extras_of`]) those fields come up as if they differed, so they
+    /// are written only where something is typed into them.
     pub fn open(tracks: &[&Track], extras: &[Extras]) -> Self {
         let known = extras.len() == tracks.len();
         let none = Extras::default();
@@ -223,12 +276,18 @@ impl Editor {
         &mut self.rows[at]
     }
 
+    /// Move to another field, wrapping at both ends: the form is a ring, and
+    /// tab at the bottom going back to the top is what everyone expects.
     pub fn step(&mut self, delta: i32) {
         self.row_mut().entry.unmark();
         let len = self.rows.len() as i32;
         self.focus = (((self.focus as i32 + delta) % len + len) % len) as usize;
     }
 
+    /// Type into the focused field.
+    ///
+    /// Number fields take digits and nothing else. Refusing the key is kinder
+    /// than accepting it and refusing the save five fields later.
     pub fn typed(&mut self, text: &str) {
         let numeric = self.row().field.numeric();
         let kept: String = text
@@ -244,6 +303,8 @@ impl Editor {
         row.mixed = false;
     }
 
+    /// Delete backwards in the focused field. Emptying a mixed field counts as
+    /// typing: it means "make them all empty", which is a real thing to want.
     pub fn backspace(&mut self) {
         let row = self.row_mut();
         if row.entry.backspace() || row.mixed {
@@ -261,6 +322,7 @@ impl Editor {
         row.mixed = false;
     }
 
+    /// The word before the caret in the focused field — option-backspace.
     pub fn backspace_word(&mut self) {
         let row = self.row_mut();
         if row.entry.backspace_word() || row.mixed {
@@ -269,6 +331,7 @@ impl Editor {
         }
     }
 
+    /// The word after the caret in the focused field — option-delete.
     pub fn delete_word(&mut self) {
         let row = self.row_mut();
         if !row.entry.is_empty() {
@@ -278,15 +341,18 @@ impl Editor {
         row.mixed = false;
     }
 
+    /// Mark all of the focused field — cmd+a.
     pub fn mark_all(&mut self) {
         self.row_mut().entry.mark_all();
     }
 
+    /// What is marked in the focused field, for cmd+c.
     pub fn marked(&self) -> Option<&str> {
         let row = self.row();
         row.entry.is_marked().then(|| row.entry.text())
     }
 
+    /// Empty the focused field in one go.
     pub fn clear(&mut self) {
         let row = self.row_mut();
         row.entry.clear();
@@ -310,6 +376,7 @@ impl Editor {
         self.row_mut().entry.end();
     }
 
+    /// What to write: the touched fields, and only those.
     pub fn edit(&self) -> Edit {
         let mut edit = Edit::new();
         for row in self.rows.iter().filter(|r| r.touched) {
@@ -318,6 +385,7 @@ impl Editor {
         edit
     }
 
+    /// Whether anything would be written at all.
     pub fn changed(&self) -> bool {
         self.rows.iter().any(|r| r.touched)
     }
@@ -371,6 +439,8 @@ mod marking {
 mod tests {
     use super::*;
 
+    /// Option-backspace takes the word before the caret with the spaces
+    /// after it, option-delete the word after with the spaces before.
     #[test]
     fn a_word_goes_at_once() {
         let mut entry = Entry::new("another green  world");
@@ -433,6 +503,8 @@ mod tests {
         editor.focus = editor.rows.iter().position(|r| r.field == field).unwrap();
     }
 
+    /// The point of the whole thing: correcting one field across a record must
+    /// not overwrite the twelve fields that differ legitimately.
     #[test]
     fn what_the_tracks_disagree_about_is_marked_not_guessed() {
         let e = editor(&[
@@ -446,6 +518,7 @@ mod tests {
         assert_eq!(row(&e, Field::Year).entry.text(), "1998");
     }
 
+    /// Opening the editor and pressing enter writes nothing at all.
     #[test]
     fn an_untouched_form_is_an_empty_edit() {
         let mut e = editor(&[track(1, "olson", "boa", "geogaddi", Some(2002))]);
@@ -456,6 +529,7 @@ mod tests {
         assert!(e.edit().is_empty());
     }
 
+    /// Only the field that was typed in gets written.
     #[test]
     fn only_what_was_typed_is_written() {
         let mut e = editor(&[
@@ -472,6 +546,8 @@ mod tests {
         assert_eq!(edit.get(Field::Title), None);
     }
 
+    /// A number field that accepted letters would only fail at the save, by
+    /// which time the person has moved on.
     #[test]
     fn a_number_field_takes_digits_only() {
         let mut e = editor(&[track(1, "olson", "boa", "geogaddi", None)]);
@@ -482,6 +558,8 @@ mod tests {
         assert_eq!(row(&e, Field::Year).entry.text(), "22");
     }
 
+    /// Emptying a field the tracks disagree about means "make them all empty",
+    /// which has to be distinguishable from never having touched it.
     #[test]
     fn emptying_a_mixed_field_counts_as_an_answer() {
         let mut e = editor(&[
@@ -495,6 +573,7 @@ mod tests {
         assert_eq!(e.edit().get(Field::Year), Some(""));
     }
 
+    /// Tab at the last field goes back to the first.
     #[test]
     fn the_form_is_a_ring() {
         let mut e = editor(&[track(1, "olson", "boa", "geogaddi", None)]);
@@ -505,6 +584,7 @@ mod tests {
         assert_eq!(e.focus, 0);
     }
 
+    /// Caret arithmetic on bytes, with text that is not one byte per letter.
     #[test]
     fn the_caret_walks_letters_not_bytes() {
         let mut entry = Entry::new("tänzer");
@@ -525,6 +605,7 @@ mod tests {
         assert_eq!(entry.caret(), entry.text().len());
     }
 
+    /// Backspace at the start of an empty field must not panic or wrap.
     #[test]
     fn deleting_nothing_does_nothing() {
         let mut entry = Entry::new("");

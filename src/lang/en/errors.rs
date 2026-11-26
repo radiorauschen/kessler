@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("die datei ist nicht mehr da", "the file is gone"),
     ("curl lässt sich nicht starten: {}", "cannot start curl: {}"),

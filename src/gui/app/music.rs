@@ -1,6 +1,10 @@
+//! Where the music comes from: reading the folders, adding to them, and
+//! what is dropped on the window.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// Rescan the configured music directories on a worker thread.
     pub fn start_rescan(&mut self) {
         if self.scan.is_some() {
             self.set_status(tr!("es läuft schon ein durchlauf"));
@@ -61,12 +65,21 @@ impl GuiApp {
         self.scan.is_some()
     }
 
+    /// How far the running scan has got, as a fraction, once it knows.
+    ///
+    /// `None` the moment there is no scan: the counts from the last one are
+    /// kept for the line that reports it, and without this the progress rule
+    /// would sit at a hundred per cent for the rest of the session.
     pub fn scan_fraction(&self) -> Option<f32> {
         (self.is_scanning() && self.scan_total > 0).then(|| {
             (self.scan_done as f32 / self.scan_total as f32).clamp(0.0, 1.0)
         })
     }
 
+    /// The library being read, for the foot, where the other work going on
+    /// in the background is said, quietly: how far, once the files are
+    /// counted — „läuft" with no end in sight says nothing — and until then
+    /// that it has begun. Nothing while no scan runs.
     pub fn scan_standing(&self) -> Option<String> {
         if !self.is_scanning() {
             return None;
@@ -83,10 +96,12 @@ impl GuiApp {
         })
     }
 
+    /// Files read and files to read, for saying it in figures.
     pub fn scan_counts(&self) -> (u32, u32) {
         (self.scan_done, self.scan_total)
     }
 
+    /// Drain whatever the scanner has said since the last frame.
     pub(in crate::gui) fn poll_scan_progress(&mut self) {
         let Some(rx) = &self.scan_progress else { return };
         while let Ok(progress) = rx.try_recv() {
@@ -103,6 +118,7 @@ impl GuiApp {
         }
     }
 
+    /// Pick up a finished scan without ever blocking the UI thread.
     pub(in crate::gui) fn poll_rescan(&mut self) {
         self.poll_scan_progress();
         let Some(rx) = &self.scan else { return };
@@ -155,6 +171,7 @@ impl GuiApp {
         }
     }
 
+    /// Ask the system for a folder, without stopping the window.
     pub fn ask_for_folder(&mut self) {
         if self.picking.is_some() {
             return;
@@ -168,6 +185,7 @@ impl GuiApp {
         self.set_status(tr!("ordner wählen…"));
     }
 
+    /// Pick up a folder the person chose, and read it in.
     pub(in crate::gui) fn poll_picker(&mut self) {
         let Some(rx) = &self.picking else { return };
         match rx.try_recv() {
@@ -193,10 +211,16 @@ impl GuiApp {
         }
     }
 
+    /// Whether a folder picker is open.
     pub fn is_picking(&self) -> bool {
         self.picking.is_some()
     }
 
+    /// Stop watching one folder, and drop the tracks that came from it.
+    ///
+    /// Keeping them would leave the library listing music from a folder the
+    /// person has just said they do not want, with no way back to it through
+    /// the interface.
     pub fn forget_folder(&mut self, index: usize) -> Result<()> {
         if index >= self.config.music_dirs.len() {
             return Ok(());
@@ -219,6 +243,11 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Take music into the library: file it, then read it in.
+    ///
+    /// On another thread, because a dropped folder can be a hundred files and
+    /// copying them is a hundred trips to the disk — on the drawing thread
+    /// that is a window that has stopped answering.
     pub fn add_music(&mut self, paths: Vec<std::path::PathBuf>) {
         use crate::library::import;
 
@@ -280,10 +309,12 @@ impl GuiApp {
         self.set_status(tr!("titel werden hinzugefügt…"));
     }
 
+    /// Whether music is being filed right now.
     pub fn is_adding(&self) -> bool {
         self.adding.is_some()
     }
 
+    /// How far that has got: done, and how many there are.
     pub fn add_counts(&self) -> (u32, u32) {
         (self.add_done, self.add_total)
     }
@@ -357,6 +388,10 @@ impl GuiApp {
         }
     }
 
+    /// What the window toolkit has to say about files over it.
+    ///
+    /// Two things: what is hovering (so the window can say what letting go
+    /// would do) and what has been let go of.
     pub(in crate::gui) fn take_dropped_files(&mut self, ctx: &egui::Context) {
         let (hovering, dropped) = ctx.input(|i| {
             (
@@ -375,6 +410,11 @@ impl GuiApp {
         }
     }
 
+    /// Files let go of over the window.
+    ///
+    /// One picture on its own means the album that is selected: dropping a
+    /// sleeve on a record is a thing people try, and it is exactly what the
+    /// cover chooser does the long way round.
     pub(in crate::gui) fn take_dropped(&mut self, paths: Vec<std::path::PathBuf>) {
         const PICTURES: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"];
         let picture = paths.len() == 1
@@ -399,6 +439,7 @@ impl GuiApp {
         self.add_music(paths);
     }
 
+    /// Ask for music files by way of the system's own panel.
     pub fn ask_for_music(&mut self) {
         if self.is_picking() || self.adding.is_some() {
             return;
@@ -425,8 +466,12 @@ impl GuiApp {
     }
 }
 
+/// How many tracks read again a scan names in the log, one line each. A
+/// library read in afresh would otherwise push everything else out of it.
 const UPDATES_LOGGED: usize = 200;
 
+/// One track read again by a scan, as a line of the log — or, where nothing
+/// came out different, why it was read at all.
 fn update_line(update: &crate::library::scanner::Update) -> String {
     use crate::library::scanner::{Field, Reread};
     let who = format!("{} – {}", update.artist, update.title);

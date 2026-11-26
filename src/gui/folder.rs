@@ -1,6 +1,20 @@
+//! Asking the operating system for a folder.
+//!
+//! Deliberately no crate for this. The Rust file-dialog crates are fine on
+//! macOS, where they wrap the one panel there is, but on Linux they pull in a
+//! D-Bus and portal stack that would end up in the build for the sake of a
+//! dialog this program opens perhaps twice in its life. Every platform already
+//! ships a command that shows its own native picker, and shelling out to it
+//! costs one process and no dependencies.
+//!
+//! The call blocks until the person answers, so it never runs on the thread
+//! drawing the window — see `GuiApp::ask_for_folder`.
+
 use std::path::PathBuf;
 use std::process::Command;
 
+/// What comes back from a picker that was cancelled, on each platform, so a
+/// cancel reads as "no folder" rather than as an error.
 fn parse_reply(status_ok: bool, stdout: &str) -> Option<PathBuf> {
     if !status_ok {
         return None;
@@ -13,6 +27,7 @@ fn parse_reply(status_ok: bool, stdout: &str) -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
+/// Show the platform's own folder picker. `None` means cancelled.
 pub fn ask(prompt: &str) -> Option<PathBuf> {
     let output = if cfg!(target_os = "macos") {
         Command::new("osascript")
@@ -50,6 +65,11 @@ pub fn ask(prompt: &str) -> Option<PathBuf> {
     )
 }
 
+/// The same, for one picture file. `None` means cancelled.
+///
+/// Separate from [`ask`] rather than a flag on it: every platform spells the
+/// two panels differently, and a picker that can return either a folder or a
+/// file would have to be checked by every caller anyway.
 pub fn ask_image(prompt: &str) -> Option<PathBuf> {
     let output = if cfg!(target_os = "macos") {
         Command::new("osascript")
@@ -87,6 +107,8 @@ pub fn ask_image(prompt: &str) -> Option<PathBuf> {
     )
 }
 
+/// Ask for a list of stations, an `.m3u` or a `.pls`. `None` means
+/// cancelled. Not filtered by kind: such lists come under many names.
 pub fn ask_playlist(prompt: &str) -> Option<PathBuf> {
     let output = if cfg!(target_os = "macos") {
         Command::new("osascript")
@@ -114,6 +136,10 @@ pub fn ask_playlist(prompt: &str) -> Option<PathBuf> {
     parse_file_reply(output.status.success(), &String::from_utf8_lossy(&output.stdout))
 }
 
+/// Ask for one or more audio files. An empty list means cancelled.
+///
+/// Several at once, because music arrives by the album — and the panel is the
+/// only way in for anyone who would rather not drag things about.
 pub fn ask_audio() -> Vec<PathBuf> {
     let output = if cfg!(target_os = "macos") {
         Command::new("osascript")
@@ -203,6 +229,8 @@ fn parse_file_reply(status_ok: bool, stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Several files come back as several lines, and anything that is not a
+    /// file is not one.
     #[test]
     fn a_list_of_files_comes_back_as_a_list() {
         let dir = std::env::temp_dir().join("kessler-files-test");
@@ -221,6 +249,7 @@ mod tests {
         assert_eq!(parse_files_reply(true, &text), vec![one]);
     }
 
+    /// The file picker's answer is checked the same way, the other way round.
     #[test]
     fn a_chosen_file_is_a_file_and_not_a_folder() {
         let dir = std::env::temp_dir().join("kessler-file-test");
@@ -251,12 +280,15 @@ mod tests {
         assert_eq!(parse_reply(true, &format!("  {}  \n", dir.display())), Some(dir));
     }
 
+    /// A helper that is missing prints its complaint somewhere, and that must
+    /// never be taken for a path.
     #[test]
     fn a_message_is_not_a_folder() {
         assert_eq!(parse_reply(true, "command not found: zenity"), None);
         assert_eq!(parse_reply(true, "/this/does/not/exist"), None);
     }
 
+    /// A file is not a folder, however it arrived.
     #[test]
     fn a_file_is_refused() {
         let file = std::env::temp_dir().join("kessler-folder-test-file");

@@ -1,16 +1,28 @@
+//! What can be clicked in what an episode says about itself: the times its
+//! notes give („00:13:31 ilse aigner …", „ab 1:02:15") to go to, and the
+//! addresses they name („npr.org/machinegods", „https://…", a mail address)
+//! to open.
+
 use std::ops::Range;
 
+/// One thing to click, and where it stands in the text, in bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mark {
+    /// So many seconds into the episode.
     At(f64),
+    /// An address to open: a web page, or `mailto:`.
     Link(String),
 }
 
+/// Where a word could be a link: at least two parts with a dot between, the
+/// last of them one of these. Not every top-level domain — enough for what
+/// show notes name, and no „z.b." or „1.5" taken for an address.
 const ENDINGS: &[&str] = &[
     "com", "org", "net", "de", "at", "ch", "fm", "io", "co", "uk", "eu", "info", "me", "tv", "app", "dev", "news", "radio",
     "show", "audio", "link", "ly", "gl", "be", "nl", "fr", "it", "es", "jp", "us", "ca", "au", "social", "online", "blog",
 ];
 
+/// The marks in `text`, in their order, none overlapping.
 pub fn marks_in(text: &str) -> Vec<(Range<usize>, Mark)> {
     let mut out = Vec::new();
     for (start, word) in words(text) {
@@ -31,6 +43,7 @@ pub fn marks_in(text: &str) -> Vec<(Range<usize>, Mark)> {
     out
 }
 
+/// The words of `text` — runs without white space — with where each starts.
 fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut at = 0;
     text.split_inclusive(char::is_whitespace).filter_map(move |piece| {
@@ -41,6 +54,8 @@ fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
     })
 }
 
+/// „1:02:15", „01:02:15" or „13:31" as seconds; minutes and seconds under
+/// sixty, two digits each after the first part.
 fn time(word: &str) -> Option<f64> {
     let parts: Vec<&str> = word.split(':').collect();
     if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit())) {
@@ -57,6 +72,8 @@ fn time(word: &str) -> Option<f64> {
     Some(secs as f64)
 }
 
+/// The address `word` names, ready to open: as it is with a scheme,
+/// `https://` before a bare one, `mailto:` before a mail address.
 fn link(word: &str) -> Option<String> {
     let lower = word.to_lowercase();
     if lower.starts_with("https://") || lower.starts_with("http://") {
@@ -69,6 +86,9 @@ fn link(word: &str) -> Option<String> {
     is_host(host).then(|| format!("https://{word}"))
 }
 
+/// Whether `host` looks like a web address's host: letters, digits and
+/// hyphens in parts between dots, at least two parts, the last a known
+/// ending.
 fn host_parts(host: &str) -> Option<Vec<&str>> {
     let parts: Vec<&str> = host.split('.').collect();
     let fine = parts.len() >= 2 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '-'));

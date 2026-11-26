@@ -5,12 +5,30 @@ use std::path::Path;
 use crate::db::models::Track;
 use crate::error::{KesslerError, Result};
 
+/// Audio formats Kessler can both tag-read *and* play back.
+///
+/// Every entry here is a promise that a file with that extension will import
+/// *and* make a sound, and `every_format_we_claim` in `player::audio` holds
+/// the promise to it: a real file of each format, opened by the real decoder.
+/// Adding an extension without adding a fixture fails that test, which is the
+/// point — a library full of tracks that go silent when clicked is worse than
+/// a library that admits what it cannot take.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "oga", "wav", "m4a", "aif", "aiff", "aifc"];
 
+/// Music Kessler walks straight past, because it could not play it.
+///
+/// Not an exhaustive list of audio formats — a list of the ones a music
+/// library on a Mac actually contains. Its whole purpose is to turn "Swinsian
+/// shows more tracks than Kessler" from a mystery into a number: a scan that
+/// says "412 files skipped: m4a" has answered the question.
+///
+/// That is what this count is for: it names the format worth the next
+/// afternoon's work.
 pub const FOREIGN_EXTENSIONS: &[&str] = &[
     "aac", "m4b", "alac", "opus", "wma", "ape", "wv", "mpc", "dsf",
 ];
 
+/// The extension, lowercased, or an empty string.
 fn extension(path: &Path) -> String {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -18,15 +36,27 @@ fn extension(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Check if a file extension is a supported audio format.
 pub fn is_supported_audio(path: &Path) -> bool {
     SUPPORTED_EXTENSIONS.contains(&extension(path).as_str())
 }
 
+/// Whether this is music Kessler cannot take, as opposed to a text file.
+///
+/// Returns the extension, so the count can be reported per format: knowing
+/// that four hundred files were skipped is half an answer, and knowing they
+/// were all `m4a` is the whole one.
 pub fn foreign_audio(path: &Path) -> Option<String> {
     let ext = extension(path);
     FOREIGN_EXTENSIONS.contains(&ext.as_str()).then_some(ext)
 }
 
+/// When a file counts as having arrived: its own timestamp, but never later
+/// than now.
+///
+/// See the note where it is used — the short of it is that the scan clock is
+/// the wrong answer, and a file dated in the future must not outrank everything
+/// else for ever.
 fn arrival(
     modified: chrono::NaiveDateTime,
     now: chrono::NaiveDateTime,
@@ -34,6 +64,7 @@ fn arrival(
     modified.min(now)
 }
 
+/// Every tag the file has, the primary one first.
 fn in_order(file: &lofty::file::TaggedFile) -> Vec<&lofty::tag::Tag> {
     let mut tags: Vec<&lofty::tag::Tag> = Vec::new();
     if let Some(primary) = file.primary_tag() {
@@ -47,12 +78,16 @@ fn in_order(file: &lofty::file::TaggedFile) -> Vec<&lofty::tag::Tag> {
     tags
 }
 
+/// A text field from the first tag that has it, not blank.
 fn first_text(tags: &[&lofty::tag::Tag], get: &dyn Fn(&lofty::tag::Tag) -> Option<String>) -> String {
     tags.iter()
         .find_map(|t| get(t).filter(|s| !s.trim().is_empty()))
         .unwrap_or_default()
 }
 
+/// The fields the editor offers that the database does not keep: what iTunes
+/// shows under „info" besides the names. Read from the file when the editor
+/// opens, never during a scan.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Extras {
     pub composer: String,
@@ -61,10 +96,13 @@ pub struct Extras {
     pub comment: String,
 }
 
+/// [`Extras`] from a file; empty where the file cannot be read strictly — a
+/// salvaged tag (see `salvaged`) has only the names to give.
 pub fn read_extras(path: &Path) -> Extras {
     strict_extras(path).unwrap_or_default()
 }
 
+/// [`Extras`], or nothing when the file's tags cannot be read strictly.
 pub fn strict_extras(path: &Path) -> Option<Extras> {
     let file = Probe::open(path).and_then(|p| p.read()).ok()?;
     let tags = in_order(&file);
@@ -90,6 +128,7 @@ pub fn strict_extras(path: &Path) -> Option<Extras> {
     })
 }
 
+/// Read metadata from an audio file and create a Track struct.
 pub fn read_metadata(path: &Path) -> Result<Track> {
     let tagged_file = match Probe::open(path)
         .map_err(|e| KesslerError::Metadata(format!("Cannot open {}: {}", path.display(), e)))?
@@ -138,6 +177,7 @@ pub fn read_metadata(path: &Path) -> Result<Track> {
     )
 }
 
+/// What a tag says about a track.
 #[derive(Debug, Clone, Default)]
 struct Fields {
     title: String,
@@ -151,6 +191,7 @@ struct Fields {
     has_artwork: bool,
 }
 
+/// What the audio itself says.
 #[derive(Debug, Clone, Default)]
 struct Sound {
     duration_secs: f64,
@@ -158,6 +199,7 @@ struct Sound {
     sample_rate: Option<u32>,
 }
 
+/// Everything a track needs that comes from the file rather than the tag.
 fn assemble(path: &Path, fields: Fields, sound: Sound) -> Result<Track> {
     let file_meta = std::fs::metadata(path)?;
     let file_size = file_meta.len();
@@ -206,6 +248,20 @@ fn assemble(path: &Path, fields: Fields, sound: Sound) -> Result<Track> {
     })
 }
 
+/// Read a file whose tag a strict parser will not touch.
+///
+/// Three faults account for nearly every one of these — a UTF-16 string with
+/// an odd byte count, an empty frame, a timestamp that stops mid-field — and
+/// each is one bad frame in a tag that otherwise says perfectly clearly what
+/// the record is. Refusing the file loses the whole album; in one library
+/// that was Panopticon, Minilogue's *Animals*, Ash Ra Tempel and half a dozen
+/// others, silently absent with only a warning in the scroll.
+///
+/// So: the audio properties come from a second read with tags switched off,
+/// which the same parser does happily, the text comes from our own forgiving
+/// frame walker, and anything still missing is taken from the path — which for
+/// a library filed as `Artist/Album/nn Title` is what the tags said anyway,
+/// because that is where the folder names came from.
 fn salvaged(path: &Path, strict: &str) -> Result<Track> {
     let sound = Probe::open(path).ok().and_then(|p| {
         p.options(lofty::config::ParseOptions::new().read_tags(false))
@@ -254,6 +310,7 @@ fn salvaged(path: &Path, strict: &str) -> Result<Track> {
     assemble(path, fields, sound)
 }
 
+/// The front of a file, where an ID3v2 tag lives.
 fn read_head(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
 
@@ -264,6 +321,11 @@ fn read_head(path: &Path) -> Result<Vec<u8>> {
     Ok(head)
 }
 
+/// Fill the gaps from `…/Artist/Album/nn Title.ext`.
+///
+/// Only the gaps: a tag that said something keeps saying it. The number in
+/// front of a filename is a track number often enough to be worth taking, and
+/// wrong rarely enough that it beats leaving the column empty.
 fn from_path(path: &Path, fields: &mut Fields) {
     let stem = path
         .file_stem()
@@ -303,6 +365,7 @@ fn from_path(path: &Path, fields: &mut Fields) {
     }
 }
 
+/// What a filename says about a track.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Named {
     disc: Option<u32>,
@@ -310,6 +373,10 @@ struct Named {
     title: String,
 }
 
+/// `"04 Magickon"` → track 4, "Magickon".
+///
+/// Also `"1-11 Animals"`, which iTunes writes for the second disc of a set:
+/// the first number is the disc and the second is the track.
 fn split_leading_number(stem: &str) -> Named {
     let trimmed = stem.trim_start();
     let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -354,6 +421,10 @@ mod tests {
             .unwrap()
     }
 
+    /// mp3s as an older kessler wrote them: an
+    /// ID3v2 tag with the genre, the year and the track number but no title,
+    /// artist or album, and the names only in the ID3v1 tag at the end. Each
+    /// field comes from whichever tag has it, the ID3v2 one first.
     #[test]
     fn names_missing_from_the_front_tag_come_from_the_one_at_the_end() {
         fn synchsafe(n: usize) -> [u8; 4] {
@@ -398,6 +469,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The bug this guards: dating every track by the scan clock. Do that and
+    /// the first scan of a library makes a decade of music equally new, and
+    /// "newest first" cannot tell anyone what they just found.
     #[test]
     fn a_file_arrives_when_it_was_written() {
         let now = at(2026, 9, 11);
@@ -405,6 +479,8 @@ mod tests {
         assert_eq!(arrival(at(2026, 9, 10), now), at(2026, 9, 10));
     }
 
+    /// A timestamp from the future would sit at the top of "newest first" until
+    /// the calendar caught up with it.
     #[test]
     fn nothing_arrives_later_than_now() {
         let now = at(2026, 9, 11);
@@ -412,6 +488,8 @@ mod tests {
     }
 }
 
+/// The three faults that kept whole albums out of a library, each as a
+/// real file on disk, read through the real `read_metadata`.
 #[cfg(test)]
 mod salvage_tests {
     use super::*;
@@ -444,6 +522,9 @@ mod salvage_tests {
         out
     }
 
+    /// Write an mp3 with the given frames in front of real audio, filed under
+    /// its own scratch directory as `Artist/Album/nn Title.mp3` — the path is
+    /// part of what is being tested.
     fn write(scratch: &str, filed_as: &str, major: u8, frames: &[Vec<u8>]) -> std::path::PathBuf {
         let body: Vec<u8> = frames.concat();
         let mut file = b"ID3".to_vec();
@@ -458,6 +539,7 @@ mod salvage_tests {
         path
     }
 
+    /// "Text decoding: UTF-16 string has an odd length"
     #[test]
     fn a_halved_utf16_character_does_not_lose_the_file() {
         let mut broken = vec![1u8, 0xFF, 0xFE];
@@ -487,6 +569,10 @@ mod salvage_tests {
         assert!(track.duration_secs > 0.0, "the audio is still measured");
     }
 
+    /// "ID3v2: Frame isn't long enough to extract the necessary information" —
+    /// here a v2.4 frame that sets the data-length-indicator flag and then has
+    /// room for nothing but the indicator. Everything around it is good, and
+    /// that is what gets kept.
     #[test]
     fn a_frame_too_short_for_its_own_header_does_not_lose_the_file() {
         let mut truncated = b"TXXX".to_vec();
@@ -514,6 +600,7 @@ mod salvage_tests {
         assert_eq!(track.track_number, Some(1));
     }
 
+    /// "Encountered an invalid timestamp: Timestamp segment is too short"
     #[test]
     fn a_half_written_date_does_not_lose_the_file() {
         let path = write(
@@ -535,6 +622,7 @@ mod salvage_tests {
         assert_eq!(track.year, Some(2008));
     }
 
+    /// A two-disc set names its files `1-11 Animals`: the track is 11, not 1.
     #[test]
     fn a_disc_prefix_in_the_filename_is_read_as_a_disc_prefix() {
         let named = |disc, track, title: &str| Named {
@@ -562,6 +650,7 @@ mod salvage_tests {
         assert_eq!(split_leading_number("Foil"), Named::default());
     }
 
+    /// A readable file must not go anywhere near the salvage path.
     #[test]
     fn an_ordinary_file_is_read_the_ordinary_way() {
         let path = write(
@@ -581,6 +670,8 @@ mod salvage_tests {
     }
 }
 
+/// Telling music we can take from music we cannot, and both from everything
+/// else in a music folder.
 #[cfg(test)]
 mod format_tests {
     use super::*;
@@ -597,6 +688,9 @@ mod format_tests {
         }
     }
 
+    /// The whole reason this exists: an iTunes library is full of these, an
+    /// iPod plays them, and Kessler currently cannot — so they have to be
+    /// counted rather than silently passed over.
     #[test]
     fn the_formats_we_cannot_play_are_counted() {
         for (name, ext) in [
@@ -612,6 +706,9 @@ mod format_tests {
         }
     }
 
+    /// A music folder is full of things that are not music, and counting a
+    /// cover or a text file as a missing track would answer the question
+    /// wrongly rather than not at all.
     #[test]
     fn everything_else_is_neither() {
         for name in ["cover.jpg", "notes.txt", "folder.png", "album.m3u", "no-extension"] {
@@ -620,6 +717,8 @@ mod format_tests {
         }
     }
 
+    /// No format may be in both lists: one says "read it", the other says
+    /// "count it", and a format in both would be read *and* reported missing.
     #[test]
     fn the_two_lists_do_not_overlap() {
         for ext in SUPPORTED_EXTENSIONS {

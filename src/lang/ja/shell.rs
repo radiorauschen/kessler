@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("sprache", "言語"),
     ("bildschirmschoner", "スクリーンセーバー"),

@@ -1,17 +1,31 @@
+//! Loudness, kept beside the tracks — see [`crate::library::loudness`].
+//!
+//! A table of its own rather than more columns on `tracks`: it is filled
+//! long after a track arrives, by a run of its own, and a track is read
+//! and written in a hundred places that have no business knowing about it.
+
 use rusqlite::params;
 
 use super::Database;
 use crate::error::Result;
 use crate::library::loudness::Loudness;
 
+/// One track as the levelling run sees it.
 #[derive(Debug, Clone)]
 pub struct LoudRow {
     pub id: i64,
     pub path: std::path::PathBuf,
+    /// Which record it belongs to: the grouping artist and the album, or
+    /// the track alone when it has no album.
     pub record: String,
     pub seconds: f64,
+    /// The file's modification time as the library has it.
     pub modified: String,
+    /// What is known — kept even when the file has changed since, which
+    /// is mostly its tags being edited: the sound is the same, and levelling
+    /// goes on with the old figure until the new one is in.
     pub known: Option<Known>,
+    /// Whether `known` is for the file as it is now.
     pub fresh: bool,
 }
 
@@ -22,6 +36,7 @@ pub struct Known {
     pub track_gain: f64,
     pub album_gain: Option<f64>,
     pub album_peak: Option<f64>,
+    /// The record's gain came from the file's tags, and a run leaves it.
     pub album_from_tags: bool,
     pub from_tags: bool,
 }
@@ -44,6 +59,7 @@ impl Database {
         Ok(())
     }
 
+    /// Every track, with what is known about its loudness.
     pub fn loudness_rows(&self) -> Result<Vec<LoudRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.path, t.artist_key, t.album_key, t.album, t.duration_secs,
@@ -88,6 +104,7 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// What was found for one track, for the state of the file given.
     pub fn set_loudness(&self, id: i64, loud: &Loudness, file_date: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO loudness (track_id, lufs, peak, track_gain, album_gain, album_peak,
@@ -113,6 +130,8 @@ impl Database {
         Ok(())
     }
 
+    /// A record's gain, worked out from its tracks, on every one of them
+    /// whose file did not bring its own.
     pub fn set_album_loudness(&self, ids: &[i64], gain: f64, peak: f64) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         for id in ids {
@@ -160,6 +179,9 @@ mod tests {
         }
     }
 
+    /// What was measured is known for the file as it was; a file changed
+    /// since is unknown again, and a record's gain does not overwrite one
+    /// a file brought itself.
     #[test]
     fn loudness_is_kept_for_the_file_as_it_was() {
         let db = Database::open_memory().unwrap();

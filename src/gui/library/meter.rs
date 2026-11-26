@@ -1,36 +1,80 @@
+//! „zeiger": two moving-needle instruments behind the search field, as a tuner
+//! of the seventies had them under a strip of glass — on the left how loud it
+//! is (on a station, how much of it the network has brought ahead: its field
+//! strength), on the right where the sound stands between the two speakers,
+//! the needle in the middle while it is balanced.
+//!
+//! The field is the window; behind it an arc of scale for each, a word under
+//! it in Misaki, and a needle turning on a pivot below the field's edge, so
+//! only its upper part is seen.
+//! The needles are not set to the value but pulled towards it, a spring and a
+//! damper on a little mass: they take a moment to get there, go a hair past
+//! and settle — which is what such a needle is.
+
 use super::*;
 
+/// How far a needle swings either side of upright, in radians.
 const SWING: f32 = 0.62;
 
+/// How quickly a needle answers, as the frequency it would ring at
+/// undamped, and how much it is damped: a little under critical, so it goes
+/// a hair past and comes back, as a moving coil does.
 const RING_HZ: f32 = 1.7;
 const DAMPING: f32 = 0.72;
 
+/// The loudness the left needle reads, in dB below full scale: the bottom of
+/// its scale and the top.
 const QUIETEST_DB: f32 = -36.0;
 const LOUDEST_DB: f32 = 0.0;
 
+/// How far the right needle leans for a difference between the channels: a
+/// tenth louder on one side is already a clear lean. Most music is balanced,
+/// and a needle that hardly moves says nothing.
 const LEAN: f32 = 4.0;
 
+/// How long a step of the needles' motion is at most, in seconds: frames that
+/// come late are made up in steps, so a stall is not a jump.
 const STEP: f32 = 1.0 / 120.0;
 
+/// Where an arc stands in its room: half as wide as the room by this much,
+/// its top this far down; the word under it this far down; the needle
+/// reaching this far past it — all against the room's height but the first.
 const ARC_HALF_WIDE: f32 = 0.38;
 const ARC_TOP: f32 = 0.42;
 const WORD_AT: f32 = 0.6;
 const NEEDLE_PAST: f32 = 0.24;
 
+/// The ticks standing on each arc, as parts of its swing either side of
+/// upright, and how tall they are against the room's height: five along the
+/// level's arc, one in the middle of the balance's.
 const LEVEL_TICKS: &[f32] = &[-1.0, -0.5, 0.0, 0.5, 1.0];
 const MIDDLE_TICKS: &[f32] = &[0.0];
 const TICK_TALL: f32 = 0.16;
 
+/// Over how much of its width the needle's edge fades out: a little, so it
+/// is still a line of the dots' own fineness.
 const NEEDLE_SOFT: f32 = 0.6;
 
+/// How far the needles are from the field towards the ink: as far as the
+/// field's other pictures are drawn — see `picture::spectrum_strip`.
 const NEEDLE_INK: f32 = 0.72;
 
+/// How often the window draws while a needle moves, as the period of a clock
+/// counted from the window's start — the clock the time and the rule under
+/// the title tick on, four times a second: `[ui] meter_rate` a second, each
+/// of them a whole number of steps to the quarter second, so each of the
+/// clock's frames is one of the needles', and none comes in between. See
+/// `picture::on_grid`.
 pub(in crate::gui) const METER_RATES: [u32; 4] = [24, 12, 8, 4];
 
+/// The needles' steps a second for `asked`: the nearest of [`METER_RATES`]
+/// not above it, so a file that says 10 is read as 8.
 pub(in crate::gui) fn meter_rate(asked: u32) -> u32 {
     METER_RATES.iter().copied().find(|&rate| rate <= asked).unwrap_or(4)
 }
 
+/// One needle: where it points, nought to one across its scale, and how fast
+/// it is going.
 #[derive(Default, Clone, Copy)]
 struct Needle {
     at: f32,
@@ -38,6 +82,7 @@ struct Needle {
 }
 
 impl Needle {
+    /// Pulled towards `to` for `dt` seconds.
     fn pull(&mut self, to: f32, dt: f32) {
         let omega = std::f32::consts::TAU * RING_HZ;
         let mut left = dt.min(0.25);
@@ -55,15 +100,25 @@ impl Needle {
     }
 }
 
+/// The two needles and when they were last moved.
 pub(in crate::gui) struct Meter {
     level: Needle,
     middle: Needle,
     last: Option<f64>,
+    /// The scale and the needles as last screened, kept: a texture made
+    /// afresh each frame is an allocation on the graphics card each frame.
     scale_picture: Option<egui::TextureHandle>,
     word_picture: Option<egui::TextureHandle>,
     needle_picture: Option<egui::TextureHandle>,
+    /// What the scale and the words were last drawn for: they stand still,
+    /// and are drawn again only when the field's size, the screen or the
+    /// word changes — the language included, which the words are in.
     still_for: Option<(usize, usize, String, bool, crate::lang::Lang)>,
+    /// Where the needles pointed when last drawn, in thousandths of a
+    /// radian: a frame where neither has moved draws nothing new.
     needles_at: Option<[i32; 2]>,
+    /// The needles' picture, kept between frames: only the strips the
+    /// needles were in, and are in now, are drawn again.
     needle_grey: Vec<u8>,
 }
 
@@ -83,6 +138,7 @@ impl Default for Meter {
     }
 }
 
+/// The two channels' loudness over the last moment, as root mean squares.
 fn channels(pairs: &[[f32; 2]]) -> (f32, f32) {
     if pairs.is_empty() {
         return (0.0, 0.0);
@@ -92,11 +148,14 @@ fn channels(pairs: &[[f32; 2]]) -> (f32, f32) {
     ((l / n).sqrt(), (r / n).sqrt())
 }
 
+/// Where the left needle should point for a loudness, nought to one.
 fn level_reading(rms: f32) -> f32 {
     let db = 20.0 * rms.max(1e-6).log10();
     ((db - QUIETEST_DB) / (LOUDEST_DB - QUIETEST_DB)).clamp(0.0, 1.0)
 }
 
+/// Where the right needle should point for the two channels, nought to one,
+/// a half in the middle.
 fn middle_reading(left: f32, right: f32) -> f32 {
     let sum = left + right;
     if sum < 1e-4 {
@@ -105,10 +164,13 @@ fn middle_reading(left: f32, right: f32) -> f32 {
     (0.5 + (right - left) / sum * LEAN / 2.0).clamp(0.0, 1.0)
 }
 
+/// Where the left needle should point on a station: how much the network has
+/// brought ahead of what is heard, half its room a full scale.
 fn field_reading(held: std::time::Duration) -> f32 {
     (held.as_secs_f32() / (crate::player::ahead::LIVE_ROOM.as_secs_f32() * 0.5)).clamp(0.0, 1.0)
 }
 
+/// Draw the two instruments in `field`, `showing` of the way in.
 pub(in crate::gui) fn draw(app: &mut GuiApp, ui: &Ui, field: Rect, palette: &Palette, showing: f32) {
     let now = ui.input(|i| i.time);
     let dt = app.meter.last.map_or(0.0, |was| (now - was) as f32);
@@ -252,6 +314,8 @@ pub(in crate::gui) fn draw(app: &mut GuiApp, ui: &Ui, field: Rect, palette: &Pal
     }
 }
 
+/// The words in Misaki, a dot of it a cell of `point`, under each arc: each
+/// word's columns, and the cell its first column's top stands in.
 fn spell(dials: &[Instrument], words: [&str; 2], field: Rect, point: f32) -> Vec<(Vec<u8>, i64, i64)> {
     dials
         .iter()
@@ -266,6 +330,7 @@ fn spell(dials: &[Instrument], words: [&str; 2], field: Rect, point: f32) -> Vec
         .collect()
 }
 
+/// Whether a dot of the words is at the cell (`column`, `row`).
 fn spelled_at(spelled: &[(Vec<u8>, i64, i64)], column: i64, row: i64) -> bool {
     spelled.iter().any(|(columns, left, top)| {
         let (cx, cy) = (column - left, row - top);
@@ -273,6 +338,8 @@ fn spelled_at(spelled: &[(Vec<u8>, i64, i64)], column: i64, row: i64) -> bool {
     })
 }
 
+/// The needles for a screen of their own — the Touch Bar's, each pixel lit
+/// or dark — moving by their own clock, wherever they are drawn.
 pub(in crate::gui) struct MeterDots {
     level: Needle,
     middle: Needle,
@@ -284,6 +351,8 @@ impl MeterDots {
         Self { level: Needle::default(), middle: Needle { at: 0.5, speed: 0.0 }, last: None }
     }
 
+    /// The two instruments `width` × `height` pixels, a pixel a cell, for
+    /// what was heard last; `station` reads the left one as field strength.
     pub(in crate::gui) fn paint(&mut self, pairs: &[[f32; 2]], station: bool, width: usize, height: usize) -> Vec<bool> {
         let now = std::time::Instant::now();
         let dt = self.last.map_or(0.0, |was| now.duration_since(was).as_secs_f32());
@@ -315,6 +384,8 @@ impl MeterDots {
     }
 }
 
+/// One instrument in its room: where its pivot is, how long its arc's
+/// radius, where its ticks stand and where its needle points.
 #[derive(Clone, Copy)]
 struct Instrument {
     room: Rect,
@@ -331,6 +402,8 @@ impl Instrument {
         Self { room, pivot, radius, ticks, angle: -SWING + 2.0 * SWING * at }
     }
 
+    /// Whether `p` is on the scale: the arc, or one of its ticks standing on
+    /// it — each a `thick` line, as thin as the needle.
     fn on_scale(&self, p: egui::Pos2, thick: f32) -> bool {
         if !self.room.contains(p) {
             return false;
@@ -344,10 +417,12 @@ impl Instrument {
         arc || tick
     }
 
+    /// The same instrument, its needle at `angle`.
     fn pointing(&self, angle: f32) -> Self {
         Self { angle, ..*self }
     }
 
+    /// The box the needle lies in, with room for its soft edge.
     fn needle_bounds(&self, thick: f32) -> Rect {
         let along = Vec2::new(self.angle.sin(), -self.angle.cos());
         let foot = self.pivot + along * (self.radius - self.room.height() * 2.0);
@@ -355,6 +430,9 @@ impl Instrument {
         Rect::from_two_pos(foot, tip).expand(thick * (1.0 + NEEDLE_SOFT) + 1.0)
     }
 
+    /// How much of the cell at `p` the needle covers, nought to one: a line
+    /// `thick` wide from below the field up past the arc, its edges softened
+    /// over [`NEEDLE_SOFT`] of that, so it does not stair-step as it turns.
     fn needle_cover(&self, p: egui::Pos2, thick: f32) -> f32 {
         let soft = thick * NEEDLE_SOFT;
         if !self.room.expand(thick + soft).contains(p) {
@@ -375,6 +453,7 @@ impl Instrument {
 mod tests {
     use super::*;
 
+    /// The ticks stand on the arc, at their places and nowhere between.
     #[test]
     fn the_ticks_stand_on_the_arc() {
         let room = Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::new(100.0, 28.0));
@@ -387,6 +466,8 @@ mod tests {
         assert!(dial.on_scale(up(SWING * 0.25, dial.radius), 1.0));
     }
 
+    /// The needle covers its middle wholly, fades at its edge, and is gone a
+    /// little way off.
     #[test]
     fn the_needle_is_soft_only_at_its_edge() {
         let room = Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::new(100.0, 28.0));
@@ -399,6 +480,8 @@ mod tests {
         assert_eq!(upright.needle_cover(egui::pos2(x + 3.0, y), 1.0), 0.0);
     }
 
+    /// A needle pulled to a place gets there, goes only a little past it,
+    /// and settles.
     #[test]
     fn a_needle_overshoots_a_little_and_settles() {
         let mut needle = Needle::default();
@@ -411,6 +494,8 @@ mod tests {
         assert!((needle.at - 0.6).abs() < 0.005 && !needle.moving(0.6));
     }
 
+    /// The needles' frames fall on the clock's: every quarter second is one
+    /// of their ticks.
     #[test]
     fn the_needles_tick_with_the_clock() {
         for rate in METER_RATES {
@@ -422,6 +507,8 @@ mod tests {
         assert_eq!(meter_rate(100), 24);
     }
 
+    /// Loud reads high, quiet low; balanced stands in the middle, one side
+    /// louder leans to it.
     #[test]
     fn the_readings_go_the_right_way() {
         assert!(level_reading(0.5) > level_reading(0.05));

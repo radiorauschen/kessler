@@ -1,6 +1,11 @@
+//! Tags and covers: the editor, the searches for years, genres and
+//! pictures, and writing what was found.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// Rate `tracks` in whole stars, 0 to take the rating away: in the
+    /// library, and in the rows on screen at once.
     pub(in crate::gui) fn rate_tracks(&mut self, ids: &[i64], stars: u8) {
         let stars = stars.min(5);
         for id in ids {
@@ -16,6 +21,7 @@ impl GuiApp {
         }
     }
 
+    /// Open the tag editor on whatever is selected.
     pub fn open_tag_editor(&mut self) {
         self.row_menu = None;
         self.cover_pick = None;
@@ -30,10 +36,16 @@ impl GuiApp {
         self.focus = Column::Tracks;
     }
 
+    /// Close it without writing anything.
     pub fn cancel_tag_editor(&mut self) {
         self.editor = None;
     }
 
+    /// Read out everything known about the selected track.
+    ///
+    /// One track, not the selection: the panel is a list of single answers —
+    /// one path, one bitrate — and "verschieden" thirty times over would say
+    /// nothing at all. The row the cursor is on is the one it is about.
     pub fn open_details(&mut self) {
         self.row_menu = None;
         self.editor = None;
@@ -49,10 +61,12 @@ impl GuiApp {
         self.focus = Column::Tracks;
     }
 
+    /// Put the track list back.
     pub fn close_details(&mut self) {
         self.details = None;
     }
 
+    /// Every file of one album, by its place in `albums`.
     pub(in crate::gui) fn album_tracks(&self, index: usize) -> Result<(String, String, Vec<Track>)> {
         let Some(album) = self.albums.get(index) else {
             return Ok((String::new(), String::new(), Vec::new()));
@@ -67,6 +81,7 @@ impl GuiApp {
         Ok((album.artist.clone(), album.name.clone(), tracks))
     }
 
+    /// Edit the tags of a whole album at once.
     pub fn edit_album_tags(&mut self, index: usize) -> Result<()> {
         self.row_menu = None;
         self.cover_pick = None;
@@ -84,6 +99,7 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Go looking for a cover for one album.
     pub fn search_cover(&mut self, index: usize) -> Result<()> {
         self.row_menu = None;
         self.editor = None;
@@ -105,6 +121,10 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Take a cover from a file the person picks.
+    ///
+    /// The panel blocks until it is answered, so it goes on another thread —
+    /// the same arrangement as the folder picker.
     pub fn cover_from_file(&mut self, index: usize) -> Result<()> {
         self.row_menu = None;
         let (_, _, tracks) = self.album_tracks(index)?;
@@ -121,6 +141,7 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Has the person picked a cover file yet?
     pub(in crate::gui) fn poll_cover_file(&mut self) {
         let Some((rx, index)) = &self.picking_cover else {
             return;
@@ -144,6 +165,11 @@ impl GuiApp {
         }
     }
 
+    /// Go through every album without a year, or without a genre, and ask
+    /// MusicBrainz for it.
+    ///
+    /// Only the ones with none: a year or a genre that is there was put there
+    /// by somebody, and a reissue's own year may be the one they wanted.
     pub fn start_tag_hunt(&mut self, what: Hunted) -> Result<()> {
         if self.tag_hunt.is_some() {
             return Ok(());
@@ -235,6 +261,7 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Stop asking. What has been written stays written.
     pub fn stop_tag_hunt(&mut self) {
         if let Some(hunt) = self.tag_hunt.take() {
             hunt.stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -247,6 +274,7 @@ impl GuiApp {
         }
     }
 
+    /// Take in what the run has found, and write it.
     pub(in crate::gui) fn poll_tag_hunt(&mut self) {
         let Some(hunt) = self.tag_hunt.as_mut() else {
             return;
@@ -333,6 +361,8 @@ impl GuiApp {
         }
     }
 
+    /// Write what was found into every track of one record that lacks it,
+    /// and read them back in. Returns how many were written.
     pub(in crate::gui) fn write_found(&mut self, artist: &str, album: &str, found: &Found) -> Result<usize> {
         let tracks = self.db.get_tracks(
             Some(artist),
@@ -363,6 +393,10 @@ impl GuiApp {
         Ok(written)
     }
 
+    /// Have Music.app read these files' tags again, after kessler wrote
+    /// them: it keeps its own copy and would go on showing the old ones.
+    /// Only a Music that is running, unless kessler hands it new files
+    /// anyway — see [`crate::library::import::music_tracks`].
     pub(in crate::gui) fn refresh_in_music(&mut self, files: &[(String, std::path::PathBuf)]) {
         if files.is_empty() || !crate::library::import::music_app_available() {
             return;
@@ -376,6 +410,7 @@ impl GuiApp {
         crate::library::import::tell_music(&told);
     }
 
+    /// Look in on a cover search, and write the picture if one has arrived.
     pub(in crate::gui) fn poll_cover_pick(&mut self) {
         let Some(picker) = self.cover_pick.as_mut() else {
             return;
@@ -395,6 +430,7 @@ impl GuiApp {
         }
     }
 
+    /// Put a picture on one album, by its place in `albums`.
     pub(in crate::gui) fn put_cover(&mut self, index: usize, bytes: &[u8]) -> Result<()> {
         let (_, _, tracks) = self.album_tracks(index)?;
         if tracks.is_empty() {
@@ -406,6 +442,12 @@ impl GuiApp {
         self.write_cover(&artist_key, &album_key, &paths, bytes)
     }
 
+    /// The one place a cover is written: into every file of the album, and
+    /// into the cache the grid draws from.
+    ///
+    /// The picture is decoded and re-encoded once, before any file is touched
+    /// — so a download that turned out to be an error page cannot reach the
+    /// first track, let alone the twelfth.
     pub(in crate::gui) fn write_cover(
         &mut self,
         artist_key: &str,
@@ -457,6 +499,12 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Write the form into the files, then read those files back.
+    ///
+    /// Reading back rather than patching the database from the form is the
+    /// whole reason this is short: whatever the tag library actually managed
+    /// to write is what the library then knows, and a field that silently did
+    /// not take cannot show as changed here while the file says otherwise.
     pub fn save_tags(&mut self) -> Result<()> {
         let Some(editor) = self.editor.take() else {
             return Ok(());
@@ -578,6 +626,11 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Forget what was concluded about missing covers, and look again.
+    ///
+    /// The whole of "look again" is deleting the markers: a scan then reads
+    /// every album that has no picture yet, which is exactly the set that
+    /// might have gained one.
     pub fn look_for_covers_again(&mut self) {
         let dir = self.config.artwork_dir();
         match crate::library::artwork::forget_misses(&dir) {

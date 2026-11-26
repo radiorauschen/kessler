@@ -3,15 +3,28 @@ use rand::thread_rng;
 
 use crate::db::models::{RepeatMode, Track};
 
+/// The playback queue manages the ordered list of tracks to play.
 #[derive(Debug, Clone)]
 pub struct PlayQueue {
+    /// The full ordered list of tracks.
     tracks: Vec<Track>,
+    /// Index of the currently playing track (None if queue is empty / nothing playing).
     current_index: Option<usize>,
+    /// History of played track indices (for "previous" functionality).
     history: Vec<usize>,
+    /// Whether shuffle is enabled.
     shuffle: bool,
+    /// Shuffled index order (used when shuffle is on).
     shuffle_order: Vec<usize>,
+    /// Current position in shuffle_order.
     shuffle_pos: usize,
+    /// Repeat mode.
     pub repeat: RepeatMode,
+    /// Bumped by everything that changes the list or the place in it.
+    ///
+    /// So that whoever writes the queue to disk can tell in one comparison
+    /// whether there is anything new to write, without copying a list of
+    /// eight thousand paths every frame to find out there is not.
     revision: u64,
 }
 
@@ -29,6 +42,8 @@ impl PlayQueue {
         }
     }
 
+    /// A file that has moved: every queued copy of the track follows it, so
+    /// the queue does not reach for a name the disk no longer has.
     pub fn retarget(&mut self, id: i64, path: &std::path::Path) {
         let mut changed = false;
         for track in self.tracks.iter_mut().filter(|t| t.id == id) {
@@ -40,6 +55,7 @@ impl PlayQueue {
         }
     }
 
+    /// Replace the entire queue with new tracks, starting at the given index.
     pub fn set_tracks(&mut self, tracks: Vec<Track>, start_index: usize) {
         self.revision += 1;
         self.tracks = tracks;
@@ -55,6 +71,14 @@ impl PlayQueue {
         }
     }
 
+    /// Put tracks in directly after whatever is playing.
+    ///
+    /// "Next" means next, not "next once the rest of this record is done": the
+    /// whole reason for asking is that you thought of something and want it
+    /// soon. Several at once keep their order among themselves.
+    ///
+    /// With nothing playing there is no "after", so they go to the front and
+    /// become the queue.
     pub fn insert_next(&mut self, tracks: Vec<Track>) {
         if tracks.is_empty() {
             return;
@@ -73,6 +97,11 @@ impl PlayQueue {
         }
     }
 
+    /// Put tracks in at one exact place.
+    ///
+    /// The cursor follows the track it is on, as everywhere else here: rows
+    /// pushed down by an insertion above them keep playing, and the one
+    /// playing goes on playing.
     pub fn insert_at(&mut self, at: usize, tracks: Vec<Track>) {
         if tracks.is_empty() {
             return;
@@ -91,6 +120,7 @@ impl PlayQueue {
         }
     }
 
+    /// Put tracks at the end.
     pub fn append(&mut self, tracks: Vec<Track>) {
         if tracks.is_empty() {
             return;
@@ -105,10 +135,14 @@ impl PlayQueue {
         }
     }
 
+    /// How many times this queue has changed — see [`revision`].
+    ///
+    /// [`revision`]: PlayQueue::revision
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
+    /// Make this row the one that plays, without disturbing the rest.
     pub fn jump_to(&mut self, index: usize) {
         self.revision += 1;
         if index >= self.tracks.len() {
@@ -125,12 +159,21 @@ impl PlayQueue {
         }
     }
 
+    /// Go back to how it was before a change that came to nothing — see
+    /// `Player::or_as_it_was`. Counted as a change of its own, so whoever
+    /// writes the queue to disk writes it again.
     pub fn put_back(&mut self, before: PlayQueue) {
         let revision = self.revision.max(before.revision) + 1;
         *self = before;
         self.revision = revision;
     }
 
+    /// Move one row of the queue to another place in it.
+    ///
+    /// The cursor follows the track it is on rather than the number that track
+    /// had: dragging the row above the playing one below it must not make the
+    /// player skip, and dragging the playing row itself must not start
+    /// something else. Both are bugs waiting to be written.
     pub fn move_row(&mut self, from: usize, to: usize) {
         if from >= self.tracks.len() || from == to {
             return;
@@ -159,6 +202,7 @@ impl PlayQueue {
         }
     }
 
+    /// Remove the track at the given queue position.
     pub fn remove(&mut self, index: usize) {
         if index >= self.tracks.len() {
             return;
@@ -180,10 +224,20 @@ impl PlayQueue {
         }
     }
 
+    /// Get the currently playing track.
     pub fn current(&self) -> Option<&Track> {
         self.current_index.and_then(|i| self.tracks.get(i))
     }
 
+    /// Advance to the next track. Returns the new current track.
+    /// What [`Self::next`] would land on, without going there.
+    ///
+    /// The one thing the gapless hand-over needs: the file that has to be laid
+    /// at the sink's door *before* the current one runs out. It has to read
+    /// the same rules `next` obeys — one track on repeat is itself again, a
+    /// shuffled queue takes the next in its own order, the end of a queue that
+    /// does not repeat is nothing — and it has to leave every one of them
+    /// exactly as it found them.
     pub fn peek_next(&self) -> Option<&Track> {
         if self.tracks.is_empty() {
             return None;
@@ -248,6 +302,9 @@ impl PlayQueue {
         self.current()
     }
 
+    /// Go back to the previous track: the one before it in the queue, as → goes
+    /// to the one after. Only shuffled is there no „before" in the queue: then
+    /// back to what played before it.
     pub fn previous(&mut self) -> Option<&Track> {
         self.revision += 1;
         let back = if self.shuffle { self.history.pop() } else { None };
@@ -268,6 +325,7 @@ impl PlayQueue {
         self.current()
     }
 
+    /// Toggle shuffle on/off.
     pub fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
         if self.shuffle {
@@ -279,14 +337,17 @@ impl PlayQueue {
         self.shuffle
     }
 
+    /// Get all tracks in the queue.
     pub fn tracks(&self) -> &[Track] {
         &self.tracks
     }
 
+    /// Get the current index.
     pub fn current_index(&self) -> Option<usize> {
         self.current_index
     }
 
+    /// Whether the queue is empty.
     pub fn is_empty(&self) -> bool {
         self.tracks.is_empty()
     }
@@ -296,6 +357,8 @@ impl PlayQueue {
         self.tracks.len()
     }
 
+    /// Clear the entire queue.
+    /// Everything but the current track, which becomes the whole queue.
     pub fn keep_only_current(&mut self) {
         let Some(current) = self.current().cloned() else {
             self.clear();
@@ -379,6 +442,7 @@ mod tests {
         q.tracks().iter().map(|t| t.title.clone()).collect()
     }
 
+    /// "Next" means next, not "after the rest of the record".
     #[test]
     fn what_is_asked_for_next_goes_next() {
         let mut q = queue(&["a", "b", "c"], 0);
@@ -387,6 +451,7 @@ mod tests {
         assert_eq!(q.current().unwrap().title, "a");
     }
 
+    /// With nothing playing there is no "after", so it becomes the queue.
     #[test]
     fn next_into_an_empty_queue_is_the_queue() {
         let mut q = PlayQueue::new();
@@ -395,6 +460,8 @@ mod tests {
         assert_eq!(q.current().unwrap().title, "a");
     }
 
+    /// Dropping something in at a place must not move what is playing, and
+    /// must not silently land somewhere else.
     #[test]
     fn a_drop_lands_where_it_was_let_go_of() {
         for playing in 0..4 {
@@ -416,6 +483,7 @@ mod tests {
         }
     }
 
+    /// Dropping into nothing starts the queue rather than doing nothing.
     #[test]
     fn a_drop_into_an_empty_queue_becomes_the_queue() {
         let mut q = PlayQueue::new();
@@ -432,6 +500,8 @@ mod tests {
         assert_eq!(q.current().unwrap().title, "b");
     }
 
+    /// The one that matters: moving rows around must never make the player
+    /// jump to a different track. Every move of every row, checked.
     #[test]
     fn moving_a_row_never_changes_what_is_playing() {
         for playing in 0..5 {
@@ -462,6 +532,7 @@ mod tests {
         assert_eq!(titles(&q), ["b", "c", "d", "a"]);
     }
 
+    /// Removing a row has the same duty as moving one.
     #[test]
     fn removing_a_row_never_changes_what_is_playing() {
         for playing in 0..4 {
@@ -481,6 +552,13 @@ mod tests {
         }
     }
 
+    /// What is laid at the sink's door has to be the track the queue will
+    /// actually go to — in every order the queue can be in.
+    ///
+    /// This is the one place where being wrong is *heard*: the gapless
+    /// hand-over plays whatever was laid out and the queue's place follows it,
+    /// so a peek that disagreed with `next` would play the wrong track and
+    /// then claim it was the right one.
     #[test]
     fn what_is_looked_ahead_to_is_what_is_played() {
         let three = || vec![track("eins"), track("zwei"), track("drei")];

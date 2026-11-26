@@ -1,8 +1,23 @@
+//! The genre of a record, asked of MusicBrainz.
+//!
+//! The same way round as the years (see `years`): find the record — the
+//! „release group" — by its title and its artist, and take it only when the
+//! match is plainly the same record. Then ask that record for its genres.
+//!
+//! Genres, not tags. MusicBrainz lets anybody tag anything, and keeps apart
+//! from that a list of names it counts as genres; only those are asked for, and
+//! of them the one most people gave. Written as MusicBrainz writes it, which is
+//! in small letters.
+
 use super::coverart::{encode, fetch_text, lucene_safe, musicbrainz_endpoint};
 use super::years::{same_artist, same_record, LEAST_SCORE, PACE};
 use crate::error::{KesslerError, Result};
 use crate::json::Json;
 
+/// Which of the release groups in a search answer is this record: the
+/// surest match that is plainly the same title by the same artist.
+///
+/// Apart from the asking so that it can be checked without the network.
 pub fn record_in(answer: &str, artist: &str, album: &str) -> Option<String> {
     let doc = Json::parse(answer)?;
     let mut best: Option<(f64, String)> = None;
@@ -37,6 +52,7 @@ pub fn record_in(answer: &str, artist: &str, album: &str) -> Option<String> {
     best.map(|(_, id)| id)
 }
 
+/// The genre most people gave the record, out of its own answer.
 pub fn genre_in(answer: &str) -> Option<String> {
     let doc = Json::parse(answer)?;
     let mut best: Option<(f64, String)> = None;
@@ -52,6 +68,11 @@ pub fn genre_in(answer: &str) -> Option<String> {
     best.filter(|(count, _)| *count > 0.0).map(|(_, name)| name)
 }
 
+/// Ask MusicBrainz for the genre of one record. `Ok(None)` when it does not
+/// know the record well enough, or knows no genre for it.
+///
+/// Two questions, the second a pace after the first, since MusicBrainz asks
+/// for no more than one a second.
 pub fn look_up(artist: &str, album: &str) -> Result<Option<String>> {
     if lucene_safe(artist).is_empty() || lucene_safe(album).is_empty() {
         return Ok(None);

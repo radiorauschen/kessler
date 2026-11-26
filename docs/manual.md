@@ -95,6 +95,7 @@ kessler scan --prune         # rescan configured dirs, drop missing files
 kessler stats                # track/artist/album counts
 kessler paths                # where the config and database live
 kessler -v scan ~/Music      # -v info, -vv debug (logs go to stderr)
+KESSLER_LOG=kessler::ipod=debug kessler gui   # a log filter of its own
 
 kessler ipod list            # find mounted ipods
 kessler ipod info            # capacity, track/playlist counts
@@ -287,9 +288,9 @@ several rows of the queue can be picked at once: `shift` + click or `shift` +
 run as one block. a plain step or click lets them go, and so does the queue
 changing from elsewhere.
 
-the menu is set in tabs: the tabs down the left — `bibliothek`,
-`darstellung`, `spalten`, `wiedergabe`, `ipod`, `über`, the keyboard's only
-while one is plugged in (the ipod's always) — and what the chosen one holds
+the menu is set in tabs: the tabs down the left — `allgemein`, `musik`,
+`darstellung`, `seitenspalten`, `wiedergabe`, `radio`, `podcasts`, `ipod`,
+`über`, the keyboard's only while one is plugged in (the ipod's always) — and what the chosen one holds
 beside them, the sheet as tall as the tallest tab, so it does not jump from
 one to the next. every tab is measured as it opens, so it stands in the
 middle of the window from the start; before, it knew only the tabs it had
@@ -307,9 +308,16 @@ window resized has it measured afresh.
 a section's heading that would only repeat the name of its tab is left out,
 so the first row stands level with the tab beside it; the headings of
 further sections in a tab (`idtags ergänzen`, `kopfzeile`, `last.fm`, the
-three of `spalten`) stay. those three say only which column —
-`künstler:innen`, `alben`, `titelliste` — the tab says the rest; they were
-`spalte künstler:innen`, `spalte alben` and `spalten der titelliste`.
+three columns under `musik`) stay. those three say only which column —
+`künstler:innen`, `alben`, `titelliste` — the tab says the rest.
+
+`musik`, `radio` and `podcasts` each hold what is that view's alone, as the
+switch at the top names them: under `musik` the library (`bibliothek`,
+`idtags ergänzen`), its three columns in the order they stand —
+`künstler:innen`, `alben`, `titelliste`. with the music switched off
+(`allgemein` → `funktionen`) its columns leave the tab; the library stays, as
+the ipod is filled from it. `last.fm` stands under `allgemein`, as the radio
+scrobbles too. `seitenspalten` holds the side columns, which every view shares.
 
 the sheet has a head: the program's figure at the left — the vectorscope's
 figure, still, or moving with the music while something plays — with
@@ -1042,9 +1050,9 @@ a fresh install opens on `kompakt` (`[ui] playing_at`), and with the albums
 in the track list (below, `[ui] albums_in_tracks`) —; a config that already
 names either keeps what it says.
 
-the side columns have their settings under menu → spalten: under
+the side columns have their settings under menu → seitenspalten: under
 `informationen` each part of an artist's column can be left out — `bild`,
-`steckbrief` (kind, origin, years, style, musicbrainz's note), `wikipedia`,
+`eckdaten` (kind, origin, years, style, musicbrainz's note), `wikipedia`,
 `bibliothek und radio`, `mitglieder, gruppen`, `ähnliche künstler:innen`
 (`[ui] info_picture`, `info_facts`, `info_wikipedia`, `info_library`,
 `info_ties`, `info_similar`, all on). while `bild` is shown, `bildformat`
@@ -1070,7 +1078,7 @@ the shelf's own order, and not while searching. every track of a compilation
 has its artist beside its title at label size, and the first column has a
 `kompilationen` row under `zuletzt`, as itunes has: every compilation in the
 library, as records under their headings (no one artist named under the
-title), the album column naming them `verschiedene`. menu → spalten →
+title), the album column naming them `verschiedene`. menu → musik →
 künstler:innen → `kompilationen-zeile` (`[ui] show_compilations`, on by
 default) shows or hides it; not on the ipod.
 
@@ -1123,6 +1131,44 @@ the first key or click): they are views rather than names, and chosen, the
 view is open; chosen, they keep their second tone — the arrow and the word
 alike, in bold — rather than turning to the ink a chosen name takes, so
 they stay apart from the names. so do the podcasts' views.
+
+### the register
+
+in the artist column, while it is in alphabetical order (a–z or z–a), each
+run of names stands under its first letter, small, in the heads' colour, as
+`heute` and `diese woche` stand over the podcasts' episodes: the letter the
+shelf files the name under (`(((microwaves)))` under m, `ääni` under a), `#`
+for names beginning with a digit, and `andere` for names in another script.
+the letters stand in the mono cut, as in the letter bar; `andere` in the
+usual face.
+**menü → musik → künstler:innen → register** (`[ui] artist_letters`, on)
+turns it off. ordered by when the files came, there is none.
+
+the podcasts' first column and the stations kept have one too, while they
+stand a–z or z–a, under the first letter of the name as written (`#` for a
+digit): **menü → podcasts → register** (`[ui] podcast_letters`) and **menü →
+radio → register** (`[ui] radio_letters`), both on.
+
+**the letter bar** (a beta, **menü → musik → künstler:innen →
+buchstabenleiste (beta)**, `[ui] artist_letter_bar`, off): while the pointer
+is over the artist column, the letters it has stand small in the mono cut in
+the middle of the list's height, flush at the right with the figures — the
+count in the head and at the rows' ends. it slides in from the right as the
+side columns do, and out the same way, stopping short of the divider between
+the columns; `andere` is `…` there. behind it lies a panel of the ground,
+rounded at its left corners and so soft at its edge that what it covers fades
+away under it, over the figures at the rows' ends. under the pointer a letter gets the plate the header's small words get,
+the same air on every side of it. an arrow `←` pushes in from the right and
+takes the letter along to the left, as a row's arrow takes its name to the
+right: before the letter whose names are at the top of the column, and,
+while the bar is pressed or drawn down, before the one under the pointer; a
+letter clicked keeps it as long as the list stays where the jump left it,
+even where the list cannot bring its names to the top (`andere`, `#`) —
+once the letter has held for a moment, so it does not chase the list while
+it scrolls. a
+click on a letter — or a little to its left —, or the pointer drawn down the
+letters with the button held, brings its names to the top. in a short window
+every so many letters stand, spread evenly.
 
 ### one artist, one row
 
@@ -1449,7 +1495,7 @@ not either picture was switched on.
 
 ### the albums in the track list
 
-**menü → spalten → alben → ansicht** switches between `eigene spalte` and
+**menü → musik → alben → ansicht** switches between `eigene spalte` and
 `mit titelliste kombiniert`. combined with the track list, the album column
 goes, and each record stands as a heading over its own tracks — its cover,
 and beside it three lines: its name in the bold cut, under it whose it is
@@ -1475,7 +1521,7 @@ column is headed `alben`, like the other columns on the same line, with how
 many records and tracks it holds at the right.
 
 what belongs to the record moves up into its heading: of the columns switched
-on under menu → spalten → titelliste, `jahr`, `genre` and `hinzugefügt`
+on under menu → musik → titelliste, `jahr`, `genre` and `hinzugefügt`
 are said once in the heading's line of facts, and the rows keep only
 `wertung` and `plays` from there. `nr`, `bitrate` and `länge` have switches of
 their own for this view (`[ui] merged_number`, `merged_bitrate`,
@@ -1515,8 +1561,9 @@ bottom line. **rand unten** (`[ui] columns_to_edge` off when it is on;
 off by default): on, every column stops a margin above the window's bottom
 edge and the margin is always as tall, with words in it or none; off, the
 columns run down to the window's very edge, their lists cut off there
-without a fade, and a column goes up only while what the status says
-stands under it. set in under it, and only to be changed with the margin
+without a fade; nothing moves for what the status says in the corner: its
+words get a soft field of the ground behind them, the list fading away
+under it, and a list scrolled to its end stops a little above them. set in under it, and only to be changed with the margin
 on (else they say `nur mit rand`): `bibliothekszahlen` (see above) and
 **uhr** (`[ui] foot_clock`, off): `uhrzeit` or `datum und uhrzeit` at the
 foot's right end, faint as the library's counts at the other, as the
@@ -1919,7 +1966,7 @@ in the one screenshot it was picked from.
 
 the track list shows the number, the title and the length. everything else —
 `jahr`, `genre`, `wertung`, `plays`, `hinzugefügt`, `bitrate` — is off until
-you switch it on under **menü → spalten**. a column you read past on every row
+you switch it on under **menü → musik → titelliste**. a column you read past on every row
 costs more than the fact it carries, unless you asked for it. `wertung` shows a
 rating as stars, `★★★` for three, and is 64 points wide. `bitrate` shows the
 file's bitrate in kbit/s, the bare figure (`320`, `1411`), and stays empty
@@ -1974,7 +2021,7 @@ rather than guessing. the mark's room comes off the title's on every row,
 whether or not it is used, so the columns to its right do not step sideways as
 you scroll past a lossless file.
 
-the artists column can carry a track count per artist — **menü → spalten →
+the artists column can carry a track count per artist — **menü → musik →
 titelzahl bei interpreten**. it is off by default: a figure you look for now
 and then does not earn a place you read past on every row.
 
@@ -2029,7 +2076,7 @@ the menu a right-click opens keeps its shadow — nothing is veiled behind it,
 and without one it would melt into the list it stands on. with last.fm
 connected, a track's menu — in the track list, the queue, a list — ends in
 `bei last.fm lieben`. a column divider under the pointer shows the system's
-column-resize cursor for as long as the pointer stays. menu →
+column-resize cursor for as long as the pointer stays. menu → musik →
 künstler:innen → `anzahl oben rechts` (`[ui] artist_total`, off by default)
 writes how many artists there are at the head of their column; the figure
 does nothing and does not light under the pointer. in the radio and the
@@ -2215,7 +2262,7 @@ under the list (`src/gui/drawing.png`, made from the scan by
 
 ### last.fm
 
-menu → last.fm → `konto` → `verbinden…`; with no key yet it asks for one
+menu → allgemein → last.fm → `konto` → `verbinden…`; with no key yet it asks for one
 first. scrobbling needs an api account of your own, which last.fm hands out
 to anyone with a login in a minute — `bei last.fm beantragen…`, under the two
 fields, opens the page. with a key and no account the section is `verbinden…`
@@ -2433,8 +2480,12 @@ air, `es läuft gerade kein sender`, in `informationen` too), and the log
 says it for each station when it answers.
 
 the stations' column is headed `stationen` (`sender` heads the column beside
-it). the stations kept can be dragged into another order: a line shows where
-the one carried will go. `KESSLER_RADIO_BROWSER` points the directory elsewhere, for testing.
+it). its head turns their order, as the artists' does (`[ui] radio_order`):
+`von hand` — the order they are dragged into, the one it begins in —, then
+a–z (↓), then z–a (↑); the order by hand is kept while they stand by name.
+in it, the stations kept can be dragged into another order: a line shows
+where the one carried will go. next and previous, with a station on the air,
+go through them in the column's order. `KESSLER_RADIO_BROWSER` points the directory elsewhere, for testing.
 
 a kept station can be given a name and a picture of one's own, both from
 the right-click menu: on its row in the stations, `umbenennen` writes its
@@ -2781,7 +2832,7 @@ at the foot of the column, under `quellen`, as a book lists its sources at
 its end: where the picture shown is from — `wikimedia commons` or
 `wikipedia` with who made it and under which licence, as wikimedia says, or
 `deezer`; `bild: eigenes` for one chosen by hand — where the text is from,
-and `steckbrief: musicbrainz`, each a link to the page it is from — a
+and `eckdaten: musicbrainz`, each a link to the page it is from — a
 picture with no page of its own to the wikipedia page it was taken from. all
 are set alike, `›` and the words; one with nowhere to go (`bild: eigenes`)
 too, without a plate or a click.
@@ -2810,7 +2861,7 @@ there is no network. the same for covers, years and genres.
 every search says in the **log** what it brought — `boards of canada: text
 (de, en) · bild · 2 mitglieder · 8 ähnliche` — or that nothing was found.
 
-**menu → bibliothek → über künstler:innen → `fehlende suchen…`** does this for every
+**menu → musik → über künstler:innen → `fehlende suchen…`** does this for every
 artist in the library the sources have not been asked about, in the
 background, at musicbrainz's pace (a second or two an artist, some seconds
 for a group with members), so the column already has them when it is
@@ -2849,7 +2900,7 @@ after the years in the small line under the name — which is set in the
 name's colour, not the heads'. where nothing linked bandcamp
 or discogs, the column offers a search there instead.
 
-**menu → bibliothek → über künstler:innen → exportieren → `als markdown…`** writes everything gathered, one page an
+**menu → musik → über künstler:innen → exportieren → `als markdown…`** writes everything gathered, one page an
 artist, into a folder `kessler künstler:innen` wherever you choose — for a
 notes program, or to keep. the facts go in yaml front matter (name, kind,
 origin, active, style, tags, musicbrainz id), the rest as the column shows
@@ -3611,7 +3662,7 @@ offers `entfernen` at the far right — and then answering the `ordner
 entfernen?` that opens under it. taking a folder out takes its tracks out of
 the library with it, which is further than one stray click on a row should go.
 
-drop files or folders on the window, or use menu → bibliothek → `musik
+drop files or folders on the window, or use menu → musik → `musik
 hinzufügen…`. everything lands in the first configured music folder as
 `artist/album/nn title.ext`, filed by its tags rather than by the folder it
 came from, and is read in exactly as a scan would read it. copying is the
@@ -3897,7 +3948,11 @@ apple developer account and two things set up once on the mac that signs,
 both described by `./bundle/notarize.sh --help`: the „developer id application"
 certificate in the keychain (`KESSLER_SIGN_IDENTITY`) and a notary profile
 (`xcrun notarytool store-credentials`, `KESSLER_NOTARY_PROFILE`,
-`kessler-notary` by default); nothing secret is in the repository. it runs
+`kessler-notary` by default); nothing secret is in the repository. the dmg
+then goes to the release `mac` of the public repository (with `gh`, logged
+in); `--no-upload` or `KESSLER_UPLOAD=0` leaves it on the mac, for a script
+that uploads it itself, and an upload that fails is said and left at that —
+the signed and notarized files are in `dist/` either way. it runs
 under the hardened runtime with one entitlement, apple events
 (`bundle/kessler.entitlements`), which the import into music needs; it
 refuses a bundle with a licensed face that may not be passed on; muto goes
@@ -4168,7 +4223,7 @@ sway, i3, hyprland and the like:
   portals of sway and hyprland answer alike; gnome's `gsettings`, which nothing
   else answers, is asked only where there is no portal.
 - **dragging files in** from a file manager works under x11 and not under
-  wayland, where the toolkit cannot take a drop yet. menu → bibliothek →
+  wayland, where the toolkit cannot take a drop yet. menu → musik →
   `ordner…` brings a folder in instead.
 
 ## connecting an old ipod

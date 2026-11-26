@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("beim start nachsehen", "check at start"),
     ("beispielsender", "example stations"),
@@ -303,6 +305,7 @@ pub const PART: &[(&str, &str)] = &[
     ("zeichnung", "drawing"),
     ("egui-schriften", "egui typefaces"),
     ("spalten", "columns"),
+    ("seitenspalten", "side columns"),
     ("noch einmal q zum beenden", "q again to quit"),
     ("noch einmal shift + d zum leeren", "shift + d again to clear"),
     ("die synchronisierung läuft noch", "the sync is still running"),
@@ -411,6 +414,8 @@ pub const PART: &[(&str, &str)] = &[
     ("alle-zeile", "all row"),
     ("{} titel", "{} tracks"),
     ("zuletzt-zeile", "recent row"),
+    ("register", "index"),
+    ("buchstabenleiste (beta)", "letter bar (beta)"),
     ("titelzahl", "track count"),
     ("beim öffnen zeigen", "show on opening"),
     ("ansicht", "view"),
@@ -569,6 +574,7 @@ pub const PART: &[(&str, &str)] = &[
     ("{}: kein bild von der eigenen seite ({})", "{}: no picture from its own page ({})"),
     ("sender", "station"),
     ("stationen", "stations"),
+    ("von hand", "by hand"),
     ("ähnliche stationen", "similar stations"),
     ("ähnlich wie {}", "like {}"),
     ("stationen · suche", "stations · search"),
@@ -682,7 +688,7 @@ pub const PART: &[(&str, &str)] = &[
     ("log gespeichert: {}", "log saved: {}"),
     ("normal", "normal"),
     ("als markdown", "as markdown"),
-    ("steckbrief", "facts"),
+    ("eckdaten", "key facts"),
     ("bibliothek und radio", "library and radio"),
     ("mitglieder, gruppen", "members, groups"),
     ("mitlaufen", "follow along"),

@@ -1,3 +1,7 @@
+//! The window's own behaviour, in the order a reader might want it: each
+//! file is one more `impl GuiApp`, grouped by what it is about. The state
+//! itself — [`crate::gui::GuiApp`] and its types — is in [`crate::gui`].
+
 mod lists;
 mod device;
 mod navigation;

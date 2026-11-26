@@ -1,15 +1,42 @@
+//! The signature the iPod classic and the nano of the third and fourth
+//! generation want on their database (`hash58`, after where it lives in the
+//! header: 0x58).
+//!
+//! Without it those iPods show an empty library, however good the database
+//! is. The scheme is the one libgpod uses (`itdb_hash58.c`):
+//!
+//! 1. A key from the device's FireWire GUID: the least common multiple of
+//!    each pair of its first eight bytes, both bytes of it looked up in the
+//!    AES S-box and in its inverse, sixteen bytes in all, hashed with SHA-1
+//!    after eighteen fixed bytes.
+//! 2. An HMAC-SHA1 with that key over the whole database, written with the
+//!    database's own number (0x18), the twenty bytes at 0x32 and the hash
+//!    itself set to nought, and the hashing scheme at 0x30 set to one.
+//! 3. The twenty bytes of it at 0x58, and the number and the bytes at 0x32
+//!    put back.
+//!
+//! Each iPod has its own GUID, so a database signed for one is unsigned for
+//! any other.
+
 use sha1_smol::Sha1;
 
+/// The eighteen bytes hashed before the device's own to make the key.
 const FIXED: [u8; 18] = [
     0x67, 0x23, 0xFE, 0x30, 0x45, 0x33, 0xF8, 0x90, 0x99, 0x21, 0x07, 0xC1, 0xD0, 0x12, 0xB2, 0xA1, 0x07, 0x81,
 ];
 
+/// Where the pieces of the header are that the signature is about.
 const DB_ID: usize = 0x18;
 const SCHEME: usize = 0x30;
 const UNKNOWN_32: usize = 0x32;
 pub const HASH: usize = 0x58;
+/// The shortest header the signature fits into.
 pub const SHORTEST_HEADER: usize = HASH + 20;
 
+/// A device's FireWire GUID as written in its `SysInfo`, `SysInfoExtended`
+/// or as its USB serial number: sixteen hexadecimal digits, sometimes after
+/// `0x`. Anything else — shorter, longer, not hexadecimal, all noughts — is
+/// not one, and nothing is signed with it.
 pub fn parse_guid(text: &str) -> Option<[u8; 8]> {
     let digits = text.trim();
     let digits = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")).unwrap_or(digits);
@@ -23,6 +50,11 @@ pub fn parse_guid(text: &str) -> Option<[u8; 8]> {
     (guid != [0; 8]).then_some(guid)
 }
 
+/// Sign a whole written database in place for the device with this GUID.
+///
+/// The header has to be long enough to hold the signature — see
+/// [`SHORTEST_HEADER`]; the writer makes it so for every device that is
+/// signed for.
 pub fn sign(database: &mut [u8], guid: &[u8; 8]) {
     assert!(
         database.len() >= SHORTEST_HEADER && &database[..4] == b"mhbd",
@@ -44,6 +76,8 @@ pub fn sign(database: &mut [u8], guid: &[u8; 8]) {
     database[UNKNOWN_32..UNKNOWN_32 + 20].copy_from_slice(&unknown);
 }
 
+/// The key for this device: sixty-four bytes, the first twenty of them a
+/// SHA-1, the rest nought, as the HMAC wants a block.
 fn key(guid: &[u8; 8]) -> [u8; 64] {
     let (forward, inverse) = s_boxes();
     let mut y = [0u8; 16];
@@ -64,6 +98,8 @@ fn key(guid: &[u8; 8]) -> [u8; 64] {
     key
 }
 
+/// The least common multiple, and one where either is nought — the way the
+/// scheme was first written, which the iPods check against.
 fn lcm(a: u32, b: u32) -> u32 {
     if a == 0 || b == 0 {
         return 1;
@@ -75,6 +111,7 @@ fn lcm(a: u32, b: u32) -> u32 {
     a * b / x
 }
 
+/// HMAC-SHA1 with a key already a block long.
 fn hmac(key: &[u8; 64], message: &[u8]) -> [u8; 20] {
     let pad = |with: u8| key.map(|k| k ^ with);
     let mut inner = Sha1::new();
@@ -86,6 +123,9 @@ fn hmac(key: &[u8; 64], message: &[u8]) -> [u8; 20] {
     outer.digest().bytes()
 }
 
+/// The AES S-box and its inverse, worked out rather than written down: the
+/// multiplicative inverse in GF(2⁸), then the affine map. Two tables of 256
+/// bytes copied by hand are two chances of a wrong byte nobody would see.
 fn s_boxes() -> ([u8; 256], [u8; 256]) {
     let mut forward = [0u8; 256];
     let mut inverse = [0u8; 256];
@@ -114,6 +154,7 @@ fn s_boxes() -> ([u8; 256], [u8; 256]) {
 mod tests {
     use super::*;
 
+    /// The first and last rows of both tables as libgpod prints them.
     #[test]
     fn the_tables_are_the_aes_ones() {
         let (forward, inverse) = s_boxes();
@@ -144,6 +185,8 @@ mod tests {
         assert_eq!(lcm(0xFF, 0xFE), 0xFF * 0xFE);
     }
 
+    /// HMAC-SHA1 against RFC 2202's second case, the key padded to a block
+    /// as the scheme's is.
     #[test]
     fn the_hmac_is_hmac_sha1() {
         let mut key = [0u8; 64];
@@ -153,6 +196,8 @@ mod tests {
         assert_eq!(hex, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
     }
 
+    /// Signing changes nothing but the scheme and the hash, and the same
+    /// database signed for another device comes out differently.
     #[test]
     fn signing_touches_only_its_own_bytes() {
         let mut db = vec![0u8; 0xF4 + 40];

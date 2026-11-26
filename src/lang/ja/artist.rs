@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("nichts gefunden über {}", "{} について何も見つかりません"),
     ("das bild liess sich nicht lesen", "画像を読み込めませんでした"),

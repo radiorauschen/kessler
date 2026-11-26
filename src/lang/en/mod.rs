@@ -1,3 +1,6 @@
+//! The English, one part for each part of the program, keyed by the German
+//! the source says. See [`super`].
+
 mod artist;
 mod errors;
 mod folder;

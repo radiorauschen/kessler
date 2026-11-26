@@ -1,25 +1,50 @@
+//! A radio station's stream, opened for playback.
+//!
+//! The rest of the player plays files. A station is a stream with no end and
+//! no length, that cannot be wound back: `curl` reads it — kessler reaches the
+//! network through curl everywhere else too — and the decoder reads curl's
+//! output as it comes. Nothing of this exists until a station is played.
+//!
+//! Most stations say what they play in the stream itself, if asked: the
+//! Shoutcast/Icecast way,
+//! `Icy-MetaData: 1`, and the answer's `icy-metaint` says how many bytes of
+//! sound come between two lines of words. Those are taken out before the
+//! decoder sees them and handed over as [`Said`].
+
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::process::{Child, ChildStdout, Stdio};
 use std::sync::{Arc, Mutex};
 
+/// The latest `StreamTitle` the station sent, if it sends any.
 pub type Said = Arc<Mutex<Option<String>>>;
 
+/// What a station says about itself in the head of its answer: the
+/// Shoutcast/Icecast `icy-name`, `icy-description`, `icy-genre`,
+/// `icy-url` and `icy-br`. Each empty when it says nothing, or only the
+/// server's placeholder.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Introduction {
     pub name: String,
     pub description: String,
     pub genre: String,
     pub url: String,
+    /// Kilobits a second, as figures.
     pub bitrate: String,
+    /// Whether the stream carries what it plays (`icy-metaint`): many stations
+    /// send none, and then there is nothing to show.
     pub titles: bool,
+    /// Whether it came as HLS, pieces rather than one stream.
     pub hls: bool,
 }
 
+/// The introduction of the station on the air, once its stream has answered.
 pub type Introduced = Arc<Mutex<Option<Introduction>>>;
 
 use rodio::decoder::DecoderBuilder;
 use rodio::Decoder;
 
+/// What the decoder reads: what curl hands over, read once, front to back — or,
+/// for a station that sends HLS, its pieces one after the other.
 pub enum Stream {
     Icy(Icy),
     Hls(super::hls::Hls),
@@ -43,24 +68,35 @@ impl Seek for Stream {
     }
 }
 
+/// One endless answer, as Shoutcast and Icecast send it.
 pub struct Icy {
     child: Child,
     out: BufReader<ChildStdout>,
     read: u64,
+    /// Bytes of sound between two lines of words, if the station sends them,
+    /// and how many are left before the next.
     every: Option<usize>,
     left: usize,
     said: Said,
     pace: Pace,
 }
 
+/// How fast the sound comes in, against the bitrate the station gives: said
+/// in the measurement when it falls behind, so that a stutter can be told
+/// apart as the network's.
+///
+/// Once the store ahead is full, sound is read only as fast as it is heard,
+/// which is the bitrate: below it means the network could not keep up.
 struct Pace {
     name: String,
+    /// Bytes a second the station says it sends, if it says.
     expected: Option<f64>,
     since: std::time::Instant,
     bytes: u64,
     behind: bool,
 }
 
+/// How long a stretch is measured at a time.
 const PACE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Pace {
@@ -87,6 +123,8 @@ impl Pace {
         self.bytes = 0;
     }
 
+    /// What there is to say about a stretch of `took` seconds: falling
+    /// behind, and catching up again.
     fn reading(&mut self, took: f64) -> Option<String> {
         let expected = self.expected?;
         let rate = self.bytes as f64 / took;
@@ -122,6 +160,8 @@ impl Read for Icy {
 }
 
 impl Icy {
+    /// One line of words: a byte for its length in sixteens, then that much.
+    /// Whether the stream went on.
     fn take_words(&mut self) -> std::io::Result<bool> {
         let mut length = [0u8; 1];
         if !read_all(&mut self.out, &mut length)? {
@@ -141,6 +181,7 @@ impl Icy {
     }
 }
 
+/// `read_exact`, but the end of the stream is an answer, not an error.
 fn read_all(from: &mut impl Read, buf: &mut [u8]) -> std::io::Result<bool> {
     match from.read_exact(buf) {
         Ok(()) => Ok(true),
@@ -149,6 +190,8 @@ fn read_all(from: &mut impl Read, buf: &mut [u8]) -> std::io::Result<bool> {
     }
 }
 
+/// `StreamTitle='…';` out of a line of words — UTF-8 mostly, Latin-1 from
+/// older stations.
 fn stream_title(words: &[u8]) -> Option<String> {
     let end = words.iter().position(|&b| b == 0).unwrap_or(words.len());
     let words = match std::str::from_utf8(&words[..end]) {
@@ -162,12 +205,17 @@ fn stream_title(words: &[u8]) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
+/// What the answer's head says: how often the words come, what kind of
+/// thing it is, and what the station says about itself.
 struct Head {
     every: Option<usize>,
     kind: String,
     intro: Introduction,
 }
 
+/// One line of the head. Read as bytes and taken as UTF-8 where it is, as
+/// Latin-1 where it is not: many stations still name themselves in Latin-1, and
+/// a line read as UTF-8 only failed the whole station.
 fn head_line(out: &mut BufReader<ChildStdout>) -> Result<Option<String>, String> {
     let mut bytes = Vec::new();
     if out.read_until(b'\n', &mut bytes).map_err(|e| e.to_string())? == 0 {
@@ -179,6 +227,8 @@ fn head_line(out: &mut BufReader<ChildStdout>) -> Result<Option<String>, String>
     }))
 }
 
+/// One of the station's own words, or nothing when it is only the server's
+/// placeholder.
 fn plainly(value: &str) -> String {
     let value: String = value.chars().filter(|c| !c.is_control()).collect();
     let value = value.trim();
@@ -202,6 +252,7 @@ fn plainly(value: &str) -> String {
     value.to_string()
 }
 
+/// The introduction's part of a head line, if it is one.
 fn introduce(intro: &mut Introduction, name: &str, value: &str) {
     let name = name.trim().to_ascii_lowercase();
     match name.as_str() {
@@ -225,6 +276,8 @@ fn introduce(intro: &mut Introduction, name: &str, value: &str) {
     }
 }
 
+/// Read the answer's head (or heads, one for each redirect followed) off
+/// curl's output and find `icy-metaint` and the content type in the last.
 fn answer_head(out: &mut BufReader<ChildStdout>) -> Result<Head, String> {
     loop {
         let Some(status) = head_line(out)? else {
@@ -259,6 +312,8 @@ fn answer_head(out: &mut BufReader<ChildStdout>) -> Result<Head, String> {
     }
 }
 
+/// Whether what came is a playlist naming the stream rather than the stream.
+/// HLS's `.m3u8` is pieces, not a stream, and goes its own way — see `hls`.
 fn is_playlist(url: &str, kind: &str) -> bool {
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
     if super::hls::is_hls(url, kind) {
@@ -271,6 +326,8 @@ fn is_playlist(url: &str, kind: &str) -> bool {
         || kind.contains("mpegurl")
 }
 
+/// The first stream a playlist names: `File1=` in a `.pls`, the first line
+/// that is not a comment in an `.m3u`.
 fn first_in_playlist(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
@@ -282,8 +339,11 @@ fn first_in_playlist(text: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// How deep playlists naming playlists are followed.
 const PLAYLISTS_DEEP: u32 = 3;
 
+/// A stream can say where it is and nothing more: the decoder is told it
+/// cannot seek, and asking where it stands is all it does then.
 impl Seek for Icy {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         match pos {
@@ -293,6 +353,7 @@ impl Seek for Icy {
     }
 }
 
+/// Let go of the station: curl stops when the sound does.
 impl Drop for Icy {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -300,6 +361,7 @@ impl Drop for Icy {
     }
 }
 
+/// Ask for `url` and read the head of the answer.
 fn ask(url: &str) -> Result<(Child, BufReader<ChildStdout>, Head), String> {
     let mut command = crate::net::curl();
     command
@@ -325,6 +387,8 @@ fn ask(url: &str) -> Result<(Child, BufReader<ChildStdout>, Head), String> {
     }
 }
 
+/// Open `url` and the decoder on it. Blocks until enough has come in to know
+/// what it is — on a thread of its own, never the window's.
 pub fn open(url: &str, said: Said, introduced: Introduced) -> Result<Decoder<BufReader<Stream>>, String> {
     let mut url = url.to_string();
     let mut deep = 0;
@@ -359,6 +423,7 @@ pub fn open(url: &str, said: Said, introduced: Introduced) -> Result<Decoder<Buf
     decoder(stream, None)
 }
 
+/// The decoder on a stream, told what it holds where that is known.
 fn decoder(stream: Stream, hint: Option<&'static str>) -> Result<Decoder<BufReader<Stream>>, String> {
     let opened = super::audio::quietly(move || {
         let builder = DecoderBuilder::new().with_data(BufReader::new(stream)).with_seekable(false);
@@ -375,6 +440,8 @@ fn decoder(stream: Stream, hint: Option<&'static str>) -> Result<Decoder<BufRead
 mod tests {
     use rodio::Source;
 
+    /// Against a stream named in `KESSLER_STREAM_TEST`, which a test machine
+    /// rarely has: a second of sound has to come out of it.
     #[test]
     #[ignore]
     fn a_stream_gives_long_sound() {
@@ -433,6 +500,7 @@ mod tests {
         assert_eq!(super::first_in_playlist("nothing here"), None);
     }
 
+    /// Falling behind the bitrate is said once, and catching up once.
     #[test]
     fn falling_behind_is_said_once() {
         let mut pace = super::Pace::new("https://example.org/live.mp3?key=secret", "128");

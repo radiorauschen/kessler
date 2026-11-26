@@ -1,3 +1,18 @@
+//! What the iPod heard while it was away: its „Play Counts" file.
+//!
+//! The iPod never writes its iTunesDB. What it plays, it counts in a file
+//! beside it — `iPod_Control/iTunes/Play Counts` — one entry for each track
+//! of the database it last read, in the database's own order: how often it
+//! was played since the database was written, when it was played last, and
+//! the rating it has now. Whoever writes the database next is to fold those
+//! counts into it and take the file away, or the iPod lays its counts of the
+//! old order over the tracks of the new one (libgpod does the same).
+//!
+//! kessler does both whenever it writes the database — see
+//! [`super::sync::apply`] and [`super::sync::remove`] — and reads the file
+//! without writing anything when an iPod is plugged in, to bring the plays into
+//! the library and to last.fm — see [`new_plays`].
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -7,17 +22,26 @@ use super::itunesdb::types::{mac_to_unix, IpodTrack, ItunesDb};
 use super::IpodDevice;
 use crate::error::Result;
 
+/// One entry of the file: what happened to one track since the database was
+/// written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Played {
+    /// How often it was played to the end.
     pub plays: u32,
+    /// When last, in the iPod's clock — local time counted as if it were
+    /// UTC, as the database's own times are (see `mac_to_unix`).
     pub last_played: Option<i64>,
+    /// The rating it has now, 0–100 in steps of 20, where the file says.
     pub rating: Option<u8>,
 }
 
+/// Where the file is on a device mounted at `mount`.
 pub fn path_in(mount: &Path) -> PathBuf {
     mount.join("iPod_Control").join("iTunes").join("Play Counts")
 }
 
+/// Read a device's file: empty when it has none, which is the usual thing
+/// right after a database was written.
 pub fn read(device: &IpodDevice) -> Result<Vec<Played>> {
     let path = path_in(&device.mount_point);
     match std::fs::read(&path) {
@@ -27,6 +51,12 @@ pub fn read(device: &IpodDevice) -> Result<Vec<Played>> {
     }
 }
 
+/// The entries of a file, or `None` for one that is not one.
+///
+/// `mhdp`, the header's length, each entry's length and how many there are,
+/// all little-endian; then the entries. Each is at least twelve bytes — the
+/// plays, the last time, a bookmark — and from the second generation on
+/// sixteen or more, the rating in the fourth word.
 pub fn parse(bytes: &[u8]) -> Option<Vec<Played>> {
     let word = |at: usize| -> Option<u32> {
         bytes.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -51,6 +81,10 @@ pub fn parse(bytes: &[u8]) -> Option<Vec<Played>> {
     Some(played)
 }
 
+/// Fold the counts into the database they were counted against: the plays
+/// added, the last time and the rating taken over. The entries follow the
+/// database's track order; a file with more entries than tracks has the
+/// rest ignored.
 pub fn fold(db: &mut ItunesDb, played: &[Played]) {
     for (track, heard) in db.tracks.iter_mut().zip(played) {
         track.play_count = track.play_count.saturating_add(heard.plays);
@@ -63,6 +97,7 @@ pub fn fold(db: &mut ItunesDb, played: &[Played]) {
     }
 }
 
+/// Take the file away once its counts are in a newly written database.
 pub fn forget(device: &IpodDevice) -> Result<()> {
     match std::fs::remove_file(path_in(&device.mount_point)) {
         Ok(()) => Ok(()),
@@ -71,22 +106,36 @@ pub fn forget(device: &IpodDevice) -> Result<()> {
     }
 }
 
+/// What kessler has already taken from a device's file, so a second plug-in
+/// before the next sync takes only what is new. Kept per database: the iPod
+/// never writes its database, so while it stays the same file the counts in
+/// „Play Counts" only grow, and once it is written anew — by kessler or by
+/// anybody — they start again from nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Taken {
+    /// The database the counts were counted against: its length and when it
+    /// was written.
     pub database: String,
+    /// Plays already taken, by the track's persistent id.
     pub plays: HashMap<String, u32>,
+    /// Ratings already taken, likewise.
     pub ratings: HashMap<String, u8>,
 }
 
+/// A track the device played or rated since kessler last looked.
 #[derive(Debug, Clone)]
 pub struct Heard {
     pub track: IpodTrack,
+    /// Plays not taken yet.
     pub plays: u32,
+    /// When it was played last, in the iPod's clock — see [`Played`].
     pub last_played: Option<i64>,
+    /// A rating set on the iPod and not taken yet, 0–100.
     pub rating: Option<u8>,
 }
 
+/// What a database file is, for [`Taken::database`].
 pub fn database_stamp(device: &IpodDevice) -> String {
     let path = device.itunesdb_path();
     let meta = std::fs::metadata(&path).ok();
@@ -98,6 +147,9 @@ pub fn database_stamp(device: &IpodDevice) -> String {
     format!("{len}-{when}")
 }
 
+/// The plays and ratings in `played` that `taken` has not had yet, and what
+/// has been taken once these are. `stamp` is the database's — see
+/// [`database_stamp`]; under another one nothing counts as taken.
 pub fn new_plays(db: &ItunesDb, played: &[Played], taken: &Taken, stamp: &str) -> (Vec<Heard>, Taken) {
     let fresh = Taken::default();
     let before = if taken.database == stamp { taken } else { &fresh };
@@ -128,6 +180,8 @@ pub fn new_plays(db: &ItunesDb, played: &[Played], taken: &Taken, stamp: &str) -
 mod tests {
     use super::*;
 
+    /// A file as a third-generation iPod writes it: a 0x60-byte header and
+    /// sixteen-byte entries.
     fn file(entries: &[(u32, u32, u32)]) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"mhdp");
@@ -176,6 +230,8 @@ mod tests {
         assert_eq!(db.tracks[1].play_count, 0);
     }
 
+    /// Plugged in twice before a sync: the second time only the plays since
+    /// the first count; under a new database, all of them do.
     #[test]
     fn only_new_plays_are_taken() {
         let db = db(2);

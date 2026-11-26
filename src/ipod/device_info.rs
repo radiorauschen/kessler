@@ -1,9 +1,21 @@
+//! Identifying which iPod is attached, and what that implies for writing.
+//!
+//! The model number in `iPod_Control/Device/SysInfo` maps to a generation, and
+//! the generation decides whether the device demands a cryptographic checksum
+//! in the database header. Getting this wrong is not a cosmetic problem: a
+//! device that wants a checksum and does not find one shows an *empty library*
+//! even though every file is still there.
+//!
+//! Model and checksum tables follow libgpod's `itdb_device.c`.
+
 use std::path::Path;
 
+/// iPod hardware generations, as far as Kessler needs to tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Generation {
     First,
     Second,
+    /// The 2003 iPod with the row of touch buttons. *Not* the "iPod Classic".
     Third,
     Fourth,
     Photo,
@@ -13,19 +25,25 @@ pub enum Generation {
     Nano2,
     Nano3,
     Nano4,
+    /// 5G "iPod Video".
     Video1,
+    /// 5.5G.
     Video2,
     Shuffle1,
     Shuffle2,
     Shuffle3,
     Shuffle4,
+    /// The 2007 iPod Classic (6G).
     Classic1,
+    /// 2008 iPod Classic 120GB (6.5G).
     Classic2,
+    /// 2009 iPod Classic 160GB (7G).
     Classic3,
     Unknown,
 }
 
 impl Generation {
+    /// What Kessler prints for the user.
     pub fn label(self) -> &'static str {
         match self {
             Self::First => "iPod 1st generation",
@@ -52,6 +70,7 @@ impl Generation {
         }
     }
 
+    /// The checksum this generation's firmware demands in the database header.
     pub fn checksum(self) -> Checksum {
         match self {
             Self::First
@@ -78,6 +97,11 @@ impl Generation {
         }
     }
 
+    /// File extensions this generation's firmware can actually play.
+    ///
+    /// FLAC and Ogg Vorbis appear on no iPod of any generation. Copying one
+    /// over is a silent failure: the file transfers, occupies space, and the
+    /// device simply never lists it.
     pub fn playable_formats(self) -> &'static [&'static str] {
         match self {
             Self::First | Self::Second => &["mp3", "wav", "aif", "aiff"],
@@ -88,10 +112,16 @@ impl Generation {
         }
     }
 
+    /// A shuffle: no screen, and what it plays is its `iTunesSD` — see
+    /// `itunessd`. kessler treats it plainly:
+    /// it copies and removes music, and leaves alone what nobody sees on a
+    /// device without a screen — tags and Sound Check written back.
     pub fn is_shuffle(self) -> bool {
         matches!(self, Self::Shuffle1 | Self::Shuffle2 | Self::Shuffle3 | Self::Shuffle4)
     }
 
+    /// Whether it has playlists one can choose on it: the first two
+    /// shuffles play one list, the whole of it.
     pub fn has_playlists(self) -> bool {
         !matches!(self, Self::Shuffle1 | Self::Shuffle2)
     }
@@ -101,6 +131,7 @@ impl Generation {
         self.playable_formats().contains(&ext.as_str())
     }
 
+    /// How many `F##` folders the device's Music directory uses.
     pub fn music_folders(self) -> u32 {
         match self {
             Self::First | Self::Second => 20,
@@ -115,10 +146,14 @@ impl Generation {
     }
 }
 
+/// The checksum scheme a device requires over its iTunesDB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Checksum {
+    /// No signature needed — Kessler can write this device.
     None,
+    /// HMAC-SHA1 over the database, keyed from the FireWire GUID.
     Hash58,
+    /// Not identified.
     Unknown,
 }
 
@@ -129,6 +164,7 @@ impl Checksum {
     }
 }
 
+/// Map a 4-character model number to its generation.
 fn generation_for_model(model: &str) -> Generation {
     use Generation::*;
     match model {
@@ -162,6 +198,8 @@ fn generation_for_model(model: &str) -> Generation {
 }
 
 impl Generation {
+    /// Every model one can say a device is, when it cannot say so itself —
+    /// see [`write_model`]: the order of the table above, the oldest first.
     pub const CHOOSABLE: [Generation; 20] = [
         Generation::First,
         Generation::Second,
@@ -185,6 +223,7 @@ impl Generation {
         Generation::Classic3,
     ];
 
+    /// One model number of this generation, as `SysInfo` writes it.
     fn a_model_number(self) -> Option<&'static str> {
         Some(match self {
             Self::First => "8513",
@@ -212,6 +251,12 @@ impl Generation {
     }
 }
 
+/// Say what model a device is, where it cannot say so itself: its
+/// `iPod_Control/Device/SysInfo` is gone — a restore or a fresh format takes
+/// it away — and nothing is written to a device nobody recognises. Written
+/// back with one model number of the generation chosen, as gtkpod does, so
+/// the device is known again from then on, to other programs too. A
+/// `SysInfo` that is there keeps its other lines.
 pub fn write_model(mount_point: &Path, generation: Generation) -> std::io::Result<()> {
     let Some(number) = generation.a_model_number() else {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no model to write"));
@@ -228,18 +273,39 @@ pub fn write_model(mount_point: &Path, generation: Generation) -> std::io::Resul
     std::fs::write(&path, format!("{kept}ModelNumStr: x{number}\n"))
 }
 
+/// What Kessler knows about the attached hardware.
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub generation: Generation,
+    /// Raw `ModelNumStr` from SysInfo, if it was readable.
     pub model_number: Option<String>,
     pub serial: Option<String>,
+    /// The FireWire GUID the database is signed with (`hash58`), and where
+    /// it was found: SysInfoExtended, SysInfo, or the USB serial number,
+    /// which on these iPods is the same sixteen digits. Looked for on USB
+    /// only for a device that wants the signature.
     pub guid: Option<([u8; 8], &'static str)>,
+    /// The database format the device says it wants, from SysInfoExtended's
+    /// `DBVersion`: 0 to 2 unsigned, 3 and up signed. The device's own word,
+    /// so it outranks the model: a model chosen wrongly by hand cannot make
+    /// kessler write an unsigned database to one that wants a signature.
     pub db_version: Option<u32>,
+    /// The database already on the device carries a signature — the hash58
+    /// field of its header is not empty: whatever wrote it knew the device
+    /// wants one, and it is not written unsigned over it.
     pub signed_database: bool,
+    /// It wants a later signature than hash58 — its database says a later
+    /// hashing scheme, or SysInfoExtended a `DBVersion` past 3 — which kessler
+    /// cannot write: the nano of the fifth generation and after.
     pub later_signature: bool,
 }
 
 impl DeviceInfo {
+    /// Read what we can from `iPod_Control/Device/`.
+    ///
+    /// A missing or unreadable SysInfo is not an error: plenty of iPods have
+    /// been reformatted and lost it. It just means the generation is unknown,
+    /// and unknown generations are not written to.
     pub fn read(mount_point: &Path) -> Self {
         let device_dir = mount_point.join("iPod_Control").join("Device");
 
@@ -300,10 +366,19 @@ impl DeviceInfo {
         info
     }
 
+    /// The GUID to sign the database with, for a device that wants it
+    /// signed and where one was found; None for every device written
+    /// unsigned.
     pub fn signing(&self) -> Option<[u8; 8]> {
         (self.checksum() == Checksum::Hash58).then_some(self.guid.map(|(g, _)| g)).flatten()
     }
 
+    /// What the device wants: a signature where its database already has one
+    /// or where it says so itself (`DBVersion` 3 and up), else what its model
+    /// wants.
+    ///
+    /// A later scheme than hash58 is one kessler does not know: Unknown, and
+    /// not written.
     pub fn checksum(&self) -> Checksum {
         if self.later_signature {
             return Checksum::Unknown;
@@ -314,6 +389,7 @@ impl DeviceInfo {
         self.generation.checksum()
     }
 
+    /// Whether Kessler may write this device's database, and why not if not.
     pub fn writable(&self) -> std::result::Result<(), String> {
         match self.checksum() {
             Checksum::None => Ok(()),
@@ -350,6 +426,10 @@ impl DeviceInfo {
     }
 }
 
+/// The generation an iPod's USB product number stands for (Apple, `05ac`),
+/// as the public list of USB numbers (`usb.ids`) names them: one number for a
+/// whole generation, the minis' two and the video's two each sharing one. The
+/// numbers that name no one generation (`1206`–`1208`) are left out.
 fn generation_for_usb(product: u16) -> Option<Generation> {
     Some(match product {
         0x1201 => Generation::Third,
@@ -370,6 +450,15 @@ fn generation_for_usb(product: u16) -> Option<Generation> {
     })
 }
 
+/// The model an iPod is by the number it gives on USB, where nothing else
+/// said it — what iTunes asks the device when it writes `SysInfo`, which a
+/// restore or a fresh format without iTunes leaves out, and another program
+/// may write without a model number in it. Where the model number is
+/// missing (`missing`) it is written into `SysInfo` (`write_model`, the
+/// file's other lines kept), so this is asked once and the device is known
+/// from then on, to other programs too; a model number there that is not
+/// known is the device's own word and stays — the USB number counts only for
+/// now. Nothing on a FireWire connection, which has no such number.
 fn by_usb(mount_point: &Path, missing: bool) -> Option<Generation> {
     let Usb { vendor, product, .. } = usb_lookup(mount_point, &mut Vec::new())?;
     if vendor != 0x05AC {
@@ -387,13 +476,17 @@ fn by_usb(mount_point: &Path, missing: bool) -> Option<Generation> {
     Some(generation)
 }
 
+/// What USB says about the device a volume is on — see [`usb_lookup`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Usb {
     vendor: u16,
     product: u16,
+    /// Its serial number: on an iPod, its FireWire GUID.
     serial: Option<String>,
 }
 
+/// How the USB numbers were looked for, step by step, for the report: what
+/// each step found, or where it stopped.
 pub fn usb_trace(mount_point: &Path) -> Vec<String> {
     let mut said = Vec::new();
     let found = usb_lookup(mount_point, &mut said);
@@ -413,6 +506,8 @@ pub fn usb_trace(mount_point: &Path) -> Vec<String> {
     said
 }
 
+/// Under `/sys`, from the block device `/proc/mounts` names for the volume,
+/// up to the USB device it hangs off. Each step said in `said`.
 #[cfg(target_os = "linux")]
 fn usb_lookup(mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
     let mounts = std::fs::read_to_string("/proc/mounts").ok()?;
@@ -442,6 +537,9 @@ fn usb_lookup(mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
     }
 }
 
+/// On a Mac: `diskutil` names the whole disk the volume is on, and in
+/// `ioreg`'s tree of USB devices the one whose media is that disk says its
+/// numbers. Each step said in `said`.
 #[cfg(target_os = "macos")]
 fn usb_lookup(mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
     let out = std::process::Command::new("/usr/sbin/diskutil").arg("info").arg("-plist").arg(mount_point).output().ok()?;
@@ -465,6 +563,12 @@ fn usb_lookup(mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
     found
 }
 
+/// In `ioreg`'s tree of USB devices, the numbers of the one whose media is
+/// `disk`: the nearest `"idVendor" = …` and `"idProduct" = …` before the
+/// line that names the disk — its own device's, however many hubs stand
+/// above it in the tree. The first ones of the tree were the first hub's.
+/// Its serial number from the same device's lines only, from where that
+/// device begins (`+-o`) on: a hub's would sign the database for no iPod.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn usb_in_ioreg(tree: &str, disk: &str) -> Option<Usb> {
     let bsd = format!("\"BSD Name\" = \"{disk}\"");
@@ -494,6 +598,8 @@ fn usb_lookup(_mount_point: &Path, said: &mut Vec<String>) -> Option<Usb> {
     None
 }
 
+/// The files in `iPod_Control/Device`, for the report: which of what the
+/// model is read from are there.
 pub fn device_files(mount_point: &Path) -> String {
     let dir = mount_point.join("iPod_Control").join("Device");
     match std::fs::read_dir(&dir) {
@@ -506,6 +612,13 @@ pub fn device_files(mount_point: &Path) -> String {
     }
 }
 
+/// A shuffle known by the list it plays from, when its model number says
+/// nothing — missing, or one the table lacks. Only a shuffle has an
+/// `iTunesSD`, and its shape tells the two kinds apart: the third and fourth
+/// begin with `bdhs`, the first and second are a short head and 558 bytes a
+/// track. Which of each pair cannot be told; both of a pair are written
+/// alike, so only the picture can be wrong. Every shuffle takes an unsigned
+/// database — it never reads it — so nothing is risked by writing to it.
 fn shuffle_by_its_list(mount_point: &Path) -> Option<Generation> {
     let list = std::fs::read(mount_point.join("iPod_Control").join("iTunes").join("iTunesSD")).ok()?;
     if list.starts_with(b"bdhs") {
@@ -517,6 +630,7 @@ fn shuffle_by_its_list(mount_point: &Path) -> Option<Generation> {
     }
 }
 
+/// `Key: value` lookup in the plain-text SysInfo file.
 fn sysinfo_field(contents: &str, key: &str) -> Option<String> {
     contents.lines().find_map(|line| {
         let (k, v) = line.split_once(':')?;
@@ -524,6 +638,13 @@ fn sysinfo_field(contents: &str, key: &str) -> Option<String> {
     })
 }
 
+/// The device writes its model as a single prefix letter plus the four
+/// characters that identify the model: `x9460`, `xA146`. Apple's own part
+/// numbers add a region suffix (`M9460LL/A`).
+///
+/// libgpod drops one leading letter and looks the rest up verbatim; doing the
+/// same, plus trimming anything past the fourth character, also handles the
+/// part-number spelling.
 fn normalise_model(raw: &str) -> String {
     readings(raw)
         .into_iter()
@@ -533,6 +654,21 @@ fn normalise_model(raw: &str) -> String {
         })
 }
 
+/// Every way of reading what the device calls itself, fewest letters dropped
+/// first.
+///
+/// Apple writes the same part number in more than one shape, and `SysInfo`
+/// adds a prefix of its own on top: the iPod 3G is `M8976`, and the file may
+/// say `xM8976`; the 5G is `A146`, written `xA146` — but also `MA146` in
+/// Apple's own materials, and so possibly `xMA146`. Dropping exactly one
+/// leading letter reads `xA146` correctly and turns `xM8976` into `M897`,
+/// which is nothing at all. That is not a guess worth making: a device the
+/// program does not recognise is a device it refuses to write to, so guessing
+/// wrong means a working iPod is told it cannot be written to.
+///
+/// So every reading is offered and the table decides. It cannot go wrong in
+/// the dangerous direction — a number nothing recognises is still unknown, and
+/// unknown is still refused.
 fn readings(raw: &str) -> Vec<String> {
     let alnum: Vec<char> = raw
         .chars()
@@ -557,6 +693,10 @@ fn readings(raw: &str) -> Vec<String> {
     readings
 }
 
+/// Pull `<key>NAME</key><string>VALUE</string>` out of SysInfoExtended.
+///
+/// A five-line scan beats adding a plist parser for one field.
+/// Pull `<key>NAME</key><integer>VALUE</integer>` out of SysInfoExtended.
 fn plist_integer_after_key(xml: &str, key: &str) -> Option<u32> {
     let needle = format!("<key>{key}</key>");
     let rest = &xml[xml.find(&needle)? + needle.len()..];
@@ -565,13 +705,19 @@ fn plist_integer_after_key(xml: &str, key: &str) -> Option<u32> {
     rest[..rest.find("</integer>")?].trim().parse().ok()
 }
 
+/// What signature the database on the device carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Signature {
     None,
     Hash58,
+    /// A later scheme than hash58, as the header's 0x30 says.
     Later,
 }
 
+/// The signature the database on the device carries: the hashing scheme its
+/// header names at 0x30 (one for hash58, more for the later ones), else
+/// whether the twenty bytes of the hash58 at 0x58 are filled — empty in an
+/// unsigned database.
 fn database_signature(mount_point: &Path) -> Signature {
     use std::io::Read;
     let path = mount_point.join("iPod_Control").join("iTunes").join("iTunesDB");
@@ -592,12 +738,17 @@ fn database_signature(mount_point: &Path) -> Signature {
     if head[0x58..end].iter().any(|b| *b != 0) { Signature::Hash58 } else { Signature::None }
 }
 
+/// The model number the last three characters of an Apple serial number
+/// stand for — libgpod's table (from podsleuth), for the models that take an
+/// unsigned database. None for a serial too short or a suffix not listed.
 fn model_for_serial(serial: &str) -> Option<&'static str> {
     let serial = serial.trim();
     let suffix = serial.get(serial.len().checked_sub(3)?..)?.to_ascii_uppercase();
     SERIAL_MODELS.iter().find(|(s, _)| *s == suffix).map(|(_, m)| *m)
 }
 
+/// Serial suffixes and the model numbers they mean. Where libgpod lists a
+/// suffix twice, the later one, as its table keeps it.
 const SERIAL_MODELS: &[(&str, &str)] = &[
     ("LG6", "8541"), ("NAM", "8541"), ("MJ2", "8541"), ("ML1", "8709"), ("MME", "8709"),
     ("MMB", "8737"), ("MMC", "8738"), ("NGE", "8740"), ("NGH", "8740"), ("MMF", "8741"),
@@ -677,6 +828,13 @@ mod tests {
         assert!(!Generation::Unknown.checksum().is_supported_for_writing());
     }
 
+    /// The same iPod, written every way an iPod writes itself.
+    ///
+    /// This decides whether a device may be written to at all, so getting it
+    /// wrong is not cosmetic: an unrecognised number is refused, and a working
+    /// iPod is then told it cannot be synced. `xM8976` — a 3G with both the
+    /// file's prefix and Apple's own letter in front of the number — used to
+    /// come out as `M897`, which is nothing.
     #[test]
     fn a_part_number_is_read_whichever_way_it_is_written() {
         for spelling in ["8976", "M8976", "x8976", "xM8976", "M8976LL/A"] {
@@ -739,6 +897,8 @@ mod tests {
         assert!(info.writable().is_err());
     }
 
+    /// A shuffle whose model number the table lacks, or which has none, is
+    /// known by its `iTunesSD`; any other device without one stays unknown.
     #[test]
     fn a_shuffle_is_known_by_its_list() {
         let dir = std::env::temp_dir().join(format!("kessler-sd-{}", std::process::id()));
@@ -760,6 +920,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A database kessler wrote is not taken for a signed one; one with a
+    /// hash in its header is, and the device is not written then — nor one
+    /// that says itself it wants a signature, whatever model it is said to be.
+    /// The serial names the model where the model number is missing.
     #[test]
     fn a_signature_wanted_or_found_keeps_kessler_from_writing() {
         let dir = std::env::temp_dir().join(format!("kessler-signed-{}", std::process::id()));
@@ -788,6 +952,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A classic is written once its GUID is found, signed; without one, not
+    /// at all; and a device that wants a later signature never, whatever
+    /// GUID it has.
     #[test]
     fn a_classic_is_signed_with_its_guid_and_a_later_one_is_left_alone() {
         let dir = std::env::temp_dir().join(format!("kessler-guid-{}", std::process::id()));
@@ -847,6 +1014,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// On USB the serial is the iPod's own, from its own lines in the tree,
+    /// not a hub's above it.
     #[test]
     fn the_usb_serial_is_the_ipods_own() {
         let tree = r#"+-o USB2.0 Hub@02100000  <class IOUSBHostDevice>
@@ -871,6 +1040,8 @@ mod tests {
         assert_eq!(usb_in_ioreg(tree, "disk5").unwrap().serial, None);
     }
 
+    /// The USB numbers name the generations as the public list does; the
+    /// third is writable, a classic still wants its signature.
     #[test]
     fn a_usb_number_names_its_generation() {
         assert_eq!(generation_for_usb(0x1201), Some(Generation::Third));
@@ -880,6 +1051,8 @@ mod tests {
         assert_eq!(generation_for_usb(0x1261).map(Generation::checksum), Some(Checksum::Hash58));
     }
 
+    /// The iPod behind a hub: its own numbers, not the hub's, which come
+    /// first in the tree (as `ioreg` printed it on a Mac with a USB-C hub).
     #[test]
     fn the_ipod_behind_a_hub_is_found_by_its_own_numbers() {
         let tree = r#"+-o USB2.0 Hub@02100000  <class IOUSBHostDevice>
@@ -904,6 +1077,9 @@ mod tests {
         assert_eq!(generation_for_usb(0x1201), Some(Generation::Third));
     }
 
+    /// A device without its `SysInfo` is unknown; a model said for it is
+    /// written back and read as that model, for every model one can choose,
+    /// and the file's other lines stay.
     #[test]
     fn a_model_chosen_is_written_and_read_back() {
         let dir = std::env::temp_dir().join(format!("kessler-model-{}", std::process::id()));

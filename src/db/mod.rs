@@ -9,26 +9,35 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::error::Result;
 use models::*;
 
+/// Bumped whenever [`search_text`] or [`sort_key`] changes what it produces, so
+/// that every existing database rewrites its derived columns instead of quietly
+/// keeping values the new queries can no longer match.
 const SEARCH_TEXT_VERSION: &str = "3";
 
+/// The order a list of albums comes back in. See [`Database::get_albums`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AlbumOrder {
     Alphabetical,
+    /// Most recently added first: the answer to "what did I just find".
     Added,
 }
 
+/// What the database already knows about a file on disk.
 #[derive(Debug, Clone)]
 pub struct ScanState {
+    /// The file's modification time as it was when it was last read.
     pub modified: String,
     pub artist_key: String,
     pub album_key: String,
 }
 
+/// The music library database backed by SQLite.
 pub struct Database {
     conn: Connection,
 }
 
 impl Database {
+    /// Open (or create) the database at the given path.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -39,7 +48,8 @@ impl Database {
         Ok(db)
     }
 
-    #[allow(dead_code)]
+    /// Open an in-memory database (for testing).
+    #[cfg(test)]
     pub fn open_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let db = Self { conn };
@@ -124,6 +134,25 @@ impl Database {
         Ok(())
     }
 
+    /// Fold together rows that turn out to be the same file.
+    ///
+    /// The bug this repairs: a record whose every track appeared twice. Two
+    /// rows, two paths, one file — `…/Music/Cave/…` and `…/Music/CAVE/…` open
+    /// the same thing on a Mac, so `path` being unique never noticed. Nothing
+    /// gets in under a second name any more (see
+    /// `crate::library::one_name_for`), but a library that already holds the
+    /// pairs would go on showing them until each of those files happened to be
+    /// scanned again.
+    ///
+    /// So every path is put to the filesystem once. A row already under the
+    /// disk's own name is the one that stays; a row under another name for the
+    /// same file is folded into it and goes. What it had worth keeping goes
+    /// with it — its plays, its stars, and the earlier of the two arrival
+    /// dates, because a record does not become new again by being found twice.
+    /// A row whose file cannot be found is left exactly as it is.
+    ///
+    /// Stamped by version rather than by a yes, so that if the rule for one
+    /// name ever changes, the stamp changes with it and the pass runs again.
     fn one_row_per_file(&self) -> Result<()> {
         const VERSION: &str = "1";
         let stamped: Option<String> = self
@@ -211,6 +240,14 @@ impl Database {
         Ok(())
     }
 
+    /// Give tracks that were dated by the scan clock the date of their file.
+    ///
+    /// Every database written before "newest first" existed stamped
+    /// `date_added` with the moment of the scan, which made an entire library
+    /// equally new and the order useless. A track cannot have arrived after its
+    /// file was last written, so the earlier of the two dates is the honest one,
+    /// and taking the earlier is also why running this twice changes nothing.
+    /// One pass, stamped in `meta`, and never again.
     fn date_tracks_by_their_files(&self) -> Result<()> {
         let done: Option<String> = self
             .conn
@@ -234,6 +271,16 @@ impl Database {
         Ok(())
     }
 
+    /// Make sure every track carries a current `search_text`.
+    ///
+    /// Two things can be out of date: the column may not exist at all (a
+    /// database written before the filter did), or it may hold text built by an
+    /// older version of [`search_text`] — when the folding rules change, every
+    /// row has to be rewritten or the filter quietly stops finding things. A
+    /// version stamp in `meta` catches both.
+    ///
+    /// The rebuild runs in Rust rather than as `UPDATE … LOWER(…)`: SQLite's
+    /// own `LOWER` only knows ASCII, so it would leave "BJÖRK" as "bjÖrk".
     fn add_search_column(&self) -> Result<()> {
         for column in ["search_text", "artist_key", "album_key"] {
             let present: bool = self
@@ -272,6 +319,7 @@ impl Database {
         Ok(())
     }
 
+    /// Rewrite the derived columns for every track.
     fn rebuild_search_text(&self) -> Result<()> {
         let rows: Vec<(i64, String, String, String, String)> = self
             .conn
@@ -309,6 +357,7 @@ impl Database {
         Ok(())
     }
 
+    /// Insert or update a track. Returns the track ID.
     pub fn upsert_track(&self, track: &Track) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO tracks (
@@ -380,6 +429,7 @@ impl Database {
         Ok(id)
     }
 
+    /// Get a track by its file path.
     pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
         let track = self
             .conn
@@ -392,6 +442,7 @@ impl Database {
         Ok(track)
     }
 
+    /// Get a track by ID.
     pub fn get_track(&self, id: i64) -> Result<Option<Track>> {
         let track = self
             .conn
@@ -402,6 +453,11 @@ impl Database {
         Ok(track)
     }
 
+    /// Remove every track that lives under one folder.
+    ///
+    /// What "stop watching this folder" has to mean. Leaving the tracks behind
+    /// would be a library listing music from a folder the user just said they
+    /// did not want, with no way to reach it again through the interface.
     pub fn remove_tracks_under(&self, folder: &Path) -> Result<u32> {
         let mut prefix = folder.to_string_lossy().to_string();
         if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
@@ -421,6 +477,7 @@ impl Database {
         Ok(removed as u32)
     }
 
+    /// Remove tracks whose files no longer exist.
     pub fn remove_missing_tracks(&self) -> Result<u32> {
         let mut stmt = self.conn.prepare("SELECT id, path FROM tracks")?;
         let missing: Vec<i64> = stmt
@@ -442,6 +499,8 @@ impl Database {
         Ok(count)
     }
 
+    /// Point a track at the place its file has moved to, keeping the row —
+    /// and with it the lists it is on and the times it was played.
     pub fn move_track_path(&self, id: i64, path: &Path) -> Result<()> {
         self.conn.execute(
             "UPDATE tracks SET path = ?1 WHERE id = ?2",
@@ -450,6 +509,10 @@ impl Database {
         Ok(())
     }
 
+    /// Remove the tracks under one folder whose files are gone.
+    ///
+    /// Only under that folder: a file brought in from elsewhere and left
+    /// where it was is not this folder's to judge.
     pub fn remove_missing_under(&self, folder: &Path) -> Result<u32> {
         let mut prefix = folder.to_string_lossy().to_string();
         if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
@@ -469,6 +532,11 @@ impl Database {
         Ok(missing.len() as u32)
     }
 
+    /// Everything a scan needs to know about a file it has seen before.
+    ///
+    /// One query instead of two: the scan asks this of every file in the
+    /// library, and the album keys come along because deciding whether to skip
+    /// a file needs to know which album's cover it would have supplied.
     pub fn scan_state(&self, path: &str) -> Result<Option<ScanState>> {
         let result = self
             .conn
@@ -487,10 +555,24 @@ impl Database {
         Ok(result)
     }
 
+    /// Get all distinct artists, sorted alphabetically.
+    ///
+    /// Grouped on `artist_key`, so "Boards Of Canada" and "boards of canada"
+    /// are one artist rather than two — which is what every other music app
+    /// does, and what a library collected over years needs.
+    ///
+    /// The name shown is the spelling most of the tracks use, with the
+    /// alphabetically first as a tiebreak. Picking by majority rather than by
+    /// whichever row SQLite reached first means the answer is the same every
+    /// time, and is usually the spelling that was meant.
+    ///
+    /// `filter` narrows the whole library first, so the column lists only the
+    /// artists that still have something to show.
     pub fn get_artists(&self, filter: Option<&str>) -> Result<Vec<Artist>> {
         self.artists_ordered(filter, false)
     }
 
+    /// The same artists, newest first — by the day their newest file arrived.
     pub fn get_artists_recent(&self, filter: Option<&str>) -> Result<Vec<Artist>> {
         self.artists_ordered(filter, true)
     }
@@ -535,10 +617,23 @@ impl Database {
         Ok(artists)
     }
 
+    /// How a list of albums runs.
+    ///
+    /// Two genuinely different questions. A column beside an artist list is
+    /// being read alphabetically, one album at a time. A wall of covers is
+    /// being *browsed*, and a shelf is not alphabetical by title — it is by
+    /// artist, and within an artist by year, because that is how a body of work
+    /// makes sense.
     pub fn get_albums(&self, artist: Option<&str>, filter: Option<&str>) -> Result<Vec<Album>> {
         self.albums_ordered(artist, filter, AlbumOrder::Alphabetical)
     }
 
+    /// The same albums, newest first.
+    ///
+    /// An album is as new as its newest track, not its oldest: a record whose
+    /// missing track arrived today belongs at the top today. `date_added` is
+    /// stored as an ISO timestamp, which sorts as text exactly as it sorts as
+    /// time, so no conversion is needed.
     pub fn get_albums_recent(
         &self,
         artist: Option<&str>,
@@ -616,6 +711,7 @@ impl Database {
         Ok(albums)
     }
 
+    /// Get tracks for a specific album by a specific artist (or filtered).
     pub fn get_tracks(
         &self,
         artist: Option<&str>,
@@ -685,6 +781,7 @@ impl Database {
         Ok(tracks)
     }
 
+    /// Search tracks by a query string (matches title, artist, album).
     #[cfg(test)]
     pub fn search_tracks(&self, query: &str) -> Result<Vec<Track>> {
         let patterns = filter_patterns(Some(query));
@@ -706,10 +803,13 @@ impl Database {
         Ok(tracks)
     }
 
+    /// Get total track count.
     pub fn track_count(&self) -> Result<u32> {
         self.track_count_matching(None)
     }
 
+    /// How long the whole library plays, in seconds, and how much room its
+    /// files take, in bytes.
     pub fn library_totals(&self) -> Result<(f64, u64)> {
         let totals = self.conn.query_row(
             "SELECT COALESCE(SUM(duration_secs), 0.0), COALESCE(SUM(file_size), 0) FROM tracks",
@@ -719,6 +819,13 @@ impl Database {
         Ok(totals)
     }
 
+    /// How many tracks a filter matches, across the whole library.
+    ///
+    /// Not the same as the length of any one column: those are narrowed by the
+    /// selection to their left as well.
+    /// The titles, as keys, that tracks without an album artist share with
+    /// at least `artists` different artists between them: where to look for
+    /// compilations (`GuiApp::compilation_records` sorts them by folder).
     pub fn compilation_album_keys(&self, artists: usize) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT album_key FROM tracks
@@ -746,12 +853,15 @@ impl Database {
         Ok(count)
     }
 
+    /// Every track's plays times its length, in seconds: how long the
+    /// library has been listened to, as far as its counts tell.
     pub fn heard_before(&self) -> Result<f64> {
         Ok(self
             .conn
             .query_row("SELECT COALESCE(SUM(play_count * duration_secs), 0.0) FROM tracks", [], |r| r.get::<_, f64>(0))?)
     }
 
+    /// Increment play count and update last_played for a track.
     pub fn record_play(&self, track_id: i64) -> Result<()> {
         if track_id < 0 {
             return Ok(());
@@ -768,6 +878,9 @@ impl Database {
         Ok(())
     }
 
+    /// Plays heard elsewhere — on an iPod — added to a track: `plays` of
+    /// them, the last at `last`, each `seconds` before the next. The last
+    /// played stays the later of the two.
     pub fn add_plays(&self, track_id: i64, plays: u32, last: chrono::NaiveDateTime, seconds: f64) -> Result<()> {
         let last_text = last.to_string();
         self.conn.execute(
@@ -787,12 +900,26 @@ impl Database {
         Ok(())
     }
 
+    /// A rating set somewhere else — on an iPod — in whole stars.
     pub fn set_rating(&self, track_id: i64, stars: u8) -> Result<()> {
         self.conn
             .execute("UPDATE tracks SET rating = ?1 WHERE id = ?2", params![stars.min(5), track_id])?;
         Ok(())
     }
 
+    /// The newest arrivals — asked for as a short list, not fetched whole and
+    /// then cut down.
+    ///
+    /// The difference matters because this runs on a keystroke. Landing on the
+    /// "zuletzt" row used to mean reading every track in the library out of
+    /// the database, building nine thousand `Track` values, and throwing all
+    /// but eighty of them away. `ORDER BY … LIMIT` and an index on the date
+    /// let SQLite stop after eighty.
+    ///
+    /// Ties are broken by id, descending. A folder of music copied in one go
+    /// gives every file the same timestamp to the second, and without a second
+    /// key those tracks would come back in whatever order the database felt
+    /// like — so the same list would read differently each time it was opened.
     pub fn get_recent_tracks(&self, filter: Option<&str>, limit: usize) -> Result<Vec<Track>> {
         let patterns = filter_patterns(filter);
         let mut where_clause = String::new();
@@ -817,6 +944,7 @@ impl Database {
         Ok(tracks)
     }
 
+    /// Get all playlists.
     pub fn get_playlists(&self) -> Result<Vec<Playlist>> {
         let mut stmt = self
             .conn
@@ -837,6 +965,7 @@ impl Database {
         Ok(playlists)
     }
 
+    /// Create a new playlist. Returns the playlist ID.
     pub fn create_playlist(&self, name: &str) -> Result<i64> {
         let now = chrono::Local::now().naive_local().to_string();
         self.conn.execute(
@@ -846,6 +975,7 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Add a track to a playlist.
     #[cfg(test)]
     pub fn add_to_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
         let max_pos: i64 = self
@@ -862,6 +992,13 @@ impl Database {
         Ok(())
     }
 
+    /// Every list, with how many tracks it holds.
+    ///
+    /// One query rather than one per list: the first column draws every row
+    /// every frame, and a count each would be a query each.
+    ///
+    /// A list whose tracks have all gone out of the library is still a list —
+    /// the count is what says so, and a `0` is a fact rather than a fault.
     pub fn playlists_with_counts(&self) -> Result<Vec<(Playlist, usize)>> {
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.name, p.is_smart, p.smart_rules, p.date_created, \
@@ -890,6 +1027,7 @@ impl Database {
         Ok(rows)
     }
 
+    /// Give a list another name.
     pub fn rename_playlist(&self, playlist_id: i64, name: &str) -> Result<()> {
         let now = chrono::Local::now().naive_local().to_string();
         self.conn.execute(
@@ -899,12 +1037,25 @@ impl Database {
         Ok(())
     }
 
+    /// Take a list away. The tracks themselves are not touched.
+    ///
+    /// `ON DELETE CASCADE` sees to the rows that pointed at it — but only with
+    /// foreign keys switched on, which is why `open` turns them on.
     pub fn delete_playlist(&self, playlist_id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM playlists WHERE id = ?1", params![playlist_id])?;
         Ok(())
     }
 
+    /// Put these tracks in this list, in this order, in place of whatever was
+    /// in it.
+    ///
+    /// The whole list at once, because that is what the queue hands back after
+    /// somebody has dragged it about: a sequence, not a set of edits. In one
+    /// transaction, so a list is never half written.
+    ///
+    /// The same track may appear twice — a list is a running order, and a
+    /// record that opens and closes an evening is a thing people do.
     pub fn set_playlist_tracks(&mut self, playlist_id: i64, track_ids: &[i64]) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute(
@@ -929,6 +1080,7 @@ impl Database {
         Ok(())
     }
 
+    /// Add these tracks to the end of a list, keeping what is already in it.
     pub fn append_to_playlist(&mut self, playlist_id: i64, track_ids: &[i64]) -> Result<()> {
         let mut at: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE playlist_id = ?1",
@@ -955,6 +1107,7 @@ impl Database {
         Ok(())
     }
 
+    /// Get tracks in a playlist, ordered by position.
     pub fn get_playlist_tracks(&self, playlist_id: i64) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.* FROM tracks t
@@ -970,6 +1123,13 @@ impl Database {
     }
 }
 
+/// Lowercase, and with the accents taken off.
+///
+/// Both the stored text and the typed query go through this, so someone at a
+/// keyboard without umlauts still finds Björk, and someone who types the ö
+/// still finds her too. Decompose to base letter plus combining mark, drop the
+/// marks, then handle the few letters that carry their mark inside the glyph
+/// and so survive decomposition.
 fn fold(text: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     let mut out = String::with_capacity(text.len());
@@ -992,6 +1152,12 @@ fn fold(text: &str) -> String {
     out
 }
 
+/// The name a track is filed under.
+///
+/// The album artist when there is one, so that a compilation files under the
+/// band rather than scattering across every guest. This is the same rule the
+/// queries use in SQL, written once here so the stored key cannot drift from
+/// the column it is meant to match.
 pub fn grouping_artist(track: &Track) -> &str {
     if track.album_artist.is_empty() {
         &track.artist
@@ -1000,6 +1166,17 @@ pub fn grouping_artist(track: &Track) -> &str {
     }
 }
 
+/// The key two spellings of the same name have in common.
+///
+/// A library collected over years holds "Boards Of Canada" and "boards of
+/// canada", a name with a non-breaking space in it, and one with a stray
+/// zero-width character a tag editor left behind. They are one artist. Grouping
+/// on the text as typed makes them several, which is what the column showed.
+///
+/// So grouping and filtering both go through this: case folded, accents off,
+/// invisible characters dropped, runs of whitespace collapsed to one space, and
+/// trimmed. The spelling itself is kept untouched for display — this only
+/// decides what belongs together.
 pub fn sort_key(text: &str) -> String {
     fold(text)
         .chars()
@@ -1011,6 +1188,12 @@ pub fn sort_key(text: &str) -> String {
         .join(" ")
 }
 
+/// Where a name stands in an alphabetical list: in the iPod's indices, and in
+/// kessler's artist column too, so both run alike. What comes
+/// before the first letter or digit is left aside, so „(((Microwaves)))" stands
+/// under M; names beginning with a letter first, then those beginning with a
+/// digit, as Apple orders them, and an empty name last. Within that, folded the
+/// way the library folds names, so ÄÄNIPÄÄ stands among the A.
 pub fn shelf_key(text: &str) -> (u8, String) {
     let folded = sort_key(text);
     let mut words = String::new();
@@ -1043,10 +1226,18 @@ pub fn shelf_key(text: &str) -> (u8, String) {
     (class, key)
 }
 
+/// The haystack stored alongside every track.
+///
+/// The separator is a character no tag will contain, so a word cannot match
+/// across the seam between, say, an album's last letter and a title's first.
 fn search_text(title: &str, artist: &str, album_artist: &str, album: &str) -> String {
     fold(&format!("{title}\u{1}{artist}\u{1}{album_artist}\u{1}{album}"))
 }
 
+/// Turn a typed query into one `LIKE` pattern per word.
+///
+/// Words are ANDed: "bjork homo" finds Homogenic and nothing else. Whitespace
+/// only, so a query that is all spaces filters nothing rather than everything.
 fn filter_patterns(query: Option<&str>) -> Vec<String> {
     let Some(query) = query else {
         return Vec::new();
@@ -1063,6 +1254,7 @@ fn filter_patterns(query: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// The conditions for those patterns, starting at placeholder `?start`.
 fn filter_conditions(patterns: &[String], start: usize) -> String {
     patterns
         .iter()
@@ -1072,6 +1264,7 @@ fn filter_conditions(patterns: &[String], start: usize) -> String {
         .join(" AND ")
 }
 
+/// The same, as a complete `WHERE` clause — empty when nothing is filtered.
 fn filter_where(patterns: &[String], start: usize) -> String {
     if patterns.is_empty() {
         String::new()
@@ -1204,6 +1397,12 @@ mod tests {
         assert_eq!(tracks[0].title, "Xtal");
     }
 
+    /// A list is a running order, and the things done to one.
+    ///
+    /// Written as one test because they are one story: a list is made, filled
+    /// from a sequence somebody arranged, counted, renamed, refilled and
+    /// thrown away — and what has to hold at every step is that the *order*
+    /// comes back the way it went in, including a track that appears twice.
     #[test]
     fn a_list_keeps_the_order_it_was_given() {
         let mut db = Database::open_memory().unwrap();
@@ -1285,6 +1484,12 @@ mod ordering_tests {
         }
     }
 
+    /// Sorting a whole library by track number really does put every album's
+    /// opener first. It reads oddly, and for a while the query quietly
+    /// substituted artist order to avoid it — but the only way to ask for this
+    /// is to click the `nr` head, and a head that visibly does nothing is worse
+    /// than a list somebody did not want. Ties still fall back to artist,
+    /// album, disc, so the result is at least the same every time.
     #[test]
     fn a_track_number_sort_gathers_the_openers() {
         let db = Database::open_memory().unwrap();
@@ -1307,6 +1512,14 @@ mod ordering_tests {
         assert_eq!(titles, vec!["xtal", "lizard point", "tha", "the lost day"]);
     }
 
+    /// An album is a title *and* an artist, and the album list is grouped that
+    /// way — so a selection that carries only the title asks a question the
+    /// column never asked. Two records called "Greatest Hits" are two rows and
+    /// were one answer; the untagged are worse, because every one of them is
+    /// called the same nothing.
+    ///
+    /// This is what the grid ran into: with no artist column beside it, a click
+    /// on a coverless tile came back with every untagged file in the library.
     #[test]
     fn a_title_alone_does_not_pick_out_one_record() {
         let db = Database::open_memory().unwrap();
@@ -1337,6 +1550,8 @@ mod ordering_tests {
         assert_eq!(titles(Some("Cher"), Some("")), vec!["noch eine"]);
     }
 
+    /// And the album list really does keep them apart, so there is an artist
+    /// there to carry: four tracks, two titles, four rows.
     #[test]
     fn the_same_title_by_two_artists_is_two_albums() {
         let db = Database::open_memory().unwrap();
@@ -1387,6 +1602,12 @@ mod ordering_tests {
         assert_eq!(titles, vec!["lizard point", "the lost day", "tal coat"]);
     }
 
+    /// Newest first, and an album is as new as its newest track: the point of
+    /// the order is seeing what has just arrived, and a record completed today
+    /// has just arrived even if most of it was here last year. A handful of
+    /// untagged files used to open the library: their key is the empty string,
+    /// and that sorts before every letter there is. The artist column runs as
+    /// the iPod's menu runs, and the tracks by artist with it.
     #[test]
     fn artists_run_as_on_the_ipod() {
         let db = Database::open_memory().unwrap();
@@ -1482,6 +1703,8 @@ mod ordering_tests {
         assert_eq!(names, vec!["Musick"]);
     }
 
+    /// A library scanned before "newest first" existed has every track dated
+    /// by the scan. Opening it again must repair that once, from the files.
     #[test]
     fn an_older_library_is_redated_from_its_files() {
         let db = Database::open_memory().unwrap();
@@ -1518,6 +1741,15 @@ mod ordering_tests {
         assert_eq!(added, again);
     }
 
+    /// A library that already holds the same file twice is folded back
+    /// together when it is opened.
+    ///
+    /// A library had a record whose every track showed twice: two rows,
+    /// two paths — `…/Music/Cave/…` and `…/Music/CAVE/…` — and on a Mac those
+    /// are one file, so `path` being unique never noticed. Linux has no
+    /// filesystem obliging enough to ignore capitals, so the same shape is
+    /// built with a symlink: one folder reachable under two names. Same
+    /// question, same answer.
     #[test]
     #[cfg(unix)]
     fn a_file_written_down_twice_is_folded_back_into_one() {
@@ -1582,6 +1814,9 @@ mod ordering_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A whole artist, with "alle" albums showing: their records one after
+    /// another, each in its own running order. This is the list that has to be
+    /// right — it is what the window shows the moment a name is clicked.
     #[test]
     fn one_artist_reads_as_their_records_in_turn() {
         let db = Database::open_memory().unwrap();
@@ -1614,6 +1849,12 @@ mod ordering_tests {
         );
     }
 
+    /// And the same list read from the back.
+    ///
+    /// „titel ↑" in the window. The whole list has to turn round — the last
+    /// record first, and inside it the last track — because reversing the
+    /// artists alone changes nothing at all in a list that holds one artist,
+    /// and a head with an arrow that changes nothing is a head that lies.
     #[test]
     fn the_shelf_read_backwards_is_the_list_reversed() {
         let db = Database::open_memory().unwrap();
@@ -1640,6 +1881,9 @@ mod ordering_tests {
         assert_eq!(read(SortOrder::Descending), backwards);
     }
 
+    /// A folder copied in one go gives every album the same timestamp. That
+    /// must not leave the order up to SQLite, or the list rearranges itself
+    /// between two reads of the same library.
     #[test]
     fn albums_added_together_stay_alphabetical() {
         let db = Database::open_memory().unwrap();
@@ -1656,6 +1900,7 @@ mod ordering_tests {
     }
 }
 
+/// The filter, which both frontends narrow the library with.
 #[cfg(test)]
 mod filter_tests {
     use super::*;
@@ -1723,6 +1968,8 @@ mod filter_tests {
         assert_eq!(titles(&db, "aphex").len(), 1);
     }
 
+    /// SQLite's own LOWER stops at ASCII. If the haystack were lowercased in
+    /// SQL, "BJÖRK" would stay "bjÖrk" and typing "björk" would find nothing.
     #[test]
     fn ignores_case_beyond_ascii() {
         let db = library();
@@ -1732,6 +1979,9 @@ mod filter_tests {
         assert_eq!(titles(&db, "坂本").len(), 1);
     }
 
+    /// The reason `fold` exists: a German keyboard makes the umlaut easy, an
+    /// English one does not, and neither should decide whether the record
+    /// turns up.
     #[test]
     fn accents_are_optional_on_both_sides() {
         let db = library();
@@ -1740,6 +1990,7 @@ mod filter_tests {
         assert_eq!(titles(&db, "BJORK").len(), 3);
     }
 
+    /// Two words narrow; they do not widen.
     #[test]
     fn every_word_has_to_match() {
         let db = library();
@@ -1748,6 +1999,7 @@ mod filter_tests {
         assert_eq!(titles(&db, "homogenic björk").len(), 2);
     }
 
+    /// A query is text, not a pattern: the wildcards belong to us.
     #[test]
     fn typed_wildcards_are_literal() {
         let db = library();
@@ -1762,6 +2014,8 @@ mod filter_tests {
         assert_eq!(titles(&db, "   ").len(), 5);
     }
 
+    /// The columns narrow too, which is what makes the counts on the filter
+    /// line mean anything.
     #[test]
     fn artists_and_albums_narrow_with_the_query() {
         let db = library();
@@ -1776,6 +2030,9 @@ mod filter_tests {
         );
     }
 
+    /// A database written before the column existed has to gain it, and the
+    /// backfill has to be Unicode-correct — otherwise the filter would work
+    /// only for tracks added after the upgrade.
     #[test]
     fn an_older_database_is_backfilled() {
         let db = library();
@@ -1791,10 +2048,12 @@ mod filter_tests {
     }
 }
 
+/// Folding, which is what makes the filter forgiving about accents.
 #[cfg(test)]
 mod fold_tests {
     use super::*;
 
+    /// Typing on a keyboard without umlauts still has to find the record.
     #[test]
     fn accents_come_off_both_sides() {
         assert_eq!(fold("Björk"), "bjork");
@@ -1805,6 +2064,8 @@ mod fold_tests {
         assert_eq!(fold("Motörhead"), "motorhead");
     }
 
+    /// Letters whose mark lives inside the glyph survive decomposition, so they
+    /// are spelled out by hand.
     #[test]
     fn letters_that_do_not_decompose_are_spelled_out() {
         assert_eq!(fold("Straße"), "strasse");
@@ -1813,6 +2074,8 @@ mod fold_tests {
         assert_eq!(fold("Łódź"), "lodz");
     }
 
+    /// Anything without a mark passes through untouched — in particular
+    /// scripts that have no notion of one.
     #[test]
     fn leaves_unaccented_text_alone() {
         assert_eq!(fold("Aphex Twin"), "aphex twin");
@@ -1821,6 +2084,11 @@ mod fold_tests {
     }
 }
 
+/// Two spellings of one name.
+///
+/// A library collected over years is full of them, and every other music app
+/// merges them. These tests come from a real library: "Boards Of Canada" and
+/// "boards of canada" listed twice, plus the ones whose cause was not visible.
 #[cfg(test)]
 mod grouping_tests {
     use super::*;
@@ -1873,6 +2141,7 @@ mod grouping_tests {
         assert_eq!(artists[0].album_count, 1);
     }
 
+    /// The ones whose cause is invisible in a tag editor.
     #[test]
     fn invisible_differences_do_not_make_two_artists() {
         let db = with(&[
@@ -1886,6 +2155,8 @@ mod grouping_tests {
         assert_eq!(artists[0].track_count, 4);
     }
 
+    /// Merging must not lose the tracks filed under the other spellings — the
+    /// column would look right and the track list would be half empty.
     #[test]
     fn selecting_a_merged_artist_finds_every_spelling() {
         let db = with(&[
@@ -1912,6 +2183,8 @@ mod grouping_tests {
         assert_eq!(albums[0].track_count, 3);
     }
 
+    /// The name shown is the spelling most tracks use, not whichever row the
+    /// database happened to reach first.
     #[test]
     fn the_commonest_spelling_wins() {
         let db = with(&[
@@ -1923,6 +2196,7 @@ mod grouping_tests {
         assert_eq!(db.get_artists(None).unwrap()[0].name, "Boards of Canada");
     }
 
+    /// Different artists stay different, however similar they look.
     #[test]
     fn merging_stops_at_names_that_actually_differ() {
         let db = with(&[
@@ -1933,6 +2207,8 @@ mod grouping_tests {
         assert_eq!(db.get_artists(None).unwrap().len(), 3);
     }
 
+    /// Two bands, one album title. Grouping albums on the title alone would
+    /// collapse them.
     #[test]
     fn two_greatest_hits_are_two_albums() {
         let db = with(&[
@@ -1966,6 +2242,7 @@ mod grouping_tests {
     }
 }
 
+/// Removing a folder from the library.
 #[cfg(test)]
 mod folder_tests {
     use super::*;
@@ -1997,6 +2274,8 @@ mod folder_tests {
         }
     }
 
+    /// The bug this guards against: removing `/music/live` also taking
+    /// `/music/live-bootlegs`, because one string starts with the other.
     #[test]
     fn a_folder_takes_only_what_is_inside_it() {
         let db = Database::open_memory().unwrap();
@@ -2020,6 +2299,7 @@ mod folder_tests {
         assert!(db.get_track_by_path("/other/e.mp3").unwrap().is_some());
     }
 
+    /// A trailing separator on the folder must not change the answer.
     #[test]
     fn a_trailing_slash_makes_no_difference() {
         let db = Database::open_memory().unwrap();
@@ -2033,6 +2313,7 @@ mod folder_tests {
         assert_eq!(db.track_count().unwrap(), 1);
     }
 
+    /// A folder name is text, not a pattern.
     #[test]
     fn wildcards_in_a_folder_name_are_literal() {
         let db = Database::open_memory().unwrap();
@@ -2054,6 +2335,7 @@ mod folder_tests {
         assert_eq!(db.track_count().unwrap(), 2);
     }
 
+    /// Removing a folder that holds nothing is not an error.
     #[test]
     fn an_empty_folder_removes_nothing() {
         let db = Database::open_memory().unwrap();
@@ -2067,6 +2349,7 @@ mod folder_tests {
     }
 }
 
+/// The short list of newest arrivals — the query behind the "zuletzt" row.
 #[cfg(test)]
 mod recent_tests {
     use super::*;
@@ -2124,6 +2407,10 @@ mod recent_tests {
         );
     }
 
+    /// A folder copied in one go gives every file the same timestamp to the
+    /// second. Without a second sort key those tracks come back in whatever
+    /// order the database feels like, and the same list reads differently each
+    /// time it is opened.
     #[test]
     fn files_that_arrived_in_the_same_second_keep_a_fixed_order() {
         let db = Database::open_memory().unwrap();
@@ -2152,6 +2439,8 @@ mod recent_tests {
         );
     }
 
+    /// A limit of zero would be a list with nothing in it and no way to tell
+    /// that from an empty library.
     #[test]
     fn asking_for_none_still_gives_one() {
         let db = Database::open_memory().unwrap();
@@ -2160,6 +2449,14 @@ mod recent_tests {
     }
 }
 
+/// What a whole artist looks like when it is picked up and carried.
+///
+/// Dragging a name into the queue hands over everything filed under it, and
+/// the order it arrives in is the shelf's: their records by year, each in its
+/// own running order. Nothing asks for that explicitly — it falls out of the
+/// ordering every track query ends with — which is exactly why it is written
+/// down here. A change to that tail would otherwise quietly turn a dragged
+/// artist into a heap.
 #[cfg(test)]
 mod shelf_order_tests {
     use super::*;

@@ -1,3 +1,15 @@
+//! The media keys on Linux, by way of MPRIS.
+//!
+//! A Linux desktop does not hand the play key to the window in front: KDE,
+//! GNOME and the rest take it themselves and pass it on, over D-Bus, to
+//! whichever player has registered as `org.mpris.MediaPlayer2.*`; otherwise
+//! the keys go nowhere. Registering also puts what is
+//! playing, cover and all, into the panel's media controls, which is the Linux
+//! counterpart of the Now Playing panel on a Mac.
+//!
+//! The commands land in the same queue the window drains on a Mac, and nudge
+//! the window the same way, so everything past [`poll`] is shared.
+
 use super::{Command, NowPlaying};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -9,10 +21,13 @@ use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 const NAME: &str = "org.mpris.MediaPlayer2.kessler";
 const PATH: &str = "/org/mpris/MediaPlayer2";
 
+/// What the desktop has asked for and what it should be told, shared between
+/// the window's thread and the one zbus answers on.
 #[derive(Default)]
 struct Shared {
     commands: VecDeque<Command>,
     now: Option<NowPlaying>,
+    /// When `now.elapsed` was true, so the position can be counted on.
     at: Option<Instant>,
 }
 
@@ -21,6 +36,9 @@ fn shared() -> &'static Mutex<Shared> {
     SHARED.get_or_init(Default::default)
 }
 
+/// The connection, once it is up. Never, on a machine without a session bus
+/// — a Raspberry Pi started from the console, say — which is not an error:
+/// there is then nobody to send keys either.
 static CONNECTION: OnceLock<zbus::blocking::Connection> = OnceLock::new();
 
 fn push(command: Command) {
@@ -30,6 +48,8 @@ fn push(command: Command) {
     super::kessler_media_woken();
 }
 
+/// Register on the session bus. Off the window's thread: connecting can take a
+/// moment, and the first frame should not wait for it.
 pub fn start() {
     let spawned = std::thread::Builder::new()
         .name("mpris".into())
@@ -56,8 +76,13 @@ pub fn poll() -> Option<Command> {
     shared().lock().ok()?.commands.pop_front()
 }
 
+/// Whether a new track is to be told of in a notification — `[ui] notify`
+/// — and whether the window is in front, when there is no need: the title is
+/// on the screen already. Set by the window every frame.
 static NOTIFY: AtomicBool = AtomicBool::new(false);
 static IN_FRONT: AtomicBool = AtomicBool::new(true);
+/// The notification kessler put up last, which the next one takes the place
+/// of rather than stacking under it.
 static SHOWN: AtomicU32 = AtomicU32::new(0);
 
 pub fn set_notify(on: bool, in_front: bool) {
@@ -65,6 +90,10 @@ pub fn set_notify(on: bool, in_front: bool) {
     IN_FRONT.store(in_front, Ordering::Relaxed);
 }
 
+/// A new track, said in a notification: its title, and artist and record under
+/// it, with its cover where there is one. Off the window's thread — a desktop
+/// without a notification daemon may keep the call waiting until D-Bus gives up
+/// on starting one.
 fn notify(now: &NowPlaying) {
     let Some(connection) = CONNECTION.get().cloned() else {
         return;
@@ -99,6 +128,8 @@ fn notify(now: &NowPlaying) {
     });
 }
 
+/// Keep what is playing, and tell the desktop. [`super::Reporter`] calls this
+/// only on news: a new track, a pause, a jump.
 pub fn update(now: Option<&NowPlaying>) {
     let jumped = {
         let Ok(mut shared) = shared().lock() else {
@@ -123,6 +154,8 @@ pub fn update(now: Option<&NowPlaying>) {
     announce(jumped);
 }
 
+/// Send the changed properties, and for a jump the `Seeked` signal, since a
+/// position is never announced as a property change.
 fn announce(jumped: bool) {
     let Some(connection) = CONNECTION.get() else {
         return;
@@ -142,6 +175,8 @@ fn announce(jumped: bool) {
     });
 }
 
+/// Where the track is now, in microseconds, counted on from the last report
+/// while it plays.
 fn position() -> i64 {
     let Ok(shared) = shared().lock() else {
         return 0;
@@ -160,6 +195,7 @@ fn micros(seconds: f64) -> i64 {
     (seconds.max(0.0) * 1_000_000.0) as i64
 }
 
+/// The track's metadata in MPRIS's own names.
 fn metadata(now: Option<&NowPlaying>) -> HashMap<String, OwnedValue> {
     let mut map = HashMap::new();
     let Some(now) = now else {
@@ -183,6 +219,8 @@ fn put<'a>(map: &mut HashMap<String, OwnedValue>, key: &str, value: impl Into<Va
     }
 }
 
+/// An id for the track: the spec wants an object path, and the same one for
+/// as long as the track is the same.
 fn track_id(now: &NowPlaying) -> ObjectPath<'static> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -191,6 +229,8 @@ fn track_id(now: &NowPlaying) -> ObjectPath<'static> {
         .unwrap_or_else(|_| ObjectPath::from_static_str_unchecked("/org/kessler/track"))
 }
 
+/// A path as a `file://` URL, with everything but the plain letters escaped —
+/// a cover's folder may well have a space or an umlaut in its name.
 fn file_url(path: &std::path::Path) -> String {
     use std::os::unix::ffi::OsStrExt;
     let mut url = String::from("file://");
@@ -204,6 +244,7 @@ fn file_url(path: &std::path::Path) -> String {
     url
 }
 
+/// `org.mpris.MediaPlayer2`: who this is.
 struct Root;
 
 #[zbus::interface(name = "org.mpris.MediaPlayer2")]
@@ -232,6 +273,7 @@ impl Root {
         "kessler".into()
     }
 
+    /// The file `bundle/install-linux.sh` writes, so the panel shows the icon.
     #[zbus(property)]
     fn desktop_entry(&self) -> String {
         "kessler".into()
@@ -248,6 +290,7 @@ impl Root {
     }
 }
 
+/// `org.mpris.MediaPlayer2.Player`: the keys, and what is playing.
 struct Player;
 
 #[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
@@ -276,6 +319,8 @@ impl Player {
         push(Command::Play);
     }
 
+    /// Seeking from the panel is not offered (`CanSeek` is false); the
+    /// methods are there because the interface has them.
     fn seek(&self, _offset: i64) {}
 
     fn set_position(&self, _track: ObjectPath<'_>, _position: i64) {}
@@ -362,6 +407,8 @@ impl Player {
 mod tests {
     use super::*;
 
+    /// A cover in a folder with a space and an umlaut has to arrive as a URL
+    /// the panel can open.
     #[test]
     fn a_cover_path_becomes_a_url() {
         assert_eq!(
@@ -370,6 +417,7 @@ mod tests {
         );
     }
 
+    /// The same track keeps its id; another gets another.
     #[test]
     fn a_track_keeps_its_id() {
         let track = NowPlaying {

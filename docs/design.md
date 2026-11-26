@@ -18,7 +18,13 @@ disagree — then fix this file.
 - **one view, made as good as it can be.** no second arrangement to switch to.
 - **quiet until touched.** an action word shows under the pointer, not all
   day (`archivieren`, `entfernen`, `leeren`, `aktualisieren`); a head that
-  does nothing does not light up.
+  does nothing does not light up. the extent mark beside a list, and the
+  artists' letter bar in its place, come only while the pointer is over the
+  column.
+- **a register** over a list in the alphabet's order: the first letter, in
+  `Label` and the heads' colour, a block's air before each — as the
+  podcasts' days stand over their episodes. only while the list is a–z or
+  z–a.
 
 ## type
 

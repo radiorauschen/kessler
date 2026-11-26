@@ -1,3 +1,14 @@
+//! A smoke test of tag editing on real files — `bundle/smoke-tags.sh` builds
+//! the library and runs this.
+//!
+//! Ignored in a plain `cargo test`: it needs that library, and ffmpeg to hear
+//! whether every file still plays. Each edit goes the way the window's
+//! `save_tags` takes it — write the tags, see where the file now belongs,
+//! move it there and the row with it, read it in again — and after every step
+//! the whole state is checked: the database whole, every row a file and every
+//! file a row, every file still decoding as long as it did, every field that
+//! was not edited still what it was.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +19,7 @@ use crate::library::metadata::{read_extras, Extras};
 use crate::library::scanner::{self, Arrival};
 use crate::library::tags::{self, Edit, Field};
 
+/// What a track says, the fields an edit may touch — compared whole.
 #[derive(Debug, Clone, PartialEq)]
 struct Said {
     title: String,
@@ -19,6 +31,7 @@ struct Said {
     track: Option<u32>,
     disc: Option<u32>,
     cover: bool,
+    /// From the file only; the database does not keep them.
     extras: Extras,
 }
 
@@ -37,6 +50,7 @@ fn said(t: &Track) -> Said {
     }
 }
 
+/// [`said`], with the [`Extras`] from the file.
 fn said_whole(t: &Track) -> Said {
     Said { extras: read_extras(&t.path), ..said(t) }
 }
@@ -46,7 +60,9 @@ struct Library {
     artwork: PathBuf,
     db: Database,
     db_path: PathBuf,
+    /// What each track should say now, by id.
     expected: HashMap<i64, Said>,
+    /// How long each track ran when it was first read, by id.
     length: HashMap<i64, f64>,
     count: u32,
 }
@@ -63,6 +79,8 @@ fn by_title(db: &Database, title: &str) -> Track {
         .unwrap_or_else(|| panic!("no track „{title}\""))
 }
 
+/// How long ffmpeg hears the file run, and whether it decodes without a
+/// single error.
 fn hear(path: &Path) -> (f64, String) {
     let probe = Command::new("ffprobe")
         .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
@@ -127,6 +145,7 @@ impl Library {
         Self { root, artwork, db, db_path, expected, length, count }
     }
 
+    /// One edit, the way the window's „speichern" makes it.
     fn save(&mut self, ids: &[i64], edit: &Edit, changes: impl Fn(&mut Said)) {
         let roots = vec![self.root.clone()];
         let mut plan = Vec::new();
@@ -152,6 +171,7 @@ impl Library {
         self.check(&edit.summary());
     }
 
+    /// A cover on one track, the way „cover suchen" writes it.
     fn cover(&mut self, id: i64) {
         let track = self.db.get_track(id).unwrap().unwrap();
         let png = {
@@ -167,6 +187,7 @@ impl Library {
         self.check(&format!("cover auf {}", track.path.file_name().unwrap().to_string_lossy()));
     }
 
+    /// Everything that must hold after any step.
     fn check(&self, step: &str) {
         let sql = rusqlite::Connection::open(&self.db_path).unwrap();
         let integrity: String = sql.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
@@ -312,6 +333,7 @@ fn tag_smoke() {
     }
 }
 
+/// The frame ids of an mp3's ID3v2 tag, to see what an edit kept.
 fn id3_frames(path: &Path) -> Vec<String> {
     use lofty::file::AudioFile as _;
     let Ok(mut file) = std::fs::File::open(path) else {
@@ -328,6 +350,8 @@ fn id3_frames(path: &Path) -> Vec<String> {
     ids
 }
 
+/// The weird and the broken: every file must leave the database whole, and
+/// every write must either land cleanly or leave the file exactly as it was.
 #[test]
 #[ignore = "needs the files bundle/smoke-tags.sh builds, and ffmpeg"]
 fn tag_smoke_weird() {

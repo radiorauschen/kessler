@@ -1,10 +1,35 @@
+//! The design system, as code.
+//!
+//! The whole interface is built from a deliberately tiny set of means:
+//!
+//! - **two type sizes** — 15px for content, 11px for labels. No third size.
+//! - **two weights** — regular and bold.
+//! - **three tonal values** plus one accent.
+//! - **no lines**, except the two-pixel progress rule, which carries
+//!   information nothing else carries.
+//! - **lowercase throughout** — see [`lower`].
+//!
+//! Because size is off the table as a device, hierarchy has to come from
+//! somewhere else. Four axes carry it, and each does exactly one job:
+//! weight says what is selected, tone says what recedes, letter spacing says
+//! what is a label rather than content, and the marker behind a row says where
+//! the selection sits. Keeping them separate is what makes this a system
+//! instead of decoration.
+
 use eframe::egui::{self, Color32, FontFamily, FontId};
 
 pub const SIZE_CONTENT: f32 = 15.0;
 pub const SIZE_LABEL: f32 = 11.0;
 
+/// Letter spacing on labels, in pixels at label size. The one signal that
+/// separates a label from content without changing size or weight.
+///
+/// Enough to read as tracking, little enough that a two-word heading still
+/// reads as two words rather than as a row of letters.
 pub const LABEL_TRACKING: f32 = 1.5;
 
+/// How much of [`LABEL_TRACKING`] the face in use takes: Muto's labels a touch
+/// less tracked than Asap's, its letters stand further apart as drawn.
 fn label_tracking_share(key: &str) -> f32 {
     match key {
         "muto" | "mutomono" => 0.75,
@@ -12,6 +37,9 @@ fn label_tracking_share(key: &str) -> f32 {
     }
 }
 
+/// How far a record heading's second line stands under its name, as a share of
+/// a row: Muto's small letters are short beside its capitals and figures, so a
+/// full row between the two looked like a gap.
 fn head_line_share(key: &str) -> f32 {
     match key {
         "muto" | "mutomono" => 0.84,
@@ -21,33 +49,70 @@ fn head_line_share(key: &str) -> f32 {
 
 static HEAD_LINE_SHARE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
 
+/// See [`head_line_share`], for the face in use.
 pub fn head_line() -> f32 {
     f32::from_bits(HEAD_LINE_SHARE.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// The share for the face in use, as bits — set with the face.
 static LABEL_TRACKING_SHARE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
 
+/// Just enough rounding to stop the marker's corners looking cut. Not a button.
 pub const MARKER_RADIUS: u8 = 2;
 
+/// The corners of the plate a row wears — under the pointer, under the
+/// keyboard, in the menu and the right-click menu — a little rounder than a
+/// picture's (`MARKER_RADIUS`): a cover sits inside a record's plate, and the
+/// same corner outside as in looked pinched. One for every row, picture in it
+/// or not, so the plates of one column are alike.
 pub const ROW_RADIUS: f32 = 4.0;
 
+/// How far up and down the selection keeps clear of a column's edge, in rows.
+///
+/// Without it the selection walks straight out of the viewport and the list
+/// scrolls only once the row is already gone.
 pub const SCROLL_MARGIN_ROWS: f32 = 3.0;
 
+/// The measurements that depend on how much room there is.
+///
+/// A short window should show more rows rather than the same rows with the same
+/// air around them, so the leading tightens as the window loses height. The two
+/// sizes never change — type size is a fixed part of the design; only the space
+/// around the type gives.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Metrics {
+    /// One row of a list, from the top of one to the top of the next.
     pub row: f32,
+    /// Air inside the marker, left and right of the text. Without it the
+    /// marker ends exactly where the text does and reads as a block of colour
+    /// rather than a stroke drawn over a line.
     pub marker_pad_x: f32,
+    /// How far the marker stays clear of the row's top and bottom edge.
     pub marker_inset_y: f32,
+    /// The two fixed-width name columns.
     pub artists_width: f32,
     pub albums_width: f32,
+    /// The whitespace that stands in for the rules between columns.
     pub column_gap: f32,
+    /// The margin down each side of the window.
     pub margin_x: f32,
 }
 
+/// Below this width the three columns stop standing side by side and start
+/// sliding: one at a time, full width, as on an iPod.
+///
+/// Three columns need 110 + 110 + 240 of content plus the gaps and the
+/// margins before anything is readable; under that the window is a phone held
+/// sideways, and the answer is the one an iPod gave.
 pub const NARROW_UNTIL: f32 = 640.0;
 
+/// How far apart two columns stand while they slide — never seen at rest,
+/// only on the way from one to the next.
 pub const SLIDE_GAP: f32 = 24.0;
 
+/// How wide the whole strip of columns is, laid end to end.
+///
+/// `count` columns with a gap *between* them — and not after the last one.
 pub fn strip_width(count: usize, width: f32, gap: f32) -> f32 {
     if count == 0 {
         return 0.0;
@@ -55,6 +120,14 @@ pub fn strip_width(count: usize, width: f32, gap: f32) -> f32 {
     count as f32 * width + (count - 1) as f32 * gap
 }
 
+/// How far the strip of columns is pushed left so that column `index` fills
+/// the window.
+///
+/// One column, the whole width, and nothing of its neighbours. They used to
+/// show as a sliver at each edge, which on a small screen was a sliver of
+/// unreadable words taken out of the one column being read; the way to them is
+/// now the line of arrows under it — see
+/// `library::column_steps`.
 pub fn slide_offset(index: usize, count: usize, width: f32, gap: f32) -> f32 {
     if count == 0 {
         return 0.0;
@@ -62,23 +135,41 @@ pub fn slide_offset(index: usize, count: usize, width: f32, gap: f32) -> f32 {
     index.min(count - 1) as f32 * (width + gap)
 }
 
+/// The tallest and tightest a row is allowed to be.
+///
+/// One point more than it was, at both ends: fifteen point type on a
+/// twenty-one point line rather than a twenty point one. A point is the whole
+/// range here — every measure is rounded to the pixel grid, so there is no
+/// smaller step to take — and at a dozen rows down a column it is the
+/// difference between a list and a block.
 pub const ROW_ROOMY: f32 = 21.0;
 const ROW_TIGHT: f32 = 18.0;
 
+/// Between these two widths the columns give up their air; outside them
+/// nothing more changes.
 const WIDE: f32 = 1280.0;
 const NARROW: f32 = 820.0;
 
+/// Interpolate between the roomy and the cramped value.
 fn between(t: f32, cramped: f32, roomy: f32) -> f32 {
     (cramped + t * (roomy - cramped)).round()
 }
 
+/// The points every row gets above and below its words: all of it to the
+/// plate, so the gap between two plates stays as it was, and as much air
+/// above and below the words as the plate keeps left and right of them.
 pub const ROW_AIR: f32 = 4.0;
 
+/// The sides at most: „menü"'s plate as far from the window's right edge as
+/// „super kompakt" sets it from the top on a Mac — 24 less the plate's eight.
 const MARGIN_TIGHT: f32 = 24.0;
 
+/// How much less than twice the side the words of two columns stand apart.
 const TIGHT_GAP_LESS: f32 = 2.0;
 
 impl Metrics {
+    /// The same measurements with the sides never wider than `MARGIN_TIGHT`, in
+    /// any view, and the columns' gap to match.
     pub fn with_margins(mut self) -> Self {
         self.margin_x = self.margin_x.min(MARGIN_TIGHT);
         let twice = 2.0 * self.margin_x - 2.0 * self.marker_pad_x - TIGHT_GAP_LESS;
@@ -86,6 +177,11 @@ impl Metrics {
         self
     }
 
+    /// The sides on the window's buttons: where a Mac's buttons stand in the
+    /// band (its own, or kessler's circles in their place), the first one's
+    /// left edge is where the columns' words begin — the masthead's field and
+    /// every list on one line down from it, and the right side as far in.
+    /// A hair nearer the edge than the margin alone would set them.
     pub fn on_the_buttons(mut self, first_left: f32) -> Self {
         if first_left <= self.marker_pad_x {
             return self;
@@ -96,11 +192,17 @@ impl Metrics {
         self
     }
 
+    /// The same measurements with `ROW_AIR` more to every row.
     pub fn with_air(mut self) -> Self {
         self.row += ROW_AIR;
         self
     }
 
+    /// Work the measurements out from the size of the window.
+    ///
+    /// Two separate questions: height decides how much air a row gets, width
+    /// decides how much of it the name columns keep. They are independent — a
+    /// tall narrow window is a real shape and should not be treated as small.
     pub fn for_size(width: f32, height: f32) -> Self {
         let tall = ((height - 440.0) / 380.0).clamp(0.0, 1.0);
         let wide = ((width - NARROW) / (WIDE - NARROW)).clamp(0.0, 1.0);
@@ -117,7 +219,11 @@ impl Metrics {
         }
     }
 
-    #[allow(dead_code)]
+    /// Work them out from the height alone, for callers that have no width.
+    ///
+    /// Only the tests ask this — they vary the height to check the row pitch
+    /// and hold the width still.
+    #[cfg(test)]
     pub fn for_height(height: f32) -> Self {
         Self::for_size(WIDE, height)
     }
@@ -129,35 +235,68 @@ impl Default for Metrics {
     }
 }
 
+/// How narrow a name column may be dragged, and how much the track list keeps
+/// whatever happens to the other two.
+///
+/// The floor is not politeness: a column narrower than this shows no name, only
+/// the beginning of one, and a window where the track list has been squeezed
+/// out is a window somebody has to drag back before they can use it.
 pub const MIN_NAME_COLUMN: f32 = 110.0;
 pub const MIN_TRACK_COLUMN: f32 = 240.0;
 
+/// What a name column may become, given what else is on the row.
+///
+/// `others` is everything else the row spends width on — the other name column
+/// and the gaps. Returns the nearest width to `wanted` that leaves the track
+/// list its floor, and never goes below the column's own.
 pub fn fit_column(wanted: f32, others: f32, total: f32) -> f32 {
     let most = (total - others - MIN_TRACK_COLUMN).max(MIN_NAME_COLUMN);
     wanted.clamp(MIN_NAME_COLUMN, most)
 }
 
+/// What the queue column asks for before anybody has dragged it.
+///
+/// Narrower than a name column, because what stands in it is a title and a
+/// name and nothing else — no year, no running time, no count. Wide enough
+/// that a long title is recognisable before it is cut.
 pub const QUEUE_WIDTH: f32 = 268.0;
 
+/// What the person has dragged, as shares of the row.
+///
+/// `None` means "work it out from the window", which is what a column does
+/// until somebody moves it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Shares {
     pub artists: Option<f32>,
     pub albums: Option<f32>,
     pub queue: Option<f32>,
+    /// The column right of the queue — the iPod, the information, the log —
+    /// when it stands in a column of its own. Unset: as wide as the queue.
     pub side: Option<f32>,
+    /// With the artists alone beside the track list: every column the same
+    /// width, however many are open — `UiConfig::merged_even`.
     pub even: bool,
 }
 
+/// How wide each column is, for a row this wide.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Columns {
     pub artists: f32,
     pub albums: f32,
+    /// What is left over. The track list is the one column whose content has
+    /// no natural length, so it takes the remainder rather than asking for a
+    /// width — which is exactly why everything else has to be a share of the
+    /// row and not a number of points.
     pub tracks: f32,
     pub queue: f32,
+    /// The side column, right of the queue: the iPod, the information or
+    /// the log, when the combined view gives them a column of their own.
     pub side: f32,
 }
 
 impl Columns {
+    /// Part of the way from one arrangement to another — for the queue sliding
+    /// in or out, where the row is worked out both ways and drawn between.
     pub fn between(from: Columns, to: Columns, t: f32) -> Columns {
         let t = t.clamp(0.0, 1.0);
         let mix = |a: f32, b: f32| a + (b - a) * t;
@@ -171,15 +310,23 @@ impl Columns {
     }
 }
 
+/// How long the fourth column takes to slide in or out, in seconds, eased
+/// out (see `library::slide`): most of the way is gone in the first third,
+/// and the rest is it settling.
 pub const FOURTH_SLIDE: f32 = 0.22;
 
+/// What stands to the left of the track list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Names {
+    /// The artists and the albums, two columns.
     Two,
+    /// The artists alone: the albums are in the track list, as headings over
+    /// their own tracks.
     One,
 }
 
 impl Names {
+    /// How many columns stand there.
     pub fn count(self) -> usize {
         match self {
             Self::Two => 2,
@@ -188,6 +335,13 @@ impl Names {
     }
 }
 
+/// Work out the whole row at once.
+///
+/// Gathered into one place because it used to be three: the metrics override,
+/// the grid's width and the queue's were each worked out where they happened
+/// to be needed, and no one of them could see what the others had decided. A
+/// row is one arrangement, and this is it — which also makes it something that
+/// can be checked at several window widths without a screenshot.
 pub fn columns_for(
     room: f32,
     m: Metrics,
@@ -246,6 +400,17 @@ pub fn columns_for(
     }
 }
 
+/// The row with the fourth column split in two, each half open as far as it is:
+/// `left` for the queue or the lists, `right` for the iPod, the information or
+/// the log.
+///
+/// Either half alone stands where the fourth column always stood, so a row
+/// with one of them looks the way it did before the split. The second one
+/// takes its width out of the track list, the one column that lives on the
+/// remainder — the queue keeps its width and the names keep theirs.
+///
+/// With `right` at nought this is [`columns_for`] part of the way open, the
+/// row as it has always been drawn.
 pub fn columns_with_side(
     room: f32,
     m: Metrics,
@@ -293,6 +458,10 @@ pub fn columns_with_side(
     }
 }
 
+/// The combined view's even row: the artists, the track list, and the queue
+/// and the side as far as each is open, all one width. A column sliding in
+/// counts for as much of a column as it has slid, so the others give up their
+/// room to it smoothly and the row always adds up.
 fn even_row(room: f32, gap: f32, left: f32, right: f32) -> Columns {
     let gaps = gap * (1.0 + left + right);
     let each = ((room - gaps) / (2.0 + left + right)).max(0.0);
@@ -305,8 +474,25 @@ fn even_row(room: f32, gap: f32, left: f32, right: f32) -> Columns {
     }
 }
 
+/// How wide the window has to be for the side to have a column of its own.
+/// Below this it lies over the queue, as it always did — a fifth column in
+/// a window that narrow would leave the track list nothing.
 pub const SIDE_FROM: f32 = NARROW_UNTIL + (QUEUE_WIDTH + 48.0) * 2.0;
 
+/// What each column gains while the queue is put away.
+///
+/// A share is a fraction of the row as it stands with every column open; that
+/// is what makes a share a stable thing to write down. So putting the queue
+/// away leaves a strip that belongs to nobody, and it used to fall to the
+/// track list entire — a quarter of the window arriving in one column, which
+/// looked less like a column being hidden than like the layout being thrown.
+///
+/// The queue stood beside all of them, so all of them get a piece: this is
+/// that piece. The track list is not counted here and does not need to be — it
+/// takes whatever the others leave, and what they leave is exactly its share.
+///
+/// Nothing of this reaches the settings file. It is what the row is drawn at
+/// while the queue is away, and it is given back the moment it returns.
 pub fn queue_handed_round(
     room: f32,
     m: Metrics,
@@ -322,27 +508,54 @@ pub fn queue_handed_round(
     strip / drawn
 }
 
+/// One column's share of an even split — what clicking a divider goes back to.
+///
+/// Not the widths the window opens on: those are fixed figures chosen to suit
+/// the kind of text each column holds, and a name column is narrower than a
+/// track list for good reason. An even split is the other answer, the one you
+/// can ask for when a drag has left the row lopsided: half each in the grid,
+/// a third each in the list, whatever the window is.
 pub fn even_columns(count: usize, total: f32, gap: f32) -> f32 {
     let count = count.max(1);
     let gaps = gap * count.saturating_sub(1) as f32;
     ((total - gaps) / count as f32).max(MIN_NAME_COLUMN)
 }
 
+/// The band at the top of the window the system still owns.
+///
+/// On a Mac the ground runs right up to the top edge — what makes it one
+/// window rather than a coloured panel under a grey bar — but the title bar is
+/// still there, transparent: the three buttons float in it and it takes the
+/// clicks. Nothing that has to be clicked may stand in it. Everywhere else
+/// there is no such band.
+///
+/// The `cfg` chooses this one number and nothing else. Everything that follows
+/// from it is ordinary arithmetic that compiles on every machine — which is
+/// the point: a Mac-only branch is a branch that is never built where it is
+/// written, and so can ship a line that does not compile.
 #[cfg(target_os = "macos")]
 const TITLEBAR: f32 = 28.0;
 #[cfg(not(target_os = "macos"))]
 const TITLEBAR: f32 = 0.0;
 
+/// How tall that band is now, as the window says once its buttons are set — see
+/// `macwindow`. [`TITLEBAR`] until then; with the buttons set in from the
+/// corner, a taller one.
 static TITLEBAR_NOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(TITLEBAR.to_bits());
 
+/// The band at the top of the window the system owns, in points.
 pub fn titlebar() -> f32 {
     f32::from_bits(TITLEBAR_NOW.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// What the window says the band is, once its buttons are set.
 pub fn set_titlebar(height: f32) {
     TITLEBAR_NOW.store(height.max(0.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The middle of a Mac's band, from the window's top, in the window's own
+/// points: AppKit sets it in the screen's, which the zoom in the menu makes
+/// more or fewer of the window's. Until the window says, as AppKit has it.
 pub fn band_middle() -> f32 {
     match titlebar() {
         band if band > 0.0 => band / 2.0,
@@ -350,6 +563,8 @@ pub fn band_middle() -> f32 {
     }
 }
 
+/// Where the window's last button ends, from its left edge, when they are
+/// set by hand — see `macwindow`. Nought where there are none to clear.
 static BUTTONS_END: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub fn buttons_end() -> f32 {
@@ -360,6 +575,9 @@ pub fn set_buttons_end(at: f32) {
     BUTTONS_END.store(at.max(0.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Where the middle of each of the window's three buttons stands, from its
+/// left edge, and how wide a circle they are, in the window's own points —
+/// for kessler's own circles in their place. Nothing until the window says.
 static BUTTON_MARKS: std::sync::Mutex<Option<([f32; 3], f32)>> = std::sync::Mutex::new(None);
 
 pub fn button_marks() -> Option<([f32; 3], f32)> {
@@ -370,6 +588,8 @@ pub fn set_button_marks(marks: Option<([f32; 3], f32)>) {
     *BUTTON_MARKS.lock().unwrap_or_else(|e| e.into_inner()) = marks;
 }
 
+/// The top of a line `height` tall set in the band beside the buttons, on their
+/// middle. Where there is no band, the window's own margin.
 pub fn band_line_top(height: f32) -> f32 {
     if cfg!(target_os = "macos") {
         (band_middle() - height / 2.0).round()
@@ -378,21 +598,45 @@ pub fn band_line_top(height: f32) -> f32 {
     }
 }
 
+/// The air between that band and the masthead.
+///
+/// It used to be the full 34 points of the window's own top margin, added on
+/// top of the title bar — so on a Mac there were two margins stacked above the
+/// masthead, and the band under the three buttons read as space nobody had a
+/// use for. Beneath a title bar the masthead is set the way a toolbar is set,
+/// under it; with no title bar it keeps its margin.
+///
+/// Sixteen was a shade too close — the masthead read as pressed up against
+/// the buttons — and twenty-four is where it sits well, still some ten
+/// points under what it was with two margins stacked.
 const AIR_UNDER_TITLEBAR: f32 = 24.0;
 const AIR_TOP: f32 = 34.0;
 
+/// The least air under a taller band: it already stands its buttons in air
+/// of their own.
 const LEAST_UNDER_TITLEBAR: f32 = 12.0;
 
+/// The air above the masthead: where it stood under the plain band, or, under
+/// a taller one — the buttons set in from the corner, see `macwindow` — that
+/// band and a little air: where „kompakt" and a narrow window set their line
+/// (the other views set it in the band, see `band_line_top`). With no band,
+/// the window's own margin.
 pub fn margin_top() -> f32 {
     margin_under(titlebar())
 }
 
+/// How far down the words of a line on the band's middle start their ink:
+/// measured, 24 points — the sides' widest, so the corner is even.
 pub const BAND_INK_TOP: f32 = 24.0;
 
+/// The masthead's top under a line of its own where a Mac has its band — for
+/// a window without one that still wants the switch and „menü" up there.
 pub fn margin_under_line() -> f32 {
     margin_under(band_middle() * 2.0)
 }
 
+/// The top of a line `height` tall on the middle of a Mac's band, whether or
+/// not the window has one.
 pub fn line_on_band_middle(height: f32) -> f32 {
     (band_middle() - height / 2.0).round()
 }
@@ -405,14 +649,29 @@ fn margin_under(band: f32) -> f32 {
     }
 }
 
+/// The air below the foot.
 pub const MARGIN_BOTTOM: f32 = 28.0;
 
+/// How far a floating sheet stands in from the top of the window, given how
+/// far it stands in from the side.
+///
+/// The same as the side, so a panel over the window sits in an even margin on
+/// every free edge — but never so high that its top edge is in the title bar.
+/// It used to take the masthead's margin, which on a Mac is the title bar's
+/// and then some, so the menu hung twice as far from the top as from the side.
 pub fn sheet_inset_top(side: f32, titlebar: f32) -> f32 {
     side.max(titlebar + 6.0)
 }
 
+/// How far the fade at the top and bottom of a list reaches at most. Rows do
+/// not meet a cut edge when they scroll out; they thin into the ground.
+///
+/// About a row deep: a fade much shorter than the type it covers takes the
+/// bottom off a line and leaves the top, which reads as a smear; a deeper one
+/// stood over the list like a band of its own.
 pub const FADE_HEIGHT: f32 = 20.0;
 
+/// egui has no synthetic bold, so the two weights are two loaded faces.
 pub fn family_regular() -> FontFamily {
     FontFamily::Proportional
 }
@@ -421,28 +680,66 @@ pub fn family_bold() -> FontFamily {
     FontFamily::Name("bold".into())
 }
 
+/// The labels' face: the regular, or in Muto its medium — a family of its own
+/// either way, so the roles need not know which.
 pub fn family_label() -> FontFamily {
     FontFamily::Name("label".into())
 }
 
+/// The small figures' face: the mono cut, or in Muto Muto Mono's medium — see
+/// [`family_label`].
 pub fn family_figures_label() -> FontFamily {
     FontFamily::Name("figures-label".into())
 }
 
+/// Whether the small sizes are set in Muto's medium — see [`family_label`].
 static LABEL_MEDIUM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The mono cut of whatever family is in use — for figures, and only figures.
+///
+/// A track number, a year, a date, a running time: these are read *down* a
+/// column, or watched while they change, and a proportional face makes the
+/// same four digits a different width from one row to the next. The column
+/// then shivers instead of lining up, and `4:10 / 5:00` jitters once a second
+/// as the ones and the sevens go by.
+///
+/// It is the same typeface, not a second one — every family that ships with
+/// the program has both cuts. Where a family has no mono cut, this points back
+/// at the proportional one and nothing changes.
 pub fn family_figures() -> FontFamily {
     FontFamily::Name("figures".into())
 }
 
+/// The type roles — two sizes times two weights, plus the figures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
+    /// Names, titles, times: everything the user came for.
     Content,
+    /// The same, marked as selected or playing.
     ContentBold,
+    /// A number at content size, set in the mono cut — see [`family_figures`].
+    ///
+    /// There is no bold companion, and that is deliberate rather than missing:
+    /// many mono cuts ship without one, and a figure never needed to shout
+    /// anyway. A row being played says so in the accent, which is the signal
+    /// the figures in it already carry.
     Figures,
+    /// A figure at label size, in the mono cut: the volume, which changes
+    /// under your hand and would otherwise shuffle the words beside it
+    /// sideways with every step.
     FiguresLabel,
+    /// Column heads, status, key hints: everything about the interface.
     Label,
+    /// Running text at label size, set solid rather than tracked: the log's
+    /// entries, which are sentences rather than words about the interface, and
+    /// would lose a third of what fits to the tracking.
     Note,
+    /// A label carrying emphasis, used sparingly.
+    ///
+    /// One thing draws it: the title of what is playing, when that line stands
+    /// in the header among the interface's own words. It has to be the title
+    /// there and not one more word on the line, and weight is the only way to
+    /// say so without leaving the label size.
     LabelBold,
 }
 
@@ -460,6 +757,7 @@ impl Role {
         }
     }
 
+    /// Labels are tracked out; content is set solid.
     pub fn tracking(self) -> f32 {
         match self {
             Self::Label | Self::LabelBold => {
@@ -470,65 +768,162 @@ impl Role {
     }
 }
 
+/// A colour scheme.
+///
+/// Mostly the schemes people already read code in all day, fitted to the same
+/// five roles.
+/// Fitting rather than copying is the point: each scheme brings its own ground
+/// and its own accent, but the *system* — one primary, one secondary, one
+/// tertiary, one accent, one marker — does not change, so the interface reads
+/// the same whichever is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Every scheme comes as a light and a dark one, so the menu chooses the scheme
+/// and, apart from it, whether it is light, dark or follows the system — see
+/// [`Brightness`]. A variant is one half of such a pair; [`Theme::family`]
+/// names the pair.
 pub enum Theme {
     MacosHell,
     MacosDunkel,
+    /// GNOME's own, Adwaita: the window ground, the text at the opacities
+    /// libadwaita sets its dim and faint labels at, and GNOME's blue.
     GnomeHell,
     GnomeDunkel,
+    /// Ubuntu's own, Yaru as the current release paints it: GNOME's
+    /// window grounds, Yaru's warmer grey text, Ubuntu orange for what
+    /// plays and aubergine for the heads.
     UbuntuHell,
     UbuntuDunkel,
     SolarisiertHell,
     SolarisiertDunkel,
     Nord,
+    /// Nord's snow storm: its three whites as the ground, polar night as the
+    /// ink, frost for what plays.
     NordHell,
     Dracula,
+    /// Dracula's own light one, „alucard": cream, near-black, its pink
+    /// taken down to a crimson that reads on white.
     DraculaHell,
+    /// Sublime Text's own: Mariana, the scheme it opens with — slate blue,
+    /// cool white, and the orange of its caret and its logo.
     Sublime,
+    /// Mariana in daylight: a cool white, its slate as the ink, the caret's
+    /// orange burnt until it reads.
     SublimeHell,
+    /// The grey panel of an iPod, and the ink on it. Two colours, no third.
     IpodClassic,
+    /// The panel with its light off: the ink as the ground, the panel's
+    /// grey-green as the words.
     IpodDunkel,
+    /// Soulseek as it looked on Windows 2000:
+    /// the grey of every button, the white of its lists, the navy of its
+    /// title bar.
     Soulseek,
+    /// Soulseek after dark: the button grey as the words on a dark grey,
+    /// the Windows 2000 selection blue, lightened, for what plays.
     SoulseekDunkel,
+    /// Nord's frost blue as the ground.
     NordFrost,
+    /// Frost under the ice: a deep blue-green, frost as the words and the
+    /// accent.
     NordFrostDunkel,
+    /// Hudson Soft's blue, with the bee's yellow.
     Hudson,
+    /// Hudson on paper: navy ink, its blue for what plays, the bee's yellow
+    /// as the marker.
     HudsonHell,
+    /// The white PC Engine, its blue name, the orange of its box.
     PcEngine,
+    /// The PC Engine's navy as the ground, its plastic white as the words,
+    /// the box's orange for what plays.
     PcEngineDunkel,
+    /// NEC's last console: white, its purple spiral, its yellow and pink.
     PcFx,
+    /// The spiral's purple at night.
     PcFxDunkel,
+    /// The PC-9801 at night: indigo, and the cyan of its sixteen colours.
     Pc98,
+    /// The PC-9801 by day: its lilac white, indigo ink, a teal that reads.
     Pc98Hell,
+    /// Sharp's X68000: the black tower, the red of its X.
     X68000,
+    /// The X68000's warm grey as the ground, its black as the ink.
     X68000Hell,
+    /// Fujitsu's FM Towns: white windows, the red menu bar, the pink title.
     FmTowns,
+    /// TownsOS with the lights down: the red menu bar, lightened, on black.
     FmTownsDunkel,
+    /// 公園, a park: its playground — the gravel,
+    /// the red bar, the yellow joint, the blue pole.
     Koen,
+    /// 公園 by day: the gravel dry, dark words, the red bar for what plays,
+    /// the yellow joint as the marker, the blue pole for a marked cover.
     KoenHell,
+    /// Paysage d'Hiver, Wintherr's winter black metal: black and the greys of
+    /// snow at night, and no colour at all.
     PaysageDHiver,
+    /// The same winter by day: the grey of the snow on its page, black ink.
     PaysageDHiverHell,
+    /// CoCo壱番屋, the curry house: its yellow sign, the curry's brown as the
+    /// words, a curry red for what plays.
     CocoIchibanya,
+    /// The same at night: the roux as the ground, the rice white as the
+    /// words, the sign's yellow for what plays.
     CocoIchibanyaDunkel,
+    /// Runebending: Runebender's grounds quiet, and the tiles' colours in the
+    /// type instead — the names in ink, what stands beside them in the grid's
+    /// green, the figures in its orange, what plays in the comb's violet.
     Runebending,
+    /// The same at night.
     RunebendingDunkel,
+    /// Rubrication, as old books were printed: black and red on paper, the
+    /// names in black, what stands beside them in red, the figures in a
+    /// blue-grey, what plays in blue.
     Rubrik,
+    /// The same by lamplight.
     RubrikDunkel,
+    /// Three on Gruvbox's colours with every kind of thing in a colour of its
+    /// own — heads, names, what stands beside them, figures, what plays — named
+    /// after a Hessian half-timbered house. The wild man: the braces of a
+    /// Fachwerk storey post, in Gruvbox's dark, heads in its yellow, what
+    /// stands beside the names in its blue, what plays in its red.
     WilderMann,
+    /// By day: Gruvbox's light, the same roles in its deeper colours.
     WilderMannHell,
+    /// Ox blood, the red the timbers were painted: heads in it, what stands
+    /// beside the names in orange, what plays in green, the row marked in a
+    /// dark red.
     Ochsenblut,
+    /// By day: the plaster pale, the red and orange deepened.
     OchsenblutHell,
+    /// The clay of the panels between the timbers: a cream ground, the
+    /// timbers' dark for names, heads in burnt clay, what stands beside the
+    /// names in moss green, what plays in blue.
     Lehmgefach,
+    /// By night: the clay dark, the colours lifted.
     LehmgefachDunkel,
+    /// Nothing but the full colours a screen has — every channel on or off:
+    /// black, white, red, green, blue and what two of them make.
     Rgb,
+    /// The same on white, where only the darker of them read.
     RgbHell,
+    /// Zeitvogel, the bird that lives in time, after a toy's tile with a
+    /// cuckoo clock on it: by day the lime tile beside the clock as the
+    /// ground, the roof's teal in the words, coral for what plays, the
+    /// lavender tile behind the picked row.
     ZeitvogelHell,
+    /// The same bird at night: the lavender tile darkened to a deep violet,
+    /// the clock's green lightened for the words.
     Zeitvogel,
+    /// One's own, from four colours set in the menu — see [`Seed`]. The light
+    /// half.
     Eigenes,
+    /// Its dark half.
     EigenesDunkel,
 }
 
 impl Theme {
+    /// In the order they are offered.
     pub fn all() -> [Theme; 54] {
         [
             Self::MacosHell,
@@ -588,10 +983,14 @@ impl Theme {
         ]
     }
 
+    /// One of each pair, in the order the menu offers them.
     pub fn families() -> Vec<Theme> {
         Self::GROUPS.iter().flat_map(|(_, schemes)| schemes.iter().copied()).collect()
     }
 
+    /// The schemes as the menu lists them, under a caption a group, in two
+    /// columns, and the order `shift` + `f` leafs through them. One half of
+    /// each scheme stands for both.
     pub const GROUPS: [(&'static str, &'static [Theme]); 5] = [
         ("system", &[Theme::MacosHell, Theme::GnomeHell, Theme::UbuntuHell]),
         (
@@ -635,6 +1034,7 @@ impl Theme {
         ("selbst gemacht", &[Theme::Eigenes]),
     ];
 
+    /// The pair's name: the scheme's own without „hell" or „dunkel".
     pub fn family(self) -> &'static str {
         let name = self.name();
         name.strip_suffix(" hell")
@@ -642,6 +1042,7 @@ impl Theme {
             .unwrap_or(name)
     }
 
+    /// What the menu calls it, and what goes in the config file.
     pub fn name(self) -> &'static str {
         match self {
             Self::MacosHell => "macos hell",
@@ -701,6 +1102,7 @@ impl Theme {
         }
     }
 
+    /// This scheme's half on the given side: itself, or its partner.
     pub fn side(self, dark: bool) -> Theme {
         if self.palette().is_dark() == dark {
             self
@@ -709,6 +1111,8 @@ impl Theme {
         }
     }
 
+    /// The scheme a new config opens on: GNOME's on Linux, where GNOME is
+    /// what the desktop most likely is; the Mac's everywhere else.
     pub fn native() -> (Theme, Theme) {
         if cfg!(target_os = "linux") {
             (Self::GnomeHell, Self::GnomeDunkel)
@@ -717,6 +1121,11 @@ impl Theme {
         }
     }
 
+    /// Read a name back. Schemes that have since been taken out are mapped to
+    /// the native one of the same brightness, so an existing config file opens
+    /// on something close to what it named rather than on a surprise; and
+    /// „systemfarben", which was once a scheme and is now
+    /// [`Brightness::System`], opens on the native pair.
     pub fn from_name(name: &str) -> Self {
         let name = name.trim().to_lowercase();
         match name.as_str() {
@@ -744,6 +1153,7 @@ impl Theme {
         }
     }
 
+    /// Its other half: the same scheme, light where this is dark.
     pub fn partner(self) -> Self {
         const PAIRS: [(Theme, Theme); 27] = [
             (Theme::MacosHell, Theme::MacosDunkel),
@@ -788,6 +1198,11 @@ impl Theme {
             .unwrap_or(self)
     }
 
+    /// The icon's ground and its k while the window is up: the scheme's
+    /// ground and accent, except where those would be the closed app's own
+    /// white k on black — then the running app could not be told from the
+    /// closed one in the Dock. Paysage d'Hiver's night is that, and takes its
+    /// marker's grey for the ground: the k still its one brightest thing.
     pub fn icon_colours(self) -> (Color32, Color32) {
         let palette = self.palette();
         let ground = match self {
@@ -821,6 +1236,8 @@ impl Theme {
     }
 }
 
+/// Light, dark, or whichever the system is set to: chosen apart from the scheme
+/// since every scheme comes in both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Brightness {
     System,
@@ -829,6 +1246,7 @@ pub enum Brightness {
 }
 
 impl Brightness {
+    /// What the menu says, and what goes in the config file.
     pub fn name(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -837,6 +1255,7 @@ impl Brightness {
         }
     }
 
+    /// Round the three, for the menu's row.
     pub fn next(self) -> Self {
         match self {
             Self::System => Self::Hell,
@@ -845,6 +1264,7 @@ impl Brightness {
         }
     }
 
+    /// Read back from the config, with the scheme it was written beside.
     pub fn from_config(word: &str, scheme: &str) -> Self {
         match word.trim() {
             "system" => Self::System,
@@ -858,6 +1278,9 @@ impl Brightness {
         }
     }
 
+    /// The half of the scheme actually painted, once the operating system
+    /// has been asked. No answer from the system counts as light: the safer
+    /// guess, and one the user can still overrule.
     pub fn resolve(self, theme: Theme, system: Option<egui::Theme>) -> Theme {
         let dark = match self {
             Self::Hell => false,
@@ -868,6 +1291,13 @@ impl Brightness {
     }
 }
 
+/// The four colours a scheme of one's own is made from: the ground, the names,
+/// what plays, and the columns' heads. Everything else is worked out from them
+/// in Oklab, so it keeps their hues; the other half of the scheme has every
+/// lightness turned over.
+///
+/// Passed on as a code — `k1-282828-ebdbb2-fb4934-fabd2f` — so somebody else
+/// can take the scheme; `k1` says which way of reading it this is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Seed {
     pub ground: Color32,
@@ -877,6 +1307,7 @@ pub struct Seed {
 }
 
 impl Seed {
+    /// Where one starts: the wild man's colours.
     pub const DEFAULT: Seed = Seed {
         ground: rgb(0x282828),
         ink: rgb(0xEBDBB2),
@@ -897,11 +1328,14 @@ impl Seed {
         }
     }
 
+    /// The code that passes it on.
     pub fn code(&self) -> String {
         let hex = |c: Color32| format!("{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
         format!("k1-{}-{}-{}-{}", hex(self.ground), hex(self.ink), hex(self.accent), hex(self.heading))
     }
 
+    /// A code read back, forgiving of how it was copied: with or without
+    /// `k1`, `#` or spaces, any marks between the four colours.
     pub fn parse(code: &str) -> Option<Self> {
         let code = code.trim().to_ascii_lowercase();
         let code = code.strip_prefix("k1").unwrap_or(&code);
@@ -916,6 +1350,7 @@ impl Seed {
         Some(Self { ground, ink, accent, heading })
     }
 
+    /// One colour typed as hex: `#fb4934`, `fb4934`, or the short `#f43`.
     pub fn parse_colour(text: &str) -> Option<Color32> {
         let hex = text.trim().trim_start_matches('#');
         if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -929,10 +1364,13 @@ impl Seed {
         u32::from_str_radix(&long, 16).ok().map(rgb)
     }
 
+    /// Whether its ground is a dark one, by the measure palettes use.
     fn is_dark(&self) -> bool {
         (self.ground.r() as u32 + self.ground.g() as u32 + self.ground.b() as u32) < 384
     }
 
+    /// The seed for the light half or the dark: itself, or with every
+    /// lightness turned over and the hues kept.
     pub fn side(self, dark: bool) -> Self {
         if self.is_dark() == dark {
             return self;
@@ -949,6 +1387,8 @@ impl Seed {
         }
     }
 
+    /// The whole palette: the tones between ink and ground, the plates a
+    /// step from the ground towards the ink.
     fn palette(&self) -> Palette {
         let mix = |a: Color32, b: Color32, t: f32| {
             let (a, b) = (Lab::of(a), Lab::of(b));
@@ -971,6 +1411,8 @@ impl Seed {
     }
 }
 
+/// The seed of one's own scheme, set from the config at start and from the
+/// menu while it is being made.
 static CUSTOM: std::sync::RwLock<Seed> = std::sync::RwLock::new(Seed::DEFAULT);
 
 pub fn set_custom(seed: Seed) {
@@ -983,48 +1425,90 @@ pub fn custom() -> Seed {
     CUSTOM.read().map(|s| *s).unwrap_or(Seed::DEFAULT)
 }
 
+/// A colour as the menu's three rules hold it: lightness 0–1, colourfulness
+/// 0–1 (of [`CHROMA_MOST`]), hue 0–1 round the circle.
 pub fn rules_of(colour: Color32) -> [f32; 3] {
     let lab = Lab::of(colour);
     let hue = lab.b.atan2(lab.a).to_degrees().rem_euclid(360.0) / 360.0;
     [lab.l.clamp(0.0, 1.0), (lab.chroma() / CHROMA_MOST).clamp(0.0, 1.0), hue]
 }
 
+/// And back: the nearest colour the screen can show.
 pub fn from_rules([l, c, h]: [f32; 3]) -> Color32 {
     let (chroma, angle) = (c * CHROMA_MOST, (h * 360.0).to_radians());
     Lab { l, a: chroma * angle.cos(), b: chroma * angle.sin() }.colour()
 }
 
+/// About the most colourful a screen's colour gets, in Oklab.
 const CHROMA_MOST: f32 = 0.32;
 
+/// The three tonal values plus the accent, for one scheme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
+    /// The ground the interface sits on.
     pub ground: Color32,
+    /// Primary text.
     pub ink: Color32,
+    /// Secondary — present but stepping back.
     pub mid: Color32,
+    /// Tertiary — counts, years, anything read only when looked for.
     pub faint: Color32,
+    /// The single accent: what is playing, and what needs a warning.
     pub accent: Color32,
+    /// The accent, receded, for figures beside accented text.
     pub accent_faint: Color32,
+    /// Behind the selected row, the width of the whole row. Since the selection
+    /// no longer steps out of the margin, this and the bold face are the only
+    /// two things saying where it is.
     pub marker: Color32,
+    /// Behind the search field. A shade off the ground — enough to say "you can
+    /// type here", not enough to become a box.
     pub field: Color32,
+    /// The unfilled part of the progress rule.
     pub rule: Color32,
+    /// Hover feedback. Barely there on purpose — it is a hint, not a button.
     pub hover: Color32,
+    /// The dots of a halftone cover that is marked — the one you are on, the
+    /// one you are hearing — where they are not simply the accent: 公園 sets
+    /// every word and every unmarked cover in yellow, and a marked cover in the
+    /// blue of its pole. See [`Palette::lit_dots`].
     pub lit_dots: Option<Color32>,
+    /// The columns' heads, where they are not simply in the third tone: with
+    /// the colour in the type, a colour of their own. See [`Palette::heading`].
     pub heading: Option<Color32>,
 }
 
+/// How much more colourful than the ground a colour must be to count as one
+/// — see [`Palette::in_the_type`] — in Oklab's chroma.
 const COLOURFUL: f32 = 0.035;
 
+/// What a scheme's colour other than the accent costs as a screened
+/// picture's tone, and a grey one on top, in Oklab's lightness — see
+/// [`Palette::tones_under`] — and how far from its share of the way a tone
+/// may stay, as a share of the way from the field to the ink.
 const DITHER_OTHER: f32 = 0.12;
 const DITHER_GREY: f32 = 0.05;
 const DITHER_NEAR: f32 = 0.08;
+/// How colourful a tone under the ink may be on a light ground, in Oklab's
+/// chroma: there a full red or magenta under dark ink was the loudest thing in
+/// the picture and took its shape.
 const DITHER_LIGHT_CHROMA: f32 = 0.11;
 
+/// How far apart two hues must be, in degrees, to colour two tones.
 const HUE_APART: f32 = 40.0;
 
+/// How far a coloured plate comes towards the ground's lightness when its
+/// colour goes into the type: halfway, still seen, no longer loud.
 const PLATE_TOWARD_GROUND: f32 = 0.5;
 
+/// How colourful each plate is made, at least, with the colour on the
+/// plates — see [`Palette::on_the_plates`] — in Oklab's chroma: the marker
+/// and the rule plainly coloured, the search field and the hover a tint.
 const PLATE_CHROMA: [f32; 4] = [0.10, 0.05, 0.09, 0.035];
 
+/// A colour in Oklab (Björn Ottosson, 2020): lightness as the eye has it,
+/// and two axes of hue, so a colour can be made lighter or darker without
+/// its hue wandering.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Lab {
     l: f32,
@@ -1049,6 +1533,8 @@ impl Lab {
         }
     }
 
+    /// In linear light, each channel as it comes out — outside 0 to 1 where
+    /// the colour is beyond the screen's.
     fn linear(self) -> [f32; 3] {
         let l = (self.l + 0.396_337_78 * self.a + 0.215_803_76 * self.b).powi(3);
         let m = (self.l - 0.105_561_346 * self.a - 0.063_854_17 * self.b).powi(3);
@@ -1060,6 +1546,8 @@ impl Lab {
         ]
     }
 
+    /// The colour on the screen: with its chroma taken back, keeping its
+    /// lightness and hue, until the screen can show it.
     fn colour(self) -> Color32 {
         let mut lab = self;
         for _ in 0..24 {
@@ -1081,24 +1569,29 @@ impl Lab {
         self.a.hypot(self.b)
     }
 
+    /// How far apart two hues are, in degrees.
     fn hue_apart(&self, other: &Lab) -> f32 {
         let apart = (self.b.atan2(self.a) - other.b.atan2(other.a)).to_degrees().abs() % 360.0;
         apart.min(360.0 - apart)
     }
 
+    /// The same hue, `by` as colourful.
     fn quieter(self, by: f32) -> Self {
         Self { a: self.a * by, b: self.b * by, ..self }
     }
 
+    /// The same hue and chroma at another lightness.
     fn at_lightness(self, l: f32) -> Self {
         Self { l, ..self }
     }
 
+    /// Kept between black and white.
     fn clone_clamped(self) -> Self {
         Self { l: self.l.clamp(0.0, 1.0), ..self }
     }
 }
 
+/// Shorthand, so the table below reads as a table.
 const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb(
         ((hex >> 16) & 0xFF) as u8,
@@ -1107,13 +1600,21 @@ const fn rgb(hex: u32) -> Color32 {
     )
 }
 
+/// The accent colour the system is set to — a Mac's, GNOME's and Ubuntu's,
+/// KDE's too — which the schemes after a system (macos, gnome, ubuntu) take,
+/// with no setting of their own: chosen in the system, it is there. Nothing
+/// where the system has none to say, or a Mac is left on „mehrfarbig".
 static DESKTOP_ACCENT: std::sync::Mutex<Option<Color32>> = std::sync::Mutex::new(None);
 
+/// What the desktop says its accent is now: on Linux through the desktop
+/// portal, on a Mac from the system settings (see `macaccent`).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn set_desktop_accent(colour: Option<Color32>) {
     *DESKTOP_ACCENT.lock().unwrap_or_else(|e| e.into_inner()) = colour;
 }
 
+/// The desktop's accent for a scheme named after a desktop, where it is to be
+/// taken.
 fn desktop_accent_for(theme: Theme) -> Option<Color32> {
     let after_a_desktop = matches!(
         theme,
@@ -1125,9 +1626,16 @@ fn desktop_accent_for(theme: Theme) -> Option<Color32> {
     *DESKTOP_ACCENT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// How much contrast the accent keeps against the ground once it is taken
+/// from the desktop: as much as words want.
 const DESKTOP_ACCENT_CONTRAST: f32 = 4.5;
 
 impl Palette {
+    /// The same scheme with another accent — the desktop's: in its hue, as
+    /// dark (on a light ground) or as light (on a dark one) as it has to be to
+    /// read as words, the receded one part of the way back to the ground. The
+    /// heads lose their own colour where it is the accent's hue, so the two
+    /// are not taken for each other.
     fn with_accent(mut self, colour: Color32) -> Self {
         let dark = self.is_dark();
         let mut lab = Lab::of(colour);
@@ -1159,6 +1667,10 @@ impl Palette {
         drawn.plates_retuned()
     }
 
+    /// The plates as the eye wants them against each other: the marked row's
+    /// a little quieter than each scheme draws it — it is where the hand is,
+    /// not a block to look at — and the hover's a little stronger, so the
+    /// row under the pointer reads as it is passed over.
     fn plates_retuned(self) -> Self {
         let mix = |a: Color32, b: Color32, t: f32| {
             let (a, b) = (Lab::of(a), Lab::of(b));
@@ -1912,6 +2424,19 @@ impl Palette {
         }
     }
 
+    /// The same scheme with its colour in the type, as runebender schrift and
+    /// rubrik have it by themselves. The coloured plates behind the words — the
+    /// marker, the search field, the rule — take the ground's hue and come
+    /// halfway to its lightness, and the colours they had go into the second
+    /// and third tones of the words, each as light as the tone it colours, so
+    /// nothing reads harder than before: the most colourful to the second tone,
+    /// one of another hue to the third. A scheme whose plates are grey has no
+    /// colour to give, and one whose words are coloured already keeps them;
+    /// tinting a grey scheme's words with its accent made everything the colour
+    /// of what plays. The columns' heads take a colour of their own, as dark as
+    /// the second tone: the third tone's, else the second's, else the most
+    /// colourful plate's, else the accent's. The ink, the accent and the ground
+    /// are left alone.
     pub fn in_the_type(&self) -> Palette {
         let ground = Lab::of(self.ground);
         let colourful = |lab: &Lab| lab.chroma() - ground.chroma() > COLOURFUL;
@@ -1950,6 +2475,15 @@ impl Palette {
         }
     }
 
+    /// The same scheme with its colour on the plates. Until then „flächen" was
+    /// the scheme as drawn, and most schemes draw their plates in a grey, so
+    /// the two looked alike but for the words. Now the marker, the search
+    /// field, the rule and the hover take a colour each, at the lightness they
+    /// had, so nothing on them reads harder: a plate coloured already keeps its
+    /// hue and is made at least so colourful, a grey one takes the hue of the
+    /// scheme's most colourful plate, or of its accent. The words are left as
+    /// the scheme has them. A scheme with no colour at all (paysage d'hiver)
+    /// stays grey.
     pub fn on_the_plates(&self) -> Palette {
         let ground = Lab::of(self.ground);
         let colourful = |lab: &Lab| lab.chroma() - ground.chroma() > COLOURFUL;
@@ -1979,6 +2513,15 @@ impl Palette {
         }
     }
 
+    /// The scheme as the window shows it: the plates coloured, as
+    /// [`Self::on_the_plates`] makes them, and the columns' heads in a colour
+    /// of their own, as [`Self::in_the_type`] finds one — the words otherwise
+    /// as the scheme has them. Until then „farbfokus" chose one or the other;
+    /// one with the colour on the plates lost the heads'. A scheme that names
+    /// its heads' colour keeps it.
+    ///
+    /// The third tone is held to at least [`FAINT_LEAST`] against the ground,
+    /// so a track's number can be read.
     pub fn coloured(&self) -> Palette {
         let typed = self.in_the_type();
         let heading = self.heading.or(typed.heading);
@@ -1986,6 +2529,8 @@ impl Palette {
         Palette { heading, faint, field: typed.field, ..self.on_the_plates() }
     }
 
+    /// Part of the way from this scheme to `other`, every colour alike —
+    /// `t` nought is this, one is `other`. For the fade between two.
     pub fn mix(&self, other: &Palette, t: f32) -> Palette {
         let m = |a: Color32, b: Color32| a.lerp_to_gamma(b, t);
         Palette {
@@ -2010,10 +2555,26 @@ impl Palette {
         }
     }
 
+    /// The colour the columns' heads are written in — each scheme names its
+    /// own, apart from the facts, the second tone and the accent (see the
+    /// test `the_heads_stand_apart`); the third tone only where none is
+    /// named.
     pub fn heading(&self) -> Color32 {
         self.heading.unwrap_or(self.faint)
     }
 
+    /// The colours a screened picture's dots take under `ink`, the one nearest
+    /// the field first: none in two tones, one in three, two in four.
+    ///
+    /// Each stands at its share of the way from the field's lightness to the
+    /// ink's, evenly. Until then it was the accent, and in four the faint tone
+    /// under it, whatever their lightness: in pc-98 at night the faint green
+    /// was lighter than the pink accent above it, in ochsenblut by day the two
+    /// were equally light, and the picture lost its shape. Now each takes the
+    /// scheme's colour nearest that lightness — the accent where it is about as
+    /// near as any, a colourful one before a grey — and is brought the rest of
+    /// the way there, keeping its hue. Never the ink itself, nor a colour taken
+    /// twice; with nothing left, the ink part of the way to the field.
     pub fn tones_under(&self, ink: Color32, tones: u8) -> Vec<Color32> {
         let between = usize::from(tones.clamp(2, 4)) - 2;
         let (field, top) = (Lab::of(self.field), Lab::of(ink));
@@ -2060,18 +2621,40 @@ impl Palette {
             .collect()
     }
 
+    /// The one tone under the ink in three — see [`Self::tones_under`].
     pub fn third_tone(&self, ink: Color32) -> Color32 {
         self.tones_under(ink, 3).first().copied().unwrap_or(self.field.lerp_to_gamma(ink, 0.5))
     }
 
+    /// The colour a marked halftone cover is drawn in: the accent, unless
+    /// the scheme names a colour of its own for it.
     pub fn lit_dots(&self) -> Color32 {
         self.lit_dots.unwrap_or(self.accent)
     }
 
+    /// Whether a halftone has to be screened from the picture's negative.
+    ///
+    /// The screen sets a dot where the picture is light, and the dot is drawn
+    /// in the ink. On a dark ground the ink is light, and a light part of the
+    /// picture comes out light. On a light ground the ink is dark, and the same
+    /// dot made every cover and every face a photographic negative. There the
+    /// dots go where the picture is dark instead.
+    ///
+    /// Only for pictures of something — covers, the artist's picture. The
+    /// scope and the screen saver draw light itself, which is ink on any
+    /// ground.
     pub fn screens_negative(&self) -> bool {
         !self.is_dark()
     }
 
+    /// The plate under the keyboard's row and the one clicked: the scheme's
+    /// marker a step towards the ink, so the one row `j` and `k` move is the
+    /// one that is seen. The menu's was the plain marker, a shade lighter for
+    /// the same thing.
+    ///
+    /// At least [`MARKED_LEAST`] against the ground: where the marker sits
+    /// nearly on the ground's own lightness (hu-card's navy on its blue) it
+    /// goes further towards the ink until it is seen.
     pub fn marked(&self) -> Color32 {
         let mut t = 0.14;
         let mut marked = self.marker.lerp_to_gamma(self.ink, t);
@@ -2082,6 +2665,9 @@ impl Palette {
         marked
     }
 
+    /// `colour`, its hue and colourfulness kept, made light or dark enough
+    /// to stand at least `least` against `behind`: moved away from the
+    /// lightness of what is behind it, a step at a time, as far as it must.
     pub fn legible_on(colour: Color32, behind: Color32, least: f32) -> Color32 {
         if contrast(colour, behind) >= least {
             return colour;
@@ -2106,6 +2692,8 @@ impl Palette {
         best.1
     }
 
+    /// Whether this scheme sits on a dark ground. egui needs telling, and the
+    /// answer is simply how light the ground is.
     pub fn is_dark(&self) -> bool {
         let sum =
             self.ground.r() as u32 + self.ground.g() as u32 + self.ground.b() as u32;
@@ -2113,13 +2701,20 @@ impl Palette {
     }
 }
 
+/// How far the marked row's plate stands at least from the ground, and the
+/// third tone at least from the ground; what is small on a plate — a track's
+/// number, „flac", its length — at least from the plate.
 pub const MARKED_LEAST: f32 = 1.3;
 
+/// How far each scheme's marker is taken back towards the ground, and how far
+/// its hover is taken on away from it — see `Palette::plates_retuned`.
 const MARKER_QUIETER: f32 = 0.15;
 const HOVER_STRONGER: f32 = 1.4;
 pub const FAINT_LEAST: f32 = 2.2;
 pub const ON_PLATE_LEAST: f32 = 3.0;
 
+/// The contrast of two colours as WCAG reckons it: 1 for the same, 21 for
+/// black on white.
 pub fn contrast(a: Color32, b: Color32) -> f32 {
     fn luminance(c: Color32) -> f32 {
         let f = |v: u8| {
@@ -2137,6 +2732,15 @@ pub fn contrast(a: Color32, b: Color32) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// Everything the interface draws goes through here.
+///
+/// Lowercase throughout, after the HfG Ulm, which set its own name that way.
+/// The practical gain in a list of several thousand rows: without capitals the
+/// line is quieter and word shapes stay easier to tell apart.
+///
+/// Unless capitals are asked for, with ⌥ under „darstellung": then names stand
+/// as they were written. The window's own words are written small in the first
+/// place, and stay so.
 pub fn lower(text: &str) -> String {
     if CAPITALS.load(std::sync::atomic::Ordering::Relaxed) {
         text.to_string()
@@ -2145,12 +2749,19 @@ pub fn lower(text: &str) -> String {
     }
 }
 
+/// Whether capitals are kept — see [`lower`]. Set once a frame from the
+/// config.
 static CAPITALS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_capitals(on: bool) {
     CAPITALS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Where the machine keeps typefaces.
+///
+/// The user's own folder comes first, which is also the answer to "how do I add
+/// a font": put the files there and they show up in the menu. Nothing is ever
+/// bundled — shipping a face would mean shipping its licence.
 fn font_dirs() -> Vec<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
@@ -2178,13 +2789,19 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// Which of the two weights a file is, if either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Weight {
     Regular,
     Bold,
+    /// Italic, light, condensed — real faces, but not ones this design uses.
     Other,
 }
 
+/// Reject font collections and anything that is not a font at all.
+///
+/// A `.ttc` holds several faces; egui takes the file whole and panics on one.
+/// Checking four bytes is cheaper than crashing on the user's font folder.
 fn is_single_face(path: &std::path::Path) -> bool {
     use std::io::Read;
     let Ok(mut file) = std::fs::File::open(path) else {
@@ -2200,14 +2817,23 @@ fn is_single_face(path: &std::path::Path) -> bool {
     )
 }
 
+/// One family from the `fonts` folder, in whichever of its two shapes it has.
+///
+/// Two shapes rather than two families, because that is what they are: mono and
+/// proportional cut of the same design. Choosing between them is a separate
+/// question from choosing the typeface, and the menu asks it separately.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Family {
+    /// What the menu calls it, lowercased like everything else.
     pub name: String,
+    /// What the config stores. Letters and digits only, so a renamed file or a
+    /// changed spelling cannot orphan a setting.
     pub key: String,
     pub proportional: Option<Faces>,
     pub mono: Option<Faces>,
 }
 
+/// The two weights of one cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Faces {
     pub regular: std::path::PathBuf,
@@ -2215,6 +2841,7 @@ pub struct Faces {
 }
 
 impl Family {
+    /// The cut asked for, or the other one if this family only has one.
     pub fn faces(&self, mono: bool) -> Option<&Faces> {
         let (wanted, other) = if mono {
             (&self.mono, &self.proportional)
@@ -2225,6 +2852,13 @@ impl Family {
     }
 }
 
+/// Where the program's own typefaces are, if they came with it.
+///
+/// Looked for in the places the same folder ends up in: beside the executable,
+/// inside a macOS bundle's `Resources`, a couple of levels up from
+/// `target/release` while developing, and the working directory. The config can
+/// name a different one, which is the answer for anyone who keeps them
+/// elsewhere.
 pub fn font_folder(configured: Option<&str>) -> Option<std::path::PathBuf> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Some(named) = configured {
@@ -2242,6 +2876,11 @@ pub fn font_folder(configured: Option<&str>) -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|dir| dir.is_dir())
 }
 
+/// What a file name says about the face inside it.
+///
+/// Only three things are asked: which family, whether it is the mono cut, and
+/// which of the two weights. Everything else in a name is ignored rather than
+/// guessed at.
 fn read_face_name(stem: &str) -> (String, bool, Weight) {
     let lower = stem.to_lowercase();
     let squashed: String = lower
@@ -2268,6 +2907,10 @@ fn read_face_name(stem: &str) -> (String, bool, Weight) {
     (family, mono, weight)
 }
 
+/// A name folded to what a settings file can hold: letters and digits only.
+///
+/// So that renaming a folder from "Lumen" to "XY Lumen" does not orphan
+/// the setting that points at it.
 fn folded(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric())
@@ -2275,6 +2918,11 @@ fn folded(name: &str) -> String {
         .collect()
 }
 
+/// How good a candidate a file is for the regular face.
+///
+/// A file named "regular" beats one with no weight word, which beats "light"
+/// and "medium" — all three are plausible, and the point is to be predictable
+/// rather than clever.
 fn regular_rank(stem: &str) -> u8 {
     let lower = stem.to_lowercase();
     if ["condensed", "narrow", "compressed", "extended", "expanded", "wide"].iter().any(|word| lower.contains(word)) {
@@ -2296,9 +2944,11 @@ fn regular_rank(stem: &str) -> u8 {
     }
 }
 
+/// Read the `fonts` folder into families.
 pub fn families_in(dir: &std::path::Path) -> Vec<Family> {
     use std::collections::BTreeMap;
 
+    /// regular candidate (rank, path), bold path
     type Cut = (Option<(u8, std::path::PathBuf)>, Option<std::path::PathBuf>);
     let mut found: BTreeMap<String, (String, Cut, Cut)> = BTreeMap::new();
 
@@ -2383,6 +3033,8 @@ pub fn families_in(dir: &std::path::Path) -> Vec<Family> {
         .collect()
 }
 
+/// Where this machine keeps its typefaces: the ones somebody installed
+/// first, then the system's own.
 fn system_font_dirs() -> Vec<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let mut dirs = Vec::new();
@@ -2406,10 +3058,27 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// The typefaces installed on this machine, for trying out — hidden in the menu
+/// behind ⌥. Nothing of them goes anywhere: they are read where they lie, as
+/// the fallback face always was.
+///
+/// Read differently from the `fonts` folder, because a system folder says
+/// nothing about what belongs together and its file names say little that
+/// can be relied on. Each file is asked instead: its family by the name
+/// table, its weight and slant by its own attributes. The upright face
+/// nearest 400 is the regular, the one nearest 700 above it the bold.
+/// Collections (.ttc, much of macOS's own) are passed over, as in the
+/// `fonts` folder: one file, one face. So are faces without the Latin
+/// letters.
 pub fn system_families() -> Vec<Family> {
     scan_system(|_| true)
 }
 
+/// The machine's typefaces the menu offers without ⌥, beside the folder's,
+/// once installed: Muto and Muto Mono. Their licence is for the machine
+/// they are installed on, so they are read where they lie and never come
+/// with kessler. Only files named for them are opened, so looking costs
+/// next to nothing.
 const SYSTEM_OFFERED: [&str; 2] = ["muto", "mutomono"];
 
 fn system_offered() -> Vec<Family> {
@@ -2419,6 +3088,7 @@ fn system_offered() -> Vec<Family> {
         .collect()
 }
 
+/// The system's typefaces in files `wanted` says yes to by name.
 fn scan_system(wanted: impl Fn(&str) -> bool) -> Vec<Family> {
     use skrifa::MetadataProvider as _;
     use std::collections::BTreeMap;
@@ -2526,6 +3196,8 @@ fn scan_system(wanted: impl Fn(&str) -> bool) -> Vec<Family> {
         .collect()
 }
 
+/// The families the menu steps through: the `fonts` folder's, and with
+/// `system` the machine's after them, less any the folder already brings.
 pub fn all_families(folder: Option<&str>, system: bool) -> Vec<Family> {
     let mut families = offered(
         font_folder(folder)
@@ -2555,8 +3227,15 @@ pub fn all_families(folder: Option<&str>, system: bool) -> Vec<Family> {
     families
 }
 
+/// What the menu calls the system's own interface face, and the config.
 pub const SYSTEM_UI: &str = "systemschrift";
 
+/// The face the system sets its own interface in, read where it lies and never
+/// carried along: on a Mac San Francisco; on Linux the one GNOME is set to
+/// (`org.gnome.desktop.interface font-name` — Ubuntu Sans on Ubuntu,
+/// Cantarell or Adwaita Sans elsewhere), else fontconfig's sans. Its bold from
+/// fontconfig too, where it is a file of its own; a face with a weight axis is
+/// its own bold. Nothing where none is to be had as a single-face file.
 fn system_ui_family() -> Option<Family> {
     let usable = |path: &std::path::Path| {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
@@ -2605,8 +3284,12 @@ fn system_ui_family() -> Option<Family> {
     })
 }
 
+/// a config naming it gets Asap.
 const FAMILIES_OFFERED: [&str; 2] = [TYPEFACE, "muto"];
 
+/// Of the families in a folder, those the menu offers — or, where a folder
+/// holds none of them, whatever it does hold, because a folder somebody
+/// filled with one typeface plainly means that one.
 fn offered(families: Vec<Family>) -> Vec<Family> {
     if families.iter().any(|f| FAMILIES_OFFERED.contains(&f.key.as_str())) {
         families.into_iter().filter(|f| FAMILIES_OFFERED.contains(&f.key.as_str())).collect()
@@ -2615,10 +3298,35 @@ fn offered(families: Vec<Family>) -> Vec<Family> {
     }
 }
 
+/// The typeface the interface is set in unless another is chosen.
+///
+/// Asap: its weights are all one width, so a chosen name thickens rather than
+/// jumps — see `weights` — and it has a width axis, set in the menu — see
+/// `width_axis`. It comes with the repository, so every copy opens in it. The
+/// menu offers the other families in the `fonts` folder beside it — see
+/// [`FAMILIES_OFFERED`] — and the rest of the machine's only when asked for,
+/// behind ⌥ — see [`system_families`].
 pub const TYPEFACE: &str = "asap";
 
+/// The face the window opens in where none was ever chosen and it is there:
+/// Muto. Only builds with its folder in `fonts` carry it; a build without it
+/// opens in [`TYPEFACE`].
 pub const PREFERRED: &str = "muto";
 
+/// Its three faces: regular, bold, and the mono cut that sets the figures.
+///
+/// Looked for by name in the fonts folder; failing that, whatever single
+/// family the folder does hold, because a build carrying one typeface plainly
+/// means that one. With no folder at all there is nothing to install and
+/// egui's own face draws the window — which looks wrong, and is meant to: the
+/// faces belong in `fonts/`.
+///
+/// `figures` falls back to the proportional cut where a family has no mono
+/// one, which is the right answer rather than a missing one: figures then look
+/// like everything else, as they did before there was a mono cut to reach for.
+///
+/// `wanted` is the key the config names; empty, or naming a family that is
+/// not in the folder, means [`TYPEFACE`].
 pub fn the_typeface(families: &[Family], wanted: &str) -> Option<Chosen> {
     let family = families
         .iter()
@@ -2637,6 +3345,11 @@ pub fn the_typeface(families: &[Family], wanted: &str) -> Option<Chosen> {
     })
 }
 
+/// How much smaller a family is set than the sizes the window is measured
+/// in — fifteen for the lists, eleven for the labels.
+///
+/// One factor for all of it, so the two sizes keep their proportion and nothing
+/// is a third size.
 pub fn face_scale(key: &str) -> f32 {
     match key {
         "muto" | "mutomono" => 14.0 / 15.0,
@@ -2644,31 +3357,44 @@ pub fn face_scale(key: &str) -> f32 {
     }
 }
 
+/// What [`the_typeface`] found, as paths ready to hand to [`install_fonts`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chosen {
+    /// What the menu calls it.
     pub name: String,
+    /// What the config stores — [`Family::key`].
     pub key: String,
     pub regular: String,
     pub bold: Option<String>,
     pub figures: Option<String>,
 }
 
+/// A face read off disk: where it came from, and its bytes.
 type LoadedFace = (String, Vec<u8>);
+/// A regular face, and a bold one if the machine had a matching file.
 type LoadedPair = (String, Vec<u8>, Option<LoadedFace>);
 
+/// What actually got loaded, so the app can say so rather than pretend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FontSource {
+    /// A regular/bold pair from these two files.
     Pair(String, String),
+    /// Only a regular face was found; the weight axis is unavailable.
     RegularOnly(String),
+    /// egui's built-in face. One weight, so selection falls back to tone.
     BuiltIn,
 }
 
 impl FontSource {
+    /// Whether a real bold face is available. Without one, the weight axis
+    /// silently does nothing, and the interface has to say so.
     pub fn has_bold(&self) -> bool {
         matches!(self, Self::Pair(_, _))
     }
 
-    #[allow(dead_code)]
+    /// What was actually loaded, in words. Only the tests read it today — the
+    /// menu shows the face's own name rather than this sentence.
+    #[cfg(test)]
     pub fn describe(&self) -> String {
         match self {
             Self::Pair(r, _) => format!("{r} (+ bold)"),
@@ -2678,6 +3404,18 @@ impl FontSource {
     }
 }
 
+/// Install the two faces, preferring an explicitly configured pair.
+///
+/// `regular`/`bold` come from the config, so a bought typeface is a path away
+/// and never needs to be bundled.
+/// Faces worth falling back to when the chosen typeface has no glyph, best
+/// first.
+///
+/// Picked for coverage, not for looks. A Latin typeface — which is every
+/// typeface anyone chooses this program for — has nothing for 坂本龍一, and
+/// what the column shows instead is a row of empty boxes: not a wrong name, no
+/// name at all. Any legible face beats that, and CJK is the coverage actually
+/// missing in a music library.
 const FALLBACK_FILES: &[&str] = &[
     "arial unicode.ttf",
     "hiragino sans gb w3.otf",
@@ -2699,13 +3437,29 @@ const FALLBACK_FILES: &[&str] = &[
     "simsun.ttc",
 ];
 
+/// The folder of the face kessler brings for Japanese, in `fonts/` beside the
+/// others, free like them (SIL OFL). The machine's own fallback, Hiragino on a Mac, is a different voice from one Mac to the next
+/// and from the window's; this one travels with the program.
+///
+/// M PLUS 1 Code: one variable file
+/// whose weights are all one width, so a Japanese name thickens with the rest
+/// of its row — the weight a row asks of its face reaches the fallback too —
+/// and does not move.
 pub const BUNDLED_FALLBACK: &str = "M PLUS 1 Code";
 
+/// The bundled Japanese face, regular and bold, if it is there. One variable
+/// file, so no bold of its own: [`append_fallback`] sets it further along
+/// its weight axis instead.
 pub fn bundled_fallback() -> Option<(std::path::PathBuf, Option<std::path::PathBuf>)> {
     let regular = font_folder(None)?.join(BUNDLED_FALLBACK).join("MPLUS1Code-Variable.ttf");
     regular.is_file().then_some((regular, None))
 }
 
+/// The first of those this machine actually has.
+///
+/// The candidates are tried in their own order rather than in the order the
+/// folders happen to be walked, so the choice does not depend on which folder
+/// a machine keeps its fonts in.
 pub fn fallback_face() -> Option<std::path::PathBuf> {
     use std::collections::HashMap;
     let mut found: HashMap<String, std::path::PathBuf> = HashMap::new();
@@ -2730,6 +3484,7 @@ pub fn fallback_face() -> Option<std::path::PathBuf> {
         .find_map(|wanted| found.get(*wanted).cloned())
 }
 
+/// A readable name for a font file: its file name, without the extension.
 fn face_name(path: &std::path::Path) -> String {
     path.file_stem()
         .and_then(|n| n.to_str())
@@ -2737,6 +3492,8 @@ fn face_name(path: &std::path::Path) -> String {
         .to_lowercase()
 }
 
+/// Put a face at the end of both families, where egui reaches for it only when
+/// the faces before it have nothing for a character.
 fn append_fallback(
     fonts: &mut egui::FontDefinitions,
     path: &std::path::Path,
@@ -2790,13 +3547,19 @@ fn append_fallback(
     Some(face_name(path))
 }
 
+/// A face's ascent and the height of its row, as shares of its size — what
+/// egui places its glyphs by.
 #[derive(Clone, Copy, Debug)]
 pub struct EmMetrics {
     ascent: f32,
     row: f32,
+    /// How tall an H stands, where the face has one — what a fallback's
+    /// characters are sized against.
     cap: Option<f32>,
 }
 
+/// Read [`EmMetrics`] out of a font file (the first face of a collection),
+/// at `scale` — the tweak the face is installed with.
 fn em_metrics(data: &[u8], scale: f32) -> Option<EmMetrics> {
     use skrifa::MetadataProvider as _;
     let font = skrifa::FontRef::from_index(data, 0).ok()?;
@@ -2812,6 +3575,7 @@ fn em_metrics(data: &[u8], scale: f32) -> Option<EmMetrics> {
     })
 }
 
+/// How tall one character's ink stands, as a share of the size.
 fn ink_height(data: &[u8], c: char) -> Option<f32> {
     use skrifa::MetadataProvider as _;
     let font = skrifa::FontRef::from_index(data, 0).ok()?;
@@ -2826,8 +3590,15 @@ fn ink_height(data: &[u8], c: char) -> Option<f32> {
     (em > 0.0 && height > 0.0).then_some(height / em)
 }
 
+/// How much taller a kanji stands than the face's capitals, when the two
+/// look the same height. A kanji fills its square edge to edge and a capital
+/// does not, so set to exactly the capital's height the kanji reads small.
 const KANJI_OVER_CAPS: f32 = 1.12;
 
+/// The size a fallback is set at against the face it stands behind: its kanji
+/// brought to the face's capitals, so a Japanese title no longer stands taller
+/// than a Latin one beside it. Never larger than it was, and never so small it
+/// stops reading; one where either face says nothing.
 fn fallback_scale(first: Option<EmMetrics>, data: &[u8]) -> f32 {
     match (first.and_then(|f| f.cap), ink_height(data, '永')) {
         (Some(cap), Some(kanji)) => (cap * KANJI_OVER_CAPS / kanji).clamp(0.7, 1.0),
@@ -2835,10 +3606,29 @@ fn fallback_scale(first: Option<EmMetrics>, data: &[u8]) -> f32 {
     }
 }
 
+/// How far down to move the fallback's glyphs, as a share of the size, so they
+/// stand on the line the family's own face stands on.
+///
+/// egui sets a glyph from another face by the middle of the two rows rather
+/// than by the baseline: its baseline lands at its own ascent plus half the
+/// difference in row height. Two faces with different vertical metrics then
+/// part company — on a Mac the Japanese in sank below the Latin in the regular
+/// cut and sat right in the bold. This is the distance between where egui puts
+/// the baseline and where the family's face has it.
 fn baseline_nudge(first: EmMetrics, own: EmMetrics) -> f32 {
     first.ascent - own.ascent - 0.5 * (first.row - own.row)
 }
 
+/// How far up to lift a fallback's kanji, as a share of the size, so they
+/// stand on the line rather than below it.
+///
+/// A Japanese face draws its kanji in a square that reaches under the Latin
+/// baseline — about a fifteenth of the size in M PLUS — and set on the same
+/// baseline as the Latin beside it, a kanji's foot hung a point under the
+/// letters'. Lifted until it overshoots the line by no more than a round
+/// letter does; its head then stands a little above the capitals, as an
+/// ascender does. Nothing for a face without kanji, or with kanji on the
+/// line already.
 fn kanji_raise(data: &[u8], scale: f32) -> f32 {
     use skrifa::MetadataProvider as _;
     let Ok(font) = skrifa::FontRef::from_index(data, 0) else { return 0.0 };
@@ -2854,8 +3644,21 @@ fn kanji_raise(data: &[u8], scale: f32) -> f32 {
     (below - KANJI_OVERSHOOT).max(0.0)
 }
 
+/// How far a kanji's foot may still reach under the line, as a share of the
+/// size: what a round letter's bowl does.
 const KANJI_OVERSHOOT: f32 = 0.012;
 
+/// The fallback's bytes, mapped once per file and kept for the life of the
+/// program: it is installed three times over (a nudge for each family), it
+/// is often a collection of tens of megabytes, and it is installed again
+/// every time the typeface changes.
+///
+/// Mapped, not read: read, the two faces kessler brings and the machine's own
+/// (on a Mac „arial unicode", 23 mb) sat whole in the program's memory, some 30
+/// mb of the little it has, for the few hundred glyphs a window of names ever
+/// asks for. Mapped, only the pages a glyph is read from come in, and the
+/// system can let them go again whenever it likes, as they are the file's.
+/// Should the mapping fail, the file is read as before.
 fn fallback_bytes(path: &std::path::Path) -> Option<&'static [u8]> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -2872,21 +3675,32 @@ fn fallback_bytes(path: &std::path::Path) -> Option<&'static [u8]> {
     Some(data)
 }
 
+/// A font file mapped into memory, read-only.
 fn mapped(path: &std::path::Path) -> Option<memmap2::Mmap> {
     let file = std::fs::File::open(path).ok()?;
     unsafe { memmap2::Mmap::map(&file) }.ok()
 }
 
+/// The regular and the bold weight of a face with a weight axis, or none for a
+/// face without one: the regular where the menu set it — 400 unless moved — and
+/// the bold [`BOLD_STEP`] above it, both kept inside the range the axis has.
 fn variable_weights(data: &[u8]) -> Option<(f32, f32)> {
     let light = ON_LIGHT.read().is_ok_and(|held| *held);
     let extra = if light { LIGHT_GROUND_EXTRA } else { 0.0 };
     weights_at(data, WEIGHT.read().map_or(400.0, |w| *w) + extra)
 }
 
+/// How much heavier the type is set on a light ground than the weight chosen:
+/// light words on a dark ground spread a little into it, dark ones on a light
+/// ground thin, so the same weight read lighter there. The weight was set
+/// looking at dark schemes. Asap is as wide at every weight, so nothing moves
+/// when the ground changes.
 pub const LIGHT_GROUND_EXTRA: f32 = 80.0;
 
+/// Whether the ground is light, for the next [`install_fonts`].
 static ON_LIGHT: std::sync::RwLock<bool> = std::sync::RwLock::new(false);
 
+/// Say whether the ground the type is set on is light; true if that changed.
 pub fn set_light_ground(light: bool) -> bool {
     match ON_LIGHT.write() {
         Ok(mut held) if *held != light => {
@@ -2897,24 +3711,35 @@ pub fn set_light_ground(light: bool) -> bool {
     }
 }
 
+/// The same for the regular `wanted`.
 fn weights_at(data: &[u8], wanted: f32) -> Option<(f32, f32)> {
     let (least, most) = axis_range(data, b"wght")?;
     let regular = wanted.clamp(least, (most - BOLD_STEP).max(least));
     Some((regular, (regular + BOLD_STEP).clamp(least, most)))
 }
 
+/// How much heavier the bold is than the regular, wherever the regular is set:
+/// a chosen name stands out by the same step at every weight: 400 to 550.
+/// Two hundred reads a touch heavy in Asap.
 const BOLD_STEP: f32 = 150.0;
 
+/// The weight the regular is set at, on a face with a weight axis.
 static WEIGHT: std::sync::RwLock<f32> = std::sync::RwLock::new(400.0);
 
+/// The weight axis of the face in use, while it has one. The menu's slider
+/// stops short of its top by the bold's step, so the bold has somewhere to
+/// go — see [`weight_axis`].
 static WEIGHT_AXIS: std::sync::RwLock<Option<(f32, f32)>> = std::sync::RwLock::new(None);
 
+/// Set the weight the next [`install_fonts`] sets the regular at.
 fn set_font_weight(weight: f32) {
     if let Ok(mut held) = WEIGHT.write() {
         *held = weight;
     }
 }
 
+/// Everything the config says about how the face is set — its width, its
+/// weight, its alternates — for the next [`install_fonts`].
 pub fn set_face(ui: &crate::config::UiConfig) {
     set_font_width(ui.font_width);
     set_font_weight(ui.font_weight);
@@ -2934,20 +3759,28 @@ pub fn set_face(ui: &crate::config::UiConfig) {
     }
 }
 
+/// Whether the rules (the timeline, the volume), the mark beside a scrolled
+/// list and the knobs are cut square rather than round, for a face whose own
+/// ends are square.
 fn square_ends_for(key: &str) -> bool {
     matches!(key, "muto" | "mutomono")
 }
 
 static SQUARE_ENDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// See [`square_ends_for`].
 pub fn square_ends() -> bool {
     SQUARE_ENDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// How the letters are fitted to the pixels — `[ui] font_hinting`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hinting {
+    /// egui's own: stems snapped to whole pixels across and down.
     Full,
+    /// Only up and down: heights snap, the shapes across are left alone.
     Light,
+    /// None: the outline as the face draws it, softer at small sizes.
     Off,
 }
 
@@ -2966,6 +3799,7 @@ impl Hinting {
         Self::ALL.into_iter().find(|h| h.name() == name.trim()).unwrap_or(Self::Full)
     }
 
+    /// `tweak` hinted this way.
     fn on(self, tweak: egui::FontTweak) -> egui::FontTweak {
         match self {
             Self::Full => tweak,
@@ -2988,6 +3822,11 @@ fn hinting() -> Hinting {
     Hinting::ALL[usize::from(HINTING.load(std::sync::atomic::Ordering::Relaxed)).min(2)]
 }
 
+/// Where the Japanese behind a face without a weight axis is set, so its
+/// strokes are as heavy as the face's own: Muto's regular stem is about a fifth
+/// of its x-height, M PLUS 1 Code's at 400 not quite three twentieths of its
+/// own; at 520 they match (measured on „l" and „一"). `None`: the fallback's own
+/// regular.
 fn fallback_regular(key: &str) -> Option<f32> {
     match key {
         "muto" | "mutomono" => Some(520.0),
@@ -3003,40 +3842,61 @@ fn set_fallback_regular(weight: Option<f32>) {
     }
 }
 
+/// Where the regular can be set on the face in use, if it has a weight axis.
 pub fn weight_axis() -> Option<(f32, f32)> {
     weight_range().map(|(least, most)| (least, (most - BOLD_STEP).max(least)))
 }
 
+/// The whole of the weight axis of the face in use, lightest to heaviest.
 pub fn weight_range() -> Option<(f32, f32)> {
     WEIGHT_AXIS.read().ok().and_then(|held| *held)
 }
 
+/// The alternate forms a face keeps behind a feature, drawn in place of the
+/// usual ones: the tags of the features asked for — stylistic sets (`ss01` …),
+/// `salt`, `zero`. Since then any of a face's sets, chosen for each face (`[ui]
+/// font_sets`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Alternates {
     pub sets: Vec<String>,
 }
 
+/// What the next [`install_fonts`] is to draw.
 static ALTERNATES: std::sync::RwLock<Alternates> = std::sync::RwLock::new(Alternates { sets: Vec::new() });
 
+/// Set what the next [`install_fonts`] draws.
 fn set_alternates(alternates: Alternates) {
     if let Ok(mut held) = ALTERNATES.write() {
         *held = alternates;
     }
 }
 
+/// Glyph for glyph, the one drawn and the one drawn in its place.
 pub(super) type Swaps = Vec<(u32, u32)>;
 
+/// How many plain letters a set may redraw and still be offered a letter at
+/// a time; more, and it is one row, „ss06:*".
 const WHOLE_SET_LETTERS: usize = 8;
 
+/// One letter a face can draw another way, and the feature that does it:
+/// `id` is the feature's tag and the letter („ss01:a"), what the config
+/// keeps; the glyphs it swaps (the letter with its accents); the characters
+/// that change. A set that changes several letters — Muto's `ss04` A, M, N,
+/// V, W, v, w — is one of these for each, so each can be chosen alone, and
+/// Asap's `ss01`, the g and the Y, can keep the g alone as it always has.
+/// What has no plain letter or figure under it (arrows, ©) is one more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyleSet {
     pub id: String,
     pub tag: String,
+    /// The plain letter or figure, `None` for the rest of the set.
     pub letter: Option<char>,
     pub swaps: Swaps,
     pub shows: Vec<char>,
 }
 
+/// The other alternates of the character `tag` redraws: one of them on means
+/// the others off. None for a set that redraws no one character.
 pub fn rivals_of(offered: &[StyleSet], tag: &str) -> Vec<String> {
     let Some(letter) = offered.iter().find(|s| s.id == tag).and_then(|s| s.letter) else {
         return Vec::new();
@@ -3044,10 +3904,17 @@ pub fn rivals_of(offered: &[StyleSet], tag: &str) -> Vec<String> {
     offered.iter().filter(|s| s.id != tag && s.letter == Some(letter)).map(|s| s.id.clone()).collect()
 }
 
+/// The key a face's sets are kept under: the config's typeface, Asap where
+/// it names none.
 pub fn face_key(typeface: &str) -> &str {
     if typeface.is_empty() { TYPEFACE } else { typeface }
 }
 
+/// The alternates the labels are always set with, whatever the rest is set with
+/// — for Muto its open a. Each letter of the set is given a character of the
+/// private use area pointing at its alternate, and a label's letters are
+/// swapped for those before it is set ([`styled`]): egui has one face for every
+/// role.
 fn label_sets_for(key: &str) -> Vec<String> {
     match key {
         "muto" | "mutomono" => vec!["ss01:a".into()],
@@ -3055,14 +3922,21 @@ fn label_sets_for(key: &str) -> Vec<String> {
     }
 }
 
+/// What the next [`install_fonts`] gives the labels — see [`label_sets_for`].
 static LABEL_SETS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
+/// The letters a label is set with otherwise, and the characters they are
+/// swapped for — filled in as the face is installed.
 static LABEL_FORMS: std::sync::RwLock<LabelForms> = std::sync::RwLock::new(Vec::new());
 
+/// Each label letter with the private-use character standing for it.
 type LabelForms = Vec<(char, char)>;
 
+/// Where the labels' own letters start in the private use area.
 const LABEL_FORMS_AT: u32 = 0xF700;
 
+/// `text` as `role` sets it: a label with the letters it always has (see
+/// [`label_sets_for`]).
 pub fn styled(text: &str, role: Role) -> std::borrow::Cow<'_, str> {
     let text = std::borrow::Cow::Borrowed(text);
     if !matches!(role, Role::Label | Role::LabelBold) {
@@ -3075,6 +3949,13 @@ pub fn styled(text: &str, role: Role) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(text.chars().map(|c| forms.iter().find(|(from, _)| *from == c).map_or(c, |(_, to)| *to)).collect())
 }
 
+/// A face's stylistic sets (`ss01` …), `salt` and `zero`, as glyph swaps.
+///
+/// Only swaps to an alternate named after its glyph („g" → „g.ss01",
+/// „gbreve" → „gbreve.ss01") are taken — which is how a face says it is the
+/// same letter drawn another way — and only sets that change a character
+/// typed directly: one that only redraws another alternate (Muto's slashed
+/// zero) has nothing to show on its own.
 pub fn style_sets(data: &[u8]) -> Vec<StyleSet> {
     use skrifa::raw::tables::gsub::{SingleSubst, SubstitutionSubtables};
     use skrifa::raw::TableProvider as _;
@@ -3218,6 +4099,17 @@ pub fn style_sets(data: &[u8]) -> Vec<StyleSet> {
     sets
 }
 
+/// The face with its character map pointing at the alternates asked for, or
+/// `None` where there is nothing to change. Egui shapes text with the face's
+/// default features but no way to ask for a stylistic set, so the only way to
+/// an alternate is to make it the glyph the character stands for — as if the
+/// face had been drawn that way.
+///
+/// `label_sets` are the sets the labels always have (see
+/// [`label_sets_for`]); their letters come back as the characters they were
+/// given in the private use area. Both are handed in and out rather than read
+/// from and written to the statics, so the face can be built without touching
+/// what the window is drawn with.
 fn with_alternates(data: &[u8], wanted: &Alternates, label_sets: &[String]) -> Option<(Vec<u8>, LabelForms)> {
     use skrifa::MetadataProvider as _;
     let swap: std::collections::HashMap<u32, u32> = style_sets(data)
@@ -3268,6 +4160,8 @@ fn with_alternates(data: &[u8], wanted: &Alternates, label_sets: &[String]) -> O
     Some((builder.build(), forms.iter().map(|&(c, pua, _)| (c, pua)).collect()))
 }
 
+/// Where a face's axis of this tag runs, from its least to its most, when it
+/// has one that runs anywhere.
 fn axis_range(data: &[u8], tag: &[u8; 4]) -> Option<(f32, f32)> {
     use skrifa::MetadataProvider;
     let font = skrifa::FontRef::new(data).ok()?;
@@ -3276,24 +4170,33 @@ fn axis_range(data: &[u8], tag: &[u8; 4]) -> Option<(f32, f32)> {
     (most > least).then_some((least, most))
 }
 
+/// How wide the face is to be set, on its width axis — `[ui] font_width`,
+/// handed over before the faces are installed.
 static WIDTH: std::sync::RwLock<f32> = std::sync::RwLock::new(100.0);
 
+/// The range of the width axis of the face in use, while it has one — for
+/// the menu, which offers the slider only then.
 static WIDTH_AXIS: std::sync::RwLock<Option<(f32, f32)>> = std::sync::RwLock::new(None);
 
+/// Set the width the next [`install_fonts`] sets the face at.
 pub fn set_font_width(width: f32) {
     if let Ok(mut held) = WIDTH.write() {
         *held = width;
     }
 }
 
+/// The width the face is set at, on a face with a width axis.
 pub fn font_width() -> f32 {
     WIDTH.read().map_or(100.0, |held| *held)
 }
 
+/// Where the width axis of the face in use runs, if it has one.
 pub fn width_axis() -> Option<(f32, f32)> {
     WIDTH_AXIS.read().ok().and_then(|held| *held)
 }
 
+/// The weights of the face in use, while it has an axis to set them on —
+/// see [`weights`].
 static WEIGHTS: std::sync::RwLock<Option<(f32, f32)>> = std::sync::RwLock::new(None);
 
 fn set_weights(weights: Option<(f32, f32)>) {
@@ -3302,10 +4205,22 @@ fn set_weights(weights: Option<(f32, f32)>) {
     }
 }
 
+/// The regular and bold weights of the face the window is set in, when it
+/// is variable: a name can then be set anywhere between the two, and move
+/// from one to the other over a few frames instead of in one.
 pub fn weights() -> Option<(f32, f32)> {
     WEIGHTS.read().ok().and_then(|held| *held)
 }
 
+/// Install the faces, and report what was installed.
+///
+/// `figures` is the mono cut of the same family, for the one thing it is
+/// better at — see [`family_figures`]. Without one, figures are set in the
+/// face everything else is set in, which is what happened before there was a
+/// mono cut to reach for and is a perfectly good answer.
+///
+/// `scale` sets the chosen faces that much smaller or larger than their
+/// size, advances and all — see [`face_scale`].
 pub fn install_fonts(
     ctx: &egui::Context,
     regular: Option<&str>,
@@ -3535,6 +4450,8 @@ pub fn install_fonts(
     (source, fallback_name)
 }
 
+/// Strip every default egui decoration: no widget fills, no strokes, no
+/// rounding, no shadows. What is left is text on a ground.
 pub fn install_style(ctx: &egui::Context, palette: &Palette) {
     let palette = *palette;
     ctx.all_styles_mut(move |style| {
@@ -3570,6 +4487,22 @@ pub fn install_style(ctx: &egui::Context, palette: &Palette) {
     });
 }
 
+/// Scrolling that takes up no room.
+///
+/// This window has no scroll bars — how long a list is gets said by fading its
+/// edge and by the mark outside the column — but egui was still *reserving* the
+/// width of one, six points of bar and four of margin, the moment a list grew
+/// long enough to scroll. The rows are drawn at the column's full width
+/// regardless, so the column came out ten points wider than it asked to be, the
+/// gap to its right looked ten points too wide, and those ten points came off
+/// the track list.
+///
+/// Hidden at each scroll area *and* zeroed here: the first is what the reader
+/// of that code sees, the second is what holds if somebody adds a fourth scroll
+/// area and forgets. How long a flick's coast takes to die away, in seconds —
+/// see [`scroll_style`]. Egui's own is 0.5, as iOS's „normal"; egui lets the
+/// rubber band be on or off and no more, and how far it stretches follows from
+/// how far the flick still coasts.
 const KINETIC_DECAY: f32 = 0.15;
 
 fn scroll_style() -> egui::style::ScrollStyle {
@@ -3586,6 +4519,9 @@ fn scroll_style() -> egui::style::ScrollStyle {
 mod band_tests {
     use super::margin_under;
 
+    /// The masthead stands where it always stood under the plain band, and
+    /// under a taller one — the buttons set in, `macwindow` — clear of it by
+    /// a little air; with no band, the window's own margin.
     #[test]
     fn the_masthead_stands_under_the_band() {
         assert_eq!(margin_under(28.0), 52.0);
@@ -3594,6 +4530,8 @@ mod band_tests {
         assert_eq!(margin_under(0.0), 34.0);
     }
 
+    /// The sides come in to 24 in a wide window and a narrow one keeps its
+    /// own.
     #[test]
     fn the_sides_come_in() {
         use super::Metrics;
@@ -3608,6 +4546,8 @@ mod band_tests {
 mod sliding_tests {
     use super::*;
 
+    /// Whichever column is being read fills the window exactly, and its
+    /// neighbours are wholly outside it.
     #[test]
     fn one_column_at_a_time_and_nothing_of_the_next() {
         let room = 400.0;
@@ -3627,6 +4567,8 @@ mod sliding_tests {
         }
     }
 
+    /// The strip is as wide as what is in it, and its last column ends where
+    /// the window does when it is the one being read.
     #[test]
     fn the_strip_is_exactly_as_wide_as_what_is_in_it() {
         for count in [2usize, 3] {
@@ -3635,6 +4577,7 @@ mod sliding_tests {
         }
     }
 
+    /// An index past the end is the end, and no columns is no offset.
     #[test]
     fn the_edges_of_the_edges() {
         assert_eq!(slide_offset(9, 3, 400.0, SLIDE_GAP), slide_offset(2, 3, 400.0, SLIDE_GAP));
@@ -3647,6 +4590,10 @@ mod sliding_tests {
 mod tests {
     use super::*;
 
+    /// Every scheme names its heads' colour, and it stands apart from what
+    /// it could be taken for: the facts under the names (the third tone), the
+    /// second tone of what can be clicked, and the accent of what plays — so a
+    /// head reads as a head in every scheme — and it reads on the ground.
     #[test]
     fn the_heads_stand_apart() {
         let apart = |a: Color32, b: Color32| {
@@ -3664,6 +4611,10 @@ mod tests {
         }
     }
 
+    /// The tones under the ink stand in order between the field and the ink,
+    /// each well apart from its neighbours, in every scheme, light and dark, on
+    /// the ink and on a marked cover's colour — and none is the colour it
+    /// stands under.
     #[test]
     fn the_tones_under_stand_in_order() {
         for theme in Theme::all() {
@@ -3689,6 +4640,11 @@ mod tests {
         }
     }
 
+    /// With the colour in the type, every scheme keeps its ink, accent and
+    /// ground; its second and third tones are as light as before, so they
+    /// read as well; its plates are no more colourful than its ground; a
+    /// scheme of greys and one that had its colour in the type already keep
+    /// their tones.
     #[test]
     fn the_colour_goes_into_the_type() {
         for theme in Theme::all() {
@@ -3714,6 +4670,8 @@ mod tests {
         }
     }
 
+    /// With the colour on the plates every scheme that has a colour shows
+    /// it behind the words, and the words on the marker still read.
     #[test]
     fn the_colour_goes_onto_the_plates() {
         for theme in Theme::all() {
@@ -3736,6 +4694,7 @@ mod tests {
         }
     }
 
+    /// Oklab there and back is the same colour.
     #[test]
     fn oklab_comes_back() {
         for c in [rgb(0x7CC86A), rgb(0x141414), rgb(0xFFFFFF), rgb(0x0064D8), rgb(0xE4C850)] {
@@ -3745,6 +4704,12 @@ mod tests {
         }
     }
 
+    /// The menu sits in an even margin, and never in the title bar.
+    ///
+    /// Worked for both kinds of window on every machine: the Mac's is the one
+    /// that has a title bar, and it is also the one never compiled where this
+    /// code is written — so the arithmetic takes the band as a number instead
+    /// of reading the constant, and both are checked here.
     #[test]
     fn the_menu_stands_in_an_even_margin_and_out_of_the_title_bar() {
         for side in [22.0_f32, 30.0, 34.0, 40.0] {
@@ -3757,6 +4722,7 @@ mod tests {
         }
     }
 
+    /// The constraint this whole module exists to hold: exactly two sizes.
     #[test]
     fn there_are_only_two_type_sizes() {
         let sizes: std::collections::BTreeSet<u32> = [
@@ -3796,6 +4762,10 @@ mod tests {
         assert_eq!(lower("STRASSE"), "strasse");
     }
 
+    /// Every scheme has to be reachable by cycling, and every name has to come
+    /// back as the scheme it names — including the two spellings this setting
+    /// carried before there were more than two schemes.
+    /// Every scheme stands in one group of the menu, once.
     #[test]
     fn every_scheme_is_in_one_group() {
         let listed: Vec<&str> = Theme::families().iter().map(|t| t.family()).collect();
@@ -3813,6 +4783,9 @@ mod tests {
         assert_eq!(Theme::from_name("hudson hell"), Theme::HudsonHell);
     }
 
+    /// One's own scheme passes on as a code and comes back the same, however it
+    /// was copied; its other half has the lightness turned over and is dark
+    /// where it was light.
     #[test]
     fn a_seed_passes_on_as_a_code() {
         let seed = Seed::DEFAULT;
@@ -3836,6 +4809,7 @@ mod tests {
         assert_eq!(Theme::Eigenes.partner(), Theme::EigenesDunkel);
     }
 
+    /// A colour set by the menu's three rules comes back as nearly itself.
     #[test]
     fn a_colour_survives_its_rules() {
         for colour in [rgb(0xFB4934), rgb(0x282828), rgb(0xEBDBB2), rgb(0x076678)] {
@@ -3861,6 +4835,9 @@ mod tests {
         assert_eq!(Theme::from_name("systemfarben"), Theme::native().0);
     }
 
+    /// Every scheme has its other half: the two point at each other, share
+    /// a name in the menu, and the one is light where the other is dark —
+    /// which is what „hell, dunkel" and `shift` + `t` rely on.
     #[test]
     fn partners_are_each_others_and_opposite() {
         for theme in Theme::all() {
@@ -3875,6 +4852,8 @@ mod tests {
         assert_eq!(Theme::Nord.family(), Theme::NordHell.family());
     }
 
+    /// A desktop's accent, taken by the schemes after a desktop, reads as
+    /// words on either half's ground, in its own hue; the others keep theirs.
     #[test]
     fn a_desktop_accent_reads_on_either_ground() {
         let accents = [0x3584E4, 0x2190A4, 0x3A944A, 0xC88800, 0xED5B00, 0xE62D42, 0xD56199, 0x9141AC, 0x6F8396];
@@ -3891,6 +4870,8 @@ mod tests {
         }
     }
 
+    /// Dark schemes have to be recognised as dark, or egui dresses its own
+    /// leftovers in the wrong values.
     #[test]
     fn light_and_dark_are_told_apart() {
         for light in [
@@ -3913,6 +4894,8 @@ mod tests {
         }
     }
 
+    /// The fade from one scheme to another starts on the one and ends on
+    /// the other.
     #[test]
     fn a_fade_runs_from_one_scheme_to_the_other() {
         let (a, b) = (Theme::SolarisiertHell.palette(), Theme::SolarisiertDunkel.palette());
@@ -3923,6 +4906,8 @@ mod tests {
         assert_ne!(half, b);
     }
 
+    /// Following the system lands on the half the system says, and on the
+    /// light one when it says nothing; a fixed choice ignores it.
     #[test]
     fn brightness_picks_the_half() {
         for theme in Theme::all() {
@@ -3937,6 +4922,7 @@ mod tests {
         }
     }
 
+    /// the scheme it names decides, so nobody's window changes under them.
     #[test]
     fn old_configs_keep_their_look() {
         assert_eq!(Brightness::from_config("", "systemfarben"), Brightness::System);
@@ -3949,6 +4935,8 @@ mod tests {
         }
     }
 
+    /// A report of every scheme as the window shows it, for looking at by
+    /// hand: `cargo test scheme_report -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn scheme_report() {
@@ -3970,6 +4958,9 @@ mod tests {
         }
     }
 
+    /// Every scheme as the window shows it: the marked plate is seen on the
+    /// ground, the words on it can be read, and so can the third tone and what
+    /// is small on the plate.
     #[test]
     fn every_scheme_reads_on_its_plates() {
         for theme in Theme::all() {
@@ -3986,6 +4977,8 @@ mod tests {
         }
     }
 
+    /// Text has to stay legible against its ground on both palettes. Rough
+    /// relative-luminance contrast, enough to catch a value picked carelessly.
     #[test]
     fn primary_text_carries_enough_contrast() {
         fn luminance(c: Color32) -> f32 {
@@ -4050,6 +5043,17 @@ mod tests {
         }
     }
 
+    /// A short window shows more rows rather than the same rows with the same
+    /// air; the type size never moves.
+    /// Putting the queue away gives its strip to every column alike, not to
+    /// the track list entire.
+    ///
+    /// The report: hiding the queue made the layout jump, because a quarter
+    /// of the window arrived in one column. What the shares mean is unchanged —
+    /// they are still fractions of the row with everything open — so this is a
+    /// share-out on the way to the screen and it has to be exact in both
+    /// directions: the pieces are equal, they add up to the strip, and putting
+    /// the queue back leaves every column where it was.
     #[test]
     fn putting_the_queue_away_widens_every_column_alike() {
         let dragged = Shares {
@@ -4089,6 +5093,9 @@ mod tests {
         assert!((open.artists / room - 0.22).abs() < 0.01, "the share drifted");
     }
 
+    /// Without the side the split row is the row as it always was, all the
+    /// way through the slide — so turning the switch on changes nothing
+    /// until something opens on the right.
     #[test]
     fn without_the_side_the_row_is_as_it_was() {
         let dragged = Shares {
@@ -4116,6 +5123,8 @@ mod tests {
         }
     }
 
+    /// The example: `w`, then `a`, then `w` again. Three columns, four,
+    /// three — and the side alone stands where the fourth column stood.
     #[test]
     fn the_side_opens_beside_the_queue_and_stands_alone_without_it() {
         let dragged = Shares {
@@ -4149,6 +5158,9 @@ mod tests {
         assert!((side.artists - queue.artists).abs() < 0.01);
     }
 
+    /// The combined view, left alone: half each with two columns, a third with
+    /// three, a quarter with four — and a column sliding in takes its room from
+    /// all of them alike, the row adding up all the way.
     #[test]
     fn the_combined_view_stays_even() {
         let even = Shares {
@@ -4178,6 +5190,8 @@ mod tests {
         assert!((two.artists - 0.12 * room).abs() < 0.5, "{two:?}");
     }
 
+    /// With both open in a window only just wide enough, the track list keeps
+    /// its floor, and the side is the one that gives way.
     #[test]
     fn the_side_never_leaves_the_track_list_without_its_floor() {
         let wide = Shares {
@@ -4193,6 +5207,12 @@ mod tests {
         assert!(both.side >= MIN_NAME_COLUMN - 0.5, "{both:?}");
     }
 
+    /// The thing shares exist for: a window made smaller takes a little off
+    /// every column, instead of taking the whole loss out of the one column
+    /// that lives on the remainder.
+    ///
+    /// The report was that everything "slid into one another" on a smaller
+    /// window; what was really happening is the line marked below.
     #[test]
     fn a_smaller_window_shrinks_every_column() {
         let dragged = Shares {
@@ -4235,6 +5255,7 @@ mod tests {
         }
     }
 
+    /// The row adds up: nothing overlaps, nothing is left unaccounted for.
     #[test]
     fn the_columns_and_the_gaps_are_the_whole_row() {
         for layout in [Names::Two, Names::One] {
@@ -4258,6 +5279,10 @@ mod tests {
         }
     }
 
+    /// A scroll bar that reserves width steals it from the track list, and
+    /// only on a list long enough to scroll — which is why a small test
+    /// library never caught it and a column of several thousand did. The
+    /// gap between two columns is `column_gap` and nothing else.
     #[test]
     fn scrolling_takes_up_no_room() {
         assert_eq!(
@@ -4267,6 +5292,8 @@ mod tests {
         );
     }
 
+    /// An even split really is even: the three columns and the two gaps add up
+    /// to the row, and nothing is left over.
     #[test]
     fn an_even_split_spends_the_whole_row() {
         let gap = 48.0;
@@ -4282,6 +5309,8 @@ mod tests {
         assert_eq!(even_columns(3, 200.0, gap), MIN_NAME_COLUMN);
     }
 
+    /// A narrow window has to give the track list room to exist, and it can
+    /// only come from the two columns whose content has a natural length.
     #[test]
     fn name_columns_give_up_width_before_the_track_list_does() {
         let wide = Metrics::for_size(1440.0, 900.0);
@@ -4322,6 +5351,8 @@ mod tests {
         assert!(cramped.row - cramped.marker_inset_y * 2.0 >= SIZE_CONTENT);
     }
 
+    /// A .ttc holds several faces and egui takes a file whole; handing it one
+    /// panics. Four bytes are cheaper than a crash on someone's font folder.
     #[test]
     fn font_collections_are_refused() {
         let dir = std::env::temp_dir().join("kessler-font-test");
@@ -4354,6 +5385,8 @@ mod tests {
         assert!(FontSource::BuiltIn.describe().contains("no bold"));
     }
 
+    /// The fallback goes *after* the chosen faces, never before them: in front
+    /// it would decide the look of every Latin letter in the window.
     #[test]
     fn a_nudged_fallback_stands_on_the_family_line() {
         let egui_baseline = |first: EmMetrics, own: EmMetrics| {
@@ -4368,6 +5401,8 @@ mod tests {
         assert_eq!(baseline_nudge(regular, regular), 0.0);
     }
 
+    /// The Japanese face is set smaller against Asap, so that its kanji
+    /// stand a little over Asap's capitals rather than well above them.
     #[test]
     fn kanji_are_sized_to_the_faces_capitals() {
         let asap = std::fs::read("fonts/Asap/Asap-Variable.ttf").unwrap();
@@ -4411,6 +5446,8 @@ mod tests {
         let _ = std::fs::remove_file(&face);
     }
 
+    /// Whatever this machine offers has to be a file that exists and a face
+    /// this build can actually load.
     #[test]
     fn a_found_fallback_is_a_real_file() {
         if let Some(path) = fallback_face() {
@@ -4420,6 +5457,9 @@ mod tests {
         }
     }
 
+    /// Dragging a column wider must never push the track list out of the
+    /// window, and dragging it narrower must stop while there is still a
+    /// column there.
     #[test]
     fn a_dragged_column_leaves_room_for_the_tracks() {
         let total = 1200.0;
@@ -4436,6 +5476,13 @@ mod tests {
         assert_eq!(fit_column(300.0, 300.0, 400.0), MIN_NAME_COLUMN);
     }
 
+    /// A face whose file name does not say which family it is still lands in
+    /// the family of the folder it was put in.
+    ///
+    /// The bug this guards let the swap fail silently: a foundry file called
+    /// `XY-Lumen-Standard-Regular.otf` read as a family named
+    /// "lumenstandard", so it sat in the folder unused while the window
+    /// went on drawing with the face beside it and said nothing about either.
     #[test]
     fn the_folder_decides_the_family_not_the_file_name() {
         let dir = std::env::temp_dir().join("kessler-folder-family");
@@ -4461,6 +5508,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Two alternates of the same figure are rivals; a set of no one character,
+    /// or of another, is not.
     #[test]
     fn two_alternates_of_one_figure_are_rivals() {
         let set = |id: &str, letter: Option<char>| StyleSet { id: id.into(), tag: id.into(), letter, swaps: Vec::new(), shows: Vec::new() };
@@ -4471,6 +5520,8 @@ mod tests {
         assert!(rivals_of(&offered, "ss02:*").is_empty());
     }
 
+    /// Asap offers its g and its zero, and with them asked for its „g" and
+    /// „0" stand for the other drawings — every other letter as it was.
     #[test]
     fn asap_draws_its_alternates_when_asked() {
         use skrifa::MetadataProvider as _;
@@ -4500,6 +5551,8 @@ mod tests {
         assert_eq!(names(&only_g, '0'), "zero");
     }
 
+    /// Muto's sets, where this copy has it: the open a under `ss01`, the
+    /// other g under `ss02`, each letter of `ss04` on its own.
     #[test]
     fn muto_offers_its_sets() {
         use skrifa::MetadataProvider as _;
@@ -4517,6 +5570,9 @@ mod tests {
         assert_eq!(glyph(&a_only, 'g'), glyph(&muto, 'g'));
     }
 
+    /// Muto's dotted zero, `ss10` on its slashed one, is offered as a swap of 0
+    /// itself, and wins over the slashed one where both are on; its labels have
+    /// its open a whatever else is on.
     #[test]
     fn muto_offers_its_dotted_zero() {
         use skrifa::MetadataProvider as _;
@@ -4541,6 +5597,8 @@ mod tests {
         assert_eq!(named(&labelled, 'a'), "a");
     }
 
+    /// The bold stays its step above the regular wherever the slider puts it,
+    /// and inside the axis.
     #[test]
     fn the_bold_follows_the_weight() {
         let asap = std::fs::read("fonts/Asap/Asap-Variable.ttf").unwrap();
@@ -4551,6 +5609,9 @@ mod tests {
         assert_eq!(weights_at(&asap, least - 50.0).unwrap().0, least);
     }
 
+    /// The machine's own faces come after the folder's, once each, upright,
+    /// with the bold beside the regular where the family has one — DejaVu,
+    /// where the machine has it, the way the test above uses it.
     #[test]
     fn a_condensed_cut_is_not_the_regular() {
         assert!(regular_rank("DejaVuSans") < regular_rank("DejaVuSansCondensed"));
@@ -4585,6 +5646,9 @@ mod tests {
         );
     }
 
+    /// A real folder: two families, each with cuts, named
+    /// the way their foundries name them. What the reader has to come out with
+    /// is two families, four cuts, and the right file in each slot.
     #[test]
     fn the_fonts_folder_reads_as_two_families() {
         let dir = std::env::temp_dir().join("kessler-families-test");
@@ -4634,6 +5698,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Only Asap and Muto out of a folder that has another face in it too;
+    /// a folder with none of them keeps what it has.
     #[test]
     fn the_menu_offers_its_own_faces() {
         let family = |key: &str| Family {
@@ -4648,6 +5714,8 @@ mod tests {
         assert_eq!(keys(offered(vec![family("lumen")])), vec!["lumen"]);
     }
 
+    /// The named typeface wins; anything else in the folder is the fallback,
+    /// and an empty folder means egui's own face.
     #[test]
     fn the_named_typeface_is_the_one_installed() {
         let lumen = Family {

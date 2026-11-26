@@ -24,6 +24,29 @@ use std::sync::mpsc;
 use crate::db::Database;
 use crate::error::Result;
 
+/// The one name a file is filed under, whatever name it was reached by.
+///
+/// A file can be reached by more than one name, and the library has to write
+/// down exactly one of them — otherwise it keeps two rows for one recording,
+/// which is what a record showing every track twice actually is.
+///
+/// The loud case on a Mac is capitals. The filesystem does not care about
+/// them, so `…/Music/Cave/…` and `…/Music/CAVE/…` open the same file: adding a
+/// record makes the folder with the spelling the tag has, the disk quietly
+/// puts it in the folder already sitting there under the other spelling, and a
+/// later scan then finds it under the name the disk really holds. Two
+/// spellings, one file, two rows — and `path` being unique never noticed,
+/// because as text those are two different paths. Symlinks and `..` arrive at
+/// the same place by another route.
+///
+/// So the filesystem is asked, rather than the text being tidied up:
+/// `canonicalize` follows the links and hands back the name the disk actually
+/// holds, capitals and all. Folding the case of the string would be wrong
+/// anyway — on Linux two files really can differ by nothing but a capital.
+///
+/// A file that is not there to be asked keeps the name it came with. Nothing
+/// can be settled about a file that cannot be found, and guessing is how a
+/// library loses a track.
 pub fn one_name_for(path: &Path) -> PathBuf {
     let Ok(real) = std::fs::canonicalize(path) else {
         return path.to_path_buf();
@@ -34,6 +57,23 @@ pub fn one_name_for(path: &Path) -> PathBuf {
     }
 }
 
+/// What the folders along a path are really called.
+///
+/// `canonicalize` above straightens out links and `..`, but whether it also
+/// corrects a capital is a question about the particular system, and this is
+/// not a thing to guess at: the difference between `Cave` and `CAVE` is the
+/// whole bug. So the directories are asked, one level at a time — a folder
+/// that holds `Cave` will happily open `CAVE` on a Mac, but only one of those
+/// is the name it keeps, and the name it keeps is what a scan will find.
+///
+/// What does not exist yet keeps the spelling it was given. That is what makes
+/// this useful for filing a new record as well as for reading an old row: a
+/// new album folder inside an artist folder that is already there gets the
+/// artist's own spelling and its own.
+///
+/// `seen` is a memory of the directories already read. Without it this is a
+/// directory listing per component per file, which is fine for filing one
+/// record and much too slow for a whole library.
 pub fn as_the_disk_spells_it(path: &Path, seen: &mut DiskNames) -> PathBuf {
     let mut spelled = PathBuf::new();
     for part in path.components() {
@@ -68,15 +108,20 @@ pub fn as_the_disk_spells_it(path: &Path, seen: &mut DiskNames) -> PathBuf {
     spelled
 }
 
+/// A name as it compares: one way of writing each letter, small.
 fn folded(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     name.nfc().collect::<String>().to_lowercase()
 }
 
+/// Directory listings already read, for [`as_the_disk_spells_it`].
 pub type DiskNames = std::collections::HashMap<PathBuf, Vec<String>>;
 
+/// High-level library management operations.
 pub struct LibraryManager<'a> {
     db: &'a Database,
+    /// Where extracted album covers go. Without one, scanning skips them —
+    /// the terminal frontend has no use for pictures.
     artwork: Option<std::path::PathBuf>,
 }
 
@@ -85,11 +130,13 @@ impl<'a> LibraryManager<'a> {
         Self { db, artwork: None }
     }
 
+    /// Also extract album covers into this folder while scanning.
     pub fn with_artwork(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.artwork = Some(dir.into());
         self
     }
 
+    /// Scan one or more directories and import all music files.
     pub fn scan_dirs(
         &self,
         dirs: &[impl AsRef<Path>],
@@ -153,10 +200,19 @@ impl<'a> LibraryManager<'a> {
         Ok((total_files, total_added, total_updated))
     }
 
+    /// Remove tracks from the database whose files no longer exist on disk.
     pub fn clean_missing(&self) -> Result<u32> {
         self.db.remove_missing_tracks()
     }
 
+    /// The same, after a scan of these folders, and only within them: what the
+    /// window does each time it reads the library.
+    ///
+    /// A folder that is not there, or holds no music at all, is passed over
+    /// rather than emptied: that is an unplugged disk or a folder the system
+    /// will not let us read, and taking it at its word would throw away the
+    /// whole library — its lists and its play counts with it — on a day the
+    /// drive was simply not connected.
     pub fn clean_missing_in(&self, dirs: &[impl AsRef<Path>]) -> Result<u32> {
         let mut removed = 0;
         for dir in dirs {
@@ -202,6 +258,10 @@ mod pruning_tests {
         }
     }
 
+    /// A file deleted from a music folder leaves the library on the next
+    /// read; one that is still there stays, and so does everything under a
+    /// folder that is not there at all — an unplugged disk is not a library
+    /// thrown away.
     #[test]
     fn a_read_takes_out_what_has_gone_and_nothing_else() {
         let root = std::env::temp_dir().join("kessler-pruning");
@@ -237,6 +297,12 @@ mod disk_spelling_tests {
         dir
     }
 
+    /// The name the disk keeps wins over the name we were handed.
+    ///
+    /// This is the whole of a doubled record in one assertion: the tag
+    /// said CAVE, the folder on the disk said Cave, and on a Mac both open the
+    /// same place. Asked here rather than left to the filesystem, so the
+    /// answer is the same on every system.
     #[test]
     fn a_folder_keeps_the_spelling_it_already_has() {
         let root = scratch("kept");
@@ -252,6 +318,9 @@ mod disk_spelling_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The same for an umlaut in capitals, and for an umlaut written as a
+    /// vowel and its dots (NFD, as folders from older Macs hold it) where the
+    /// tag has it as one letter.
     #[test]
     fn an_umlaut_finds_its_folder_however_it_is_written() {
         let root = scratch("umlaut");
@@ -266,6 +335,8 @@ mod disk_spelling_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// What is not there yet is left exactly as asked for — that is how a new
+    /// record gets filed at all.
     #[test]
     fn a_folder_that_is_not_there_yet_keeps_what_it_was_given() {
         let root = scratch("new");
@@ -278,6 +349,8 @@ mod disk_spelling_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// And where a system does tell capitals apart, the name asked for is the
+    /// name meant: an exact match is never passed over for a near one.
     #[test]
     #[cfg(unix)]
     fn an_exact_name_wins_over_one_that_only_looks_like_it() {

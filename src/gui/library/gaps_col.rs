@@ -1,7 +1,15 @@
+//! The other artists column — see [`crate::library::gaps`].
+
 use super::*;
 
+/// How many of those naming a gap are listed under it before „+ n".
 const NAMERS_SHOWN: usize = 4;
 
+/// Who the library's artists keep naming as like them and who is not in it, the
+/// most named first. Each one's name and, to the right, how many name them;
+/// under it, who. A click opens what is known about them in the artist's
+/// column, with the way back on top. At the foot, what the count was made from,
+/// and how to make it better.
 pub(super) fn gaps_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     let top = ui.cursor().min;
     let height = ui.available_height();
@@ -137,6 +145,8 @@ pub(super) fn gaps_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
     Rect::from_min_size(top, Vec2::new(width, height))
 }
 
+/// One gap: the name, and at the right how many name them. Returns whether
+/// it was clicked.
 fn gap_row(ui: &mut Ui, width: f32, name: &str, named: usize, m: Metrics, palette: &Palette) -> bool {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
     paint_hover(ui, rect, &response, RowState::default(), m, palette);
@@ -155,15 +165,21 @@ fn gap_row(ui: &mut Ui, width: f32, name: &str, named: usize, m: Metrics, palett
     response.clicked()
 }
 
+/// How many of those naming a gap its tree shows, and how many of the
+/// others each of them names.
 const TREE_NAMERS: usize = 4;
 const TREE_FURTHER: usize = 3;
 
+/// One of the library's artists in a gap's tree: how like they find it, and
+/// the other gaps they name, the most named first.
 struct Branch<'a> {
     name: &'a str,
     like: Option<f32>,
     further: Vec<&'a str>,
 }
 
+/// The tree of gap `at`: who of the library names it, and whom else each of
+/// them names among the gaps.
 fn branches(gaps: &[crate::library::gaps::Gap], at: usize) -> Vec<Branch<'_>> {
     gaps[at]
         .by
@@ -183,6 +199,11 @@ fn branches(gaps: &[crate::library::gaps::Gap], at: usize) -> Vec<Branch<'_>> {
         .collect()
 }
 
+/// A gap as a tree, in braces as Muto draws them: the gap, a brace round those
+/// of the library who name it — drawn in the ink as far as they find it like,
+/// else further back — and beside each a brace round whom else they name, each
+/// a gap of its own. Every name opens what is known of them. Returns the name
+/// clicked.
 fn gap_tree(ui: &mut Ui, width: f32, gaps: &[crate::library::gaps::Gap], at: usize, widest: (f32, f32), m: Metrics, palette: &Palette) -> Option<String> {
     let tree = branches(gaps, at);
     let rows_of = |b: &Branch| b.further.len().max(1);
@@ -250,6 +271,10 @@ fn gap_tree(ui: &mut Ui, width: f32, gaps: &[crate::library::gaps::Gap], at: usi
     clicked
 }
 
+/// A curly brace from `top` to `bottom`, `width` wide, its point to the
+/// left: square ends and round shoulders, as Muto draws ⎧ ⎨ ⎩ — the face
+/// has the pieces but none to fill between them, so it is drawn rather than
+/// set. Round one row alone, a short stroke.
 #[allow(clippy::too_many_arguments)]
 fn paint_brace(ui: &Ui, x: f32, top: f32, bottom: f32, width: f32, stroke: f32, colour: Color32, m: Metrics) {
     let inset = m.marker_inset_y.max(stroke);

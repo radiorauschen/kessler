@@ -1,9 +1,25 @@
+//! The forms that take a column over for a while: the tag editor, the
+//! question with a field, the transfer, the details and the cover search.
+
 use super::*;
 
+/// How far the values are set in from the labels. Wide enough for the longest
+/// of them, `albuminterpret`, and identical for every row: the values have to
+/// line up, or the form reads as eight unrelated lines.
 pub(super) const TAG_LABEL_WIDTH: f32 = 118.0;
 
+/// The caret is a block, like the one in the search field: there is no other
+/// vertical line in this interface and a thin one here would read as a border
+/// fragment.
 pub(super) const CARET_WIDTH: f32 = 7.0;
 
+/// The editor, in place of the track list.
+///
+/// It takes the track column rather than opening over it: the titles it is
+/// about are in that column, the form is about as tall as they are, and a
+/// sheet in front of the window would be the second thing in this interface
+/// that floats. The two name columns stay where they are, so it is never in
+/// doubt which record is being edited.
 pub(super) fn tag_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) -> Rect {
     let width = ui.available_width();
     let blink = ui.input(|i| i.time).rem_euclid(1.06) < 0.62;
@@ -142,18 +158,26 @@ pub(super) fn tag_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pale
     taken.response.rect
 }
 
+/// How many of the edited titles are listed before they are counted instead.
 pub(super) const TAG_TITLES_SHOWN: usize = 5;
 
+/// How big a suggested cover would like to be, and how far apart they sit.
+///
+/// Smaller than a grid tile: these are looked at side by side and compared,
+/// which wants several in view at once rather than one in detail.
 pub(super) const COVER_WISH: f32 = 150.0;
 
 pub(super) const COVER_GAP: f32 = 10.0;
 
+/// How many suggestions stand side by side in a column this wide, and how big
+/// each one is then. Whole columns, at least two.
 pub(super) fn cover_layout(inner: f32) -> (usize, f32) {
     let across = ((inner + COVER_GAP) / (COVER_WISH + COVER_GAP)).floor().max(2.0) as usize;
     let tile = (inner - COVER_GAP * (across as f32 - 1.0)) / across as f32;
     (across, tile.max(24.0))
 }
 
+/// One line of words on a row of its own.
 pub(super) fn say(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Color32, m: Metrics) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::hover());
     let content = content_rect(rect, m);
@@ -165,6 +189,16 @@ pub(super) fn say(ui: &mut Ui, width: f32, words: &str, role: Role, colour: Colo
     ui.painter().galley(at, g, colour);
 }
 
+/// The one place in this window where a name is typed.
+///
+/// A list is made, renamed or thrown away here, and the three look the same on
+/// purpose: the same column, the same heading line, the same word at the foot
+/// to press. What differs is whether there is a field — you do not type
+/// anything to delete something — and what the word says.
+///
+/// Why a panel and not a line in the first column: a name being typed has to
+/// be readable while it is typed, and a row of that column is as wide as a
+/// name gets to be. The tag editor took this column for the same reason.
 pub(super) fn prompt_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) -> Rect {
     let width = ui.available_width();
     let blink = ui.input(|i| i.time).rem_euclid(1.06) < 0.62;
@@ -245,6 +279,13 @@ pub(super) fn prompt_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
     taken.response.rect
 }
 
+/// What sending music to the device would do, before it does it.
+///
+/// Read first, then said yes to. Every line here is one of the ways a sync
+/// surprises people afterwards: what was already there, what this generation
+/// cannot play, what has gone missing off the disk since the last scan, and
+/// how much of the device is left when it is done. A line is left out when its
+/// number is zero — a panel of noughts is a panel nobody reads.
 pub(super) fn transfer_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) -> Rect {
     use crate::gui::Stage;
     use crate::ipod::format_bytes;
@@ -579,6 +620,10 @@ pub(super) fn details_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &
     taken.response.rect
 }
 
+/// The cover chooser, in place of the track list.
+///
+/// Same arrangement as the tag editor, for the same reason: the album it is
+/// about stays visible in the column beside it, and nothing floats.
 pub(super) fn cover_form(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette) -> Rect {
     use crate::gui::coverpick::State;
     let width = ui.available_width();

@@ -1,6 +1,30 @@
+//! The podcasts by the keyboard, as the music's columns are worked.
+//!
+//! Three columns take the keyboard: the podcasts (0), their episodes (1) and
+//! the podcasts' queue (3). The episode's page between them (2) is buttons,
+//! each with a key of its own, and is stepped over.
+//!
+//! - `↑` `↓` (`k` `j`): in the first column the next row is chosen at
+//!   once, as an artist is; in the others the next episode is looked at.
+//! - `←` `→` (`h` `l`): the column before or after.
+//! - `enter`: from the first column into the episodes; on an episode,
+//!   play it.
+//! - `shift` + `↑` `↓`: more episodes picked, from the one looked at.
+//! - `cmd` + `a`: every episode of the list picked. Picked, the right-click
+//!   menu does to them all.
+//! - `a`: into the queue, or out of it; `backspace` / `d`: archived, or
+//!   back; on several picked, to all of them.
+//! - `gg` / `G`: to the top or the foot of the column.
+//!
+//! In the queue, as in the music's: its played rows, the episode playing
+//! and what comes after are one list to step through; `backspace` / `d`
+//! take a row out, `shift` + `j` `k` carry a row of what is to come up or
+//! down, `shift` + `d` twice empties it all, `enter` plays.
+
 use crate::gui::*;
 use crate::podcast::{Episode, Show};
 
+/// A row of the podcasts' first column, as the keyboard steps through it.
 #[derive(Clone, PartialEq)]
 enum ShowRow {
     All,
@@ -11,6 +35,10 @@ enum ShowRow {
 }
 
 impl GuiApp {
+    /// The first column's rows, as it draws them: „alle", „offen",
+    /// „heruntergeladen", „gemerkt" while there is any, then the podcasts — or,
+    /// under a search, what it found: „folgen" where any episode matches,
+    /// the podcasts followed it found something in, then the directory's.
     fn podcast_rows(&self) -> Vec<ShowRow> {
         if let Some((followed, directory)) = self.podcasts_found() {
             let mut rows: Vec<ShowRow> = Vec::new();
@@ -29,6 +57,7 @@ impl GuiApp {
         rows
     }
 
+    /// Which of them is chosen now.
     fn podcast_row_now(&self, rows: &[ShowRow]) -> usize {
         let panel = &self.podcasts;
         let now = if panel.only_open {
@@ -53,6 +82,8 @@ impl GuiApp {
         }
     }
 
+    /// The rows of the column the keyboard is in, as episodes: the second
+    /// column's list (as far as it is drawn), or the queue.
     fn podcast_list_here(&self) -> Vec<(Episode, Show)> {
         match self.podcasts.focus {
             3 => self.podcast_queue_rows(),
@@ -60,6 +91,8 @@ impl GuiApp {
         }
     }
 
+    /// The queue's rows as it draws them: what it has played, the episode
+    /// playing, what comes after.
     fn podcast_queue_rows(&self) -> Vec<(Episode, Show)> {
         let kept = &self.podcasts.kept;
         let mut rows: Vec<(Episode, Show)> = kept.spent.iter().map(crate::podcast::Fetched::episode).collect();
@@ -72,6 +105,10 @@ impl GuiApp {
         rows
     }
 
+    /// `backspace` in the queue: the row looked at out of it — a played one
+    /// out of the played rows, one to come out of what comes; the one
+    /// playing stays. The next row is looked at then, as the music's
+    /// cursor stays where it was.
     fn take_out_of_episode_queue(&mut self, id: &str) {
         let before = self.podcast_queue_rows();
         let Some(at) = before.iter().position(|(e, _)| e.id == id) else { return };
@@ -91,6 +128,9 @@ impl GuiApp {
         }
     }
 
+    /// `backspace` on rows picked in the queue: each out of it, the played
+    /// ones out of the played rows, those to come out of what comes; the one
+    /// playing stays. The row after the first of them is looked at then.
     fn take_all_out_of_episode_queue(&mut self, ids: &[String]) {
         let before = self.podcast_queue_rows();
         let first = before.iter().position(|(e, _)| ids.contains(&e.id));
@@ -107,6 +147,8 @@ impl GuiApp {
         self.set_notice(tr!("{} aus der warteschlange", before.len().saturating_sub(after.len())));
     }
 
+    /// The row the keyboard stands on in the column it is in: in the queue
+    /// the queue's own cursor, elsewhere the episode looked at.
     fn podcast_cursor_id(&self) -> Option<String> {
         if self.podcasts.focus == 3 {
             self.podcasts.queue_cursor.clone()
@@ -115,6 +157,10 @@ impl GuiApp {
         }
     }
 
+    /// Put the keyboard on `row` of the column it is in: in the queue only
+    /// the queue's cursor moves — the episodes and the episode's page stay
+    /// as they are, as the music's queue leaves the track list alone —
+    /// elsewhere the episode is looked at.
     fn podcast_cursor_to(&mut self, episode: Episode, show: Show) {
         self.podcasts.follow.replace(Some(episode.id.clone()));
         if self.podcasts.focus == 3 {
@@ -124,6 +170,8 @@ impl GuiApp {
         }
     }
 
+    /// The row the keyboard stands on, as an episode, in the column it is
+    /// in.
     fn podcast_cursor_row(&self) -> Option<(Episode, Show)> {
         let id = self.podcast_cursor_id()?;
         if self.podcasts.focus == 3 {
@@ -133,11 +181,13 @@ impl GuiApp {
         }
     }
 
+    /// Where the row the keyboard stands on is in that list.
     fn podcast_looked_at(&self, list: &[(Episode, Show)]) -> Option<usize> {
         let id = self.podcast_cursor_id()?;
         list.iter().position(|(e, _)| e.id == id)
     }
 
+    /// One step, or many, through the column the keyboard is in.
     pub(in crate::gui) fn podcast_step(&mut self, by: i32) {
         if self.podcasts.focus == 0 {
             let rows = self.podcast_rows();
@@ -169,6 +219,8 @@ impl GuiApp {
         self.podcast_reach(to, list.len());
     }
 
+    /// Near the end of the second column's page, the next page, as the
+    /// pointer gets it by scrolling there.
     fn podcast_reach(&mut self, at: usize, len: usize) {
         if self.podcasts.focus == 1 && at + 3 >= len {
             let (_, total) = self.podcasts.episodes(self.config.ui.podcast_show_archived);
@@ -178,6 +230,8 @@ impl GuiApp {
         }
     }
 
+    /// `shift` + `↑` `↓`: the run picked grows or shrinks at its far end,
+    /// the one looked at staying where the run began.
     fn podcast_pick_by(&mut self, by: i32) {
         if self.podcasts.focus != 1 && self.podcasts.focus != 3 {
             return;
@@ -205,6 +259,8 @@ impl GuiApp {
         self.podcast_reach(to, list.len());
     }
 
+    /// The columns the keyboard goes along: the podcasts, the episodes, and
+    /// the queue while it is there.
     fn podcast_columns(&self) -> Vec<usize> {
         let mut columns = vec![0, 1];
         if self.config.ui.podcast_queue && !self.podcasts.info_open && !self.log_open && !self.eq_open {
@@ -238,6 +294,8 @@ impl GuiApp {
         }
     }
 
+    /// The keys of the podcasts' view; what it does not take goes on to the
+    /// keys every view has (playing, the volume, the menu …).
     pub(in crate::gui) fn handle_podcast_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;

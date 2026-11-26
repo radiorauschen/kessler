@@ -1,6 +1,10 @@
+//! Moving about: the search line, the columns, the cursor and what is
+//! selected.
+
 use crate::gui::*;
 
 impl GuiApp {
+    /// The selection is the cursor alone again.
     pub fn reset_track_selection(&mut self) {
         self.record_picked = false;
         self.track_selection.clear();
@@ -10,12 +14,18 @@ impl GuiApp {
         self.track_anchor = self.track_index;
     }
 
+    /// Escape: nothing marked any more, anywhere — the run of tracks, the
+    /// rows picked in the queue, the cursor's own row. The next step, click
+    /// or column marks the cursor's row again.
     pub fn let_go(&mut self) {
         self.reset_track_selection();
         self.queue_picked.clear();
         self.unmarked = true;
     }
 
+    /// Every track in the list, from the first: cmd-a in the tracks or the
+    /// albums, whose tracks they are. The cursor stays where it was, inside the
+    /// run.
     pub fn select_all_tracks(&mut self) {
         if self.tracks.is_empty() {
             return;
@@ -27,6 +37,8 @@ impl GuiApp {
         self.focus = Column::Tracks;
     }
 
+    /// Select everything between the anchor and this row — a shift-click, or
+    /// shift with an arrow key.
     pub fn extend_track_selection(&mut self, to: usize) {
         if self.tracks.is_empty() {
             return;
@@ -40,6 +52,11 @@ impl GuiApp {
         self.focus = Column::Tracks;
     }
 
+    /// Add or remove one row without disturbing the rest — a cmd-click.
+    ///
+    /// The last row cannot be removed: an empty selection would leave the
+    /// editor and everything else with nothing to act on, and the cursor has
+    /// to be somewhere regardless.
     pub fn toggle_track_selection(&mut self, index: usize) {
         if index >= self.tracks.len() {
             return;
@@ -59,6 +76,7 @@ impl GuiApp {
         self.focus = Column::Tracks;
     }
 
+    /// The tracks the selection stands for, in list order.
     pub fn selected_tracks(&self) -> Vec<&Track> {
         self.track_selection
             .iter()
@@ -66,6 +84,7 @@ impl GuiApp {
             .collect()
     }
 
+    /// Open the filter line, if it is not open already.
     pub fn open_filter(&mut self) {
         if self.filter.is_none() {
             self.filter = Some(String::new());
@@ -74,6 +93,16 @@ impl GuiApp {
         self.filter_typing = true;
     }
 
+    /// Leave the field, keeping what was found.
+    ///
+    /// Not [`Self::close_filter`]: the words stay in the field and the columns
+    /// stay narrowed. All that ends is the keyboard being in the field — which
+    /// is the whole point, because the next thing somebody does after
+    /// searching is use the arrow keys on what they found.
+    ///
+    /// An empty field is closed outright: an open field with nothing in it is
+    /// a caret and a hint, and neither is worth keeping once you have clicked
+    /// somewhere else.
     pub fn stop_typing(&mut self) -> Result<()> {
         self.filter_typing = false;
         self.filter_marked = false;
@@ -83,6 +112,7 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Close it and forget the query, restoring the whole library.
     pub fn close_filter(&mut self) -> Result<()> {
         self.filter_typing = false;
         self.filter_marked = false;
@@ -93,6 +123,12 @@ impl GuiApp {
         Ok(())
     }
 
+    /// Reload everything a changed filter touches.
+    ///
+    /// The selections are reset because they almost certainly point at rows
+    /// that the new query has just removed — and because with all three columns
+    /// back on "alle", their lengths describe the filter exactly, which is what
+    /// the count on the filter line reports.
     pub(in crate::gui) fn after_filter_changed(&mut self) -> Result<()> {
         if self.showing_radio() {
             self.radio_typed();
@@ -113,10 +149,13 @@ impl GuiApp {
         self.reload_all()
     }
 
+    /// Whether the albums are headings in the track list rather than a
+    /// column.
     pub fn merged(&self) -> bool {
         self.config.ui.albums_in_tracks
     }
 
+    /// What stands left of the track list, for the layout.
     pub fn names_layout(&self) -> theme::Names {
         if self.merged() {
             theme::Names::One
@@ -125,6 +164,11 @@ impl GuiApp {
         }
     }
 
+    /// Put the albums into the track list, or give them their column back.
+    ///
+    /// Into the list, the track list shows every record of the chosen artist
+    /// at once, so the album choice goes back to „alle"; and a keyboard that
+    /// was in the album column goes on to the tracks.
     pub fn set_albums_in_tracks(&mut self, on: bool) -> Result<()> {
         if self.config.ui.albums_in_tracks == on {
             return Ok(());
@@ -141,6 +185,7 @@ impl GuiApp {
         self.reload_all()
     }
 
+    /// `None` means the "all" row at the top of the column.
     pub fn selected_artist(&self) -> Option<String> {
         match self.artist_row(self.artist_index) {
             ArtistRow::Named(at) => self.artists.get(at).map(|a| a.name.clone()),
@@ -148,10 +193,14 @@ impl GuiApp {
         }
     }
 
+    /// What the row at this index of the first column stands for.
     pub fn artist_row(&self, index: usize) -> ArtistRow {
         ArtistRow::at(index)
     }
 
+    /// Where the first column comes back to when a choice has to start over:
+    /// „zuletzt", when that is where the window opens, and „alle" otherwise —
+    /// and always on the device, which has no „zuletzt".
     pub(in crate::gui) fn home_row(&self) -> usize {
         if self.config.ui.start_on_recent && self.config.ui.show_recent && !self.showing_ipod() {
             ArtistRow::Recent.index()
@@ -160,6 +209,7 @@ impl GuiApp {
         }
     }
 
+    /// Whether the "zuletzt" row is the one selected.
     pub fn showing_compilations(&self) -> bool {
         self.artist_row(self.artist_index) == ArtistRow::Compilations
     }
@@ -176,6 +226,17 @@ impl GuiApp {
         }
     }
 
+    /// Whose record the selected album is.
+    ///
+    /// An album is a title *and* an artist — the database groups them that way
+    /// — but a selection used to carry only the title, and a title alone is not
+    /// unique. Two different records called "Greatest Hits" are two rows in the
+    /// column and were one query underneath, so clicking either showed both.
+    ///
+    /// The untitled are the loud case: every track with no album tag has the
+    /// same empty title, so one click on a coverless tile in the grid answered
+    /// with every untagged file in the library. Carrying the artist along
+    /// settles both at once.
     pub fn selected_album_artist(&self) -> Option<String> {
         if self.album_index == 0 {
             None
@@ -186,6 +247,14 @@ impl GuiApp {
         }
     }
 
+    /// Row count of a column, counting the "all" row where there is one.
+    /// Move the keyboard to another column.
+    ///
+    /// The bug this exists for: with a column's "alle" row hidden, index zero
+    /// still means "nothing chosen here" — but there is no row at zero to draw
+    /// a marker on. Arriving there by pressing right looked exactly like the
+    /// key having done nothing at all. Landing on a column means landing on a
+    /// row of it.
     pub fn focus_column(&mut self, column: Column) -> Result<()> {
         self.unmarked = false;
         if self.showing_radio() && column != Column::Artists {
@@ -219,6 +288,12 @@ impl GuiApp {
         Ok(())
     }
 
+    /// The first row the keyboard may land on.
+    ///
+    /// Zero everywhere, except in the artist column with the "alle" row
+    /// hidden: index zero still *means* "every artist" — it is where the
+    /// window starts — but there is no row there to walk onto, and a selection
+    /// that vanishes when you press up reads as a bug.
     pub fn first_index(&self, column: Column) -> usize {
         let mut at = 0;
         while at < self.column_len(column) && !self.drawn(column, at) {
@@ -227,6 +302,14 @@ impl GuiApp {
         at
     }
 
+    /// Whether there is a line at this index to land on.
+    ///
+    /// A row of the first column can keep its place without keeping a line:
+    /// "alle" when it has been switched off, and "zuletzt" while the device is
+    /// the shelf — an iPod stamps every track with the moment it was copied, so
+    /// "what arrived last" is a question it cannot answer. Selecting a row
+    /// nobody drew looks exactly like the keyboard having done nothing, so the
+    /// keyboard steps over them.
     pub fn drawn(&self, column: Column, index: usize) -> bool {
         if column != Column::Artists {
             return true;
@@ -272,6 +355,7 @@ impl GuiApp {
         }
     }
 
+    /// Selecting further left invalidates everything to the right.
     pub fn select(&mut self, column: Column, index: usize) -> Result<()> {
         self.unmarked = false;
         let len = self.column_len(column);

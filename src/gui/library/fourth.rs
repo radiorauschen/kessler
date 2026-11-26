@@ -1,5 +1,14 @@
+//! The fourth column's other occupants: the queue, an open list and the log.
+
 use super::*;
 
+/// The fourth column, whichever of its two things it is holding.
+///
+/// There is one column here and there are two running orders that want it:
+/// what is going to be played next, and a list being put together. Rather than
+/// a fifth column for the second of them — the window has four and that is the
+/// design — a list borrows this one while it is being worked on and hands it
+/// back afterwards. See [`GuiApp::edit_list`].
 pub(super) fn fourth_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     let holding = if app.split() {
         app.left_side().unwrap_or(app.fourth_was)
@@ -23,11 +32,15 @@ pub(super) fn fourth_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: 
     .inner
 }
 
+/// The side column, right of the fourth: the device, the information or the
+/// log, when the combined view gives them a column of their own.
 pub(super) fn side_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     let holding = app.right_side().unwrap_or(app.side_was);
     side_column_of(app, ui, m, palette, width, holding, "side-column")
 }
 
+/// One column of the side holding `holding`, under an id of its own — with
+/// `[ui] all_columns` there is one of these for each thing open.
 pub(super) fn side_column_of(
     app: &mut GuiApp,
     ui: &mut Ui,
@@ -52,6 +65,13 @@ pub(super) fn side_column_of(
     .inner
 }
 
+/// A list, open for rearranging, in the column the queue usually has.
+///
+/// Everything the queue's column can do: drag a row to another place, drag
+/// tracks or a record or a name in from the shelf, take a row out, double-click
+/// to start playing from there. What is different is only where it lands —
+/// every change goes into the list itself, at once, because a running order
+/// with a „save" on it is one somebody will lose.
 pub(super) fn list_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
     let focused = app.focus == Column::Queue;
     let selected = app.queue_index;
@@ -225,6 +245,8 @@ pub(super) fn list_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &P
     taken.response.rect
 }
 
+/// How many rows of the queue are still to be played: everything after the
+/// one playing, or all of it when nothing is.
 pub(super) fn queue_to_come(len: usize, playing: Option<usize>) -> usize {
     match playing {
         Some(at) => len.saturating_sub(at + 1),
@@ -232,7 +254,13 @@ pub(super) fn queue_to_come(len: usize, playing: Option<usize>) -> usize {
     }
 }
 
+/// The log, in the fourth column: what the program did, newest first, one line
+/// an entry the way a terminal has it — the time, what kind, what happened —
+/// with a quiet line for the day wherever the day changes. Only the rows on
+/// screen are laid out; a thousand entries cost what twenty do.
 pub(super) fn log_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
+    /// One line of the column: a day, or an entry by its place from the
+    /// newest.
     enum Line {
         Day(chrono::NaiveDate),
         Entry(usize),
@@ -390,13 +418,28 @@ pub(super) fn log_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Pa
     Rect::from_min_size(top, Vec2::new(width, height))
 }
 
+/// How far apart the log's lines stand, as a share of a list row — they are
+/// set at label size — and the air between its time, kind and words.
 pub(super) const LOG_PITCH: f32 = 0.78;
 
 pub(super) const LOG_GAP: f32 = 8.0;
 
+/// The air above a day, after the first, as a share of a line of the log.
 pub(super) const LOG_DAY_AIR: f32 = 0.6;
 
+/// What is going to be played, in the order it will be played in.
+///
+/// Not another way of looking at the shelf — the three columns to its left
+/// all narrow one another, and this one narrows nothing. It is where things
+/// end up. That is also why it sits outside the artist/album/track sentence
+/// and can be closed without the rest losing its meaning.
 pub(super) fn queue_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &Palette, width: f32) -> Rect {
+    /// How many played rows stay in sight above the one playing.
+    ///
+    /// Enough to see where you have just been, few enough that a long evening
+    /// does not push what is coming off the bottom of the column. The rest is
+    /// not thrown away — scroll up and it is all still there — it simply stops
+    /// taking up the part of the column you are actually reading.
     const SPENT_SHOWN: usize = 5;
 
     let focused = app.focus == Column::Queue;
@@ -612,6 +655,23 @@ pub(super) fn queue_column(app: &mut GuiApp, ui: &mut Ui, m: Metrics, palette: &
     taken.response.rect
 }
 
+/// One track, read out in full, in place of the track list.
+///
+/// The same arrangement as the tag editor and the cover chooser, for the same
+/// reason: what it is about stays visible in the columns beside it, and
+/// nothing floats over anything. The column is the one place in the window
+/// with room for a list of answers, and this is a list of answers.
+///
+/// Nothing here can be edited — that is what the tag editor is for. A panel
+/// that only reads can say everything, including the fields no editor in this
+/// program knows how to write.
+/// One word you can press, on a row of its own.
+///
+/// There are no buttons in this window and this is not the place to invent
+/// one: „auswerfen" at the foot of the window is a word, the menu is a column
+/// of words, and an action here is a word too — set in the ink, as the
+/// menu's are, because unlike the rest of the panel it does something. Not
+/// in the accent, which is for what plays and for news.
 pub(super) fn action(ui: &mut Ui, width: f32, word: &str, m: Metrics, palette: &Palette) -> bool {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, m.row), Sense::click());
     let content = content_rect(rect, m);
@@ -633,6 +693,10 @@ pub(super) fn action(ui: &mut Ui, width: f32, word: &str, m: Metrics, palette: &
     response.clicked()
 }
 
+/// One id for each row's arrow, from the track on it and how many times that
+/// track came before in the column — so it stays with the track when rows
+/// are put in above it or taken out, and two of the same track keep their
+/// own. See `rows::queue_row`.
 fn arrow_ids(column: &str, tracks: impl Iterator<Item = i64>) -> Vec<egui::Id> {
     let mut seen: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
     tracks
@@ -649,6 +713,8 @@ fn arrow_ids(column: &str, tracks: impl Iterator<Item = i64>) -> Vec<egui::Id> {
 mod tests {
     use super::arrow_ids;
 
+    /// A row put in above the one playing leaves its arrow where it was, and
+    /// the same track twice keeps two arrows of its own.
     #[test]
     fn arrows_stay_with_their_tracks() {
         let before = arrow_ids("queued", [1, 2, 3].into_iter());

@@ -1,3 +1,5 @@
+//! See [`super`].
+
 pub const PART: &[(&str, &str)] = &[
     ("die datei ist nicht mehr da", "ファイルがありません"),
     ("curl lässt sich nicht starten: {}", "curl を起動できません: {}"),

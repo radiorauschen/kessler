@@ -1,23 +1,44 @@
+//! The words of a song.
+//!
+//! From two places, in this order. The file's own tag first — ID3's USLT,
+//! MP4's ©lyr, Vorbis' LYRICS — because what somebody put in the file is
+//! what they meant, and it costs nothing to read. Then LRCLIB, an open
+//! collection of lyrics that needs no key and often has them timed, a line
+//! to a moment of the song, so the window can follow along.
+//!
+//! What LRCLIB says is kept on disk beside the library, one file a song,
+//! and so is that it had nothing: the next time the song plays nothing is
+//! asked again.
+
 use std::path::{Path, PathBuf};
 
 use crate::json::Json;
 use crate::library::coverart::{encode, fetch_text};
 use crate::error::Result;
 
+/// One line of the words, and when it is sung, if that is known.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
     pub at: Option<f64>,
     pub text: String,
+    /// When each word is sung, where the words say (the enhanced LRC way,
+    /// `<01:23.45>word`): the moment and where in `text` the word begins.
+    /// Empty for words timed only by the line.
     pub words: Vec<(f64, usize)>,
 }
 
 impl Line {
+    /// How much of the line has been sung at `secs`, as a place in `text`:
+    /// up to the end of the last word begun. `None` for a line without
+    /// moments of its words.
     pub fn sung_to(&self, secs: f64) -> Option<usize> {
         let begun = self.words.iter().rposition(|(at, _)| *at <= secs)?;
         Some(self.words.get(begun + 1).map_or(self.text.len(), |(_, from)| *from))
     }
 }
 
+/// A line's words without the moments of each word, and those moments with
+/// where each word begins.
 fn word_moments(raw: &str) -> (String, Vec<(f64, usize)>) {
     let mut text = String::with_capacity(raw.len());
     let mut moments = Vec::new();
@@ -48,6 +69,7 @@ fn word_moments(raw: &str) -> (String, Vec<(f64, usize)>) {
     (text_trimmed, moments)
 }
 
+/// Where the words came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum From {
     File,
@@ -55,6 +77,7 @@ pub enum From {
 }
 
 impl From {
+    /// What the column says over the words, as under the artist's paragraph.
     pub fn name(self) -> &'static str {
         match self {
             From::File => "der datei",
@@ -63,18 +86,23 @@ impl From {
     }
 }
 
+/// The words of one song.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lyrics {
     pub lines: Vec<Line>,
     pub from: From,
+    /// LRCLIB knows the song and says it has no words.
     pub instrumental: bool,
 }
 
 impl Lyrics {
+    /// Whether the lines carry their moments.
     pub fn timed(&self) -> bool {
         self.lines.iter().any(|l| l.at.is_some())
     }
 
+    /// The line being sung at `secs`: the last one that has begun. `None`
+    /// before the first, and for words without moments.
     pub fn now(&self, secs: f64) -> Option<usize> {
         self.lines
             .iter()
@@ -85,6 +113,10 @@ impl Lyrics {
     }
 }
 
+/// Read words out of text that may be timed, the LRC way:
+/// `[01:23.45] a line`. Header lines — `[ar:…]`, `[ti:…]` — are dropped; a
+/// line with several moments is the same words sung again, and stands at
+/// each of them. Untimed text is its lines as they are.
 pub fn parse(text: &str) -> Vec<Line> {
     let mut lines = Vec::new();
     for raw in text.lines() {
@@ -129,6 +161,7 @@ pub fn parse(text: &str) -> Vec<Line> {
     tidy
 }
 
+/// `mm:ss`, `mm:ss.xx` or `mm:ss:xx` as seconds.
 fn moment(tag: &str) -> Option<f64> {
     let (minutes, seconds) = tag.trim().split_once(':')?;
     let minutes: f64 = minutes.parse().ok()?;
@@ -136,12 +169,20 @@ fn moment(tag: &str) -> Option<f64> {
     (minutes >= 0.0 && (0.0..60.0).contains(&seconds)).then_some(minutes * 60.0 + seconds)
 }
 
+/// The words the file carries itself, if it has any.
+///
+/// Read where taggers put them, which is not always where the standard
+/// says: an ID3 USLT frame as it should be, but also a TXXX frame named
+/// „LYRICS", „UNSYNCEDLYRICS" or — what ffmpeg writes — „USLT", which
+/// lofty's common view of a tag leaves out; in other formats a field of
+/// any of those names.
 pub fn in_file(path: &Path) -> Option<Lyrics> {
     let text = from_id3(path).or_else(|| from_tags(path))?;
     let lines = parse(&text);
     (!lines.is_empty()).then_some(Lyrics { lines, from: From::File, instrumental: false })
 }
 
+/// The names lyrics go by, other than the standard's own.
 const NAMES: [&str; 4] = ["LYRICS", "UNSYNCEDLYRICS", "USLT", "SYNCEDLYRICS"];
 
 fn from_id3(path: &Path) -> Option<String> {
@@ -184,16 +225,21 @@ fn from_tags(path: &Path) -> Option<String> {
     })
 }
 
+/// The file the words of a song are kept in, by artist and title.
 pub fn cache_path(dir: &Path, artist: &str, title: &str) -> PathBuf {
     let key = super::artwork::key(&crate::db::sort_key(artist), &format!("\u{3}lyrics\u{1}{}", crate::db::sort_key(title)));
     dir.join(format!("{key:016x}.lrc"))
 }
 
+/// What was kept of a song: its words, `Some(None)` for a song LRCLIB had
+/// nothing for, and `None` for one never asked about.
 pub fn load(dir: &Path, artist: &str, title: &str) -> Option<Option<Lyrics>> {
     let text = std::fs::read_to_string(cache_path(dir, artist, title)).ok()?;
     Some(from_kept(&text))
 }
 
+/// The kept file's words: a first line saying „instrumental" or „none", or
+/// the words themselves.
 fn from_kept(text: &str) -> Option<Lyrics> {
     match text.lines().next().map(str::trim) {
         Some(NONE) => None,
@@ -208,6 +254,7 @@ fn from_kept(text: &str) -> Option<Lyrics> {
 const NONE: &str = "# none";
 const INSTRUMENTAL: &str = "# instrumental";
 
+/// Keep what LRCLIB said about a song.
 pub fn keep(dir: &Path, artist: &str, title: &str, found: Option<&Lyrics>, raw: &str) {
     let text = match found {
         None => NONE.to_string(),
@@ -218,6 +265,14 @@ pub fn keep(dir: &Path, artist: &str, title: &str, found: Option<&Lyrics>, raw: 
     let _ = std::fs::write(cache_path(dir, artist, title), text);
 }
 
+/// Ask LRCLIB for a song's words. Hands back what it found and the text to
+/// keep, timed if it had them timed.
+///
+/// Its search rather than its exact lookup: the lookup answers a song it
+/// does not know with a 404, which curl reports as a failure like any
+/// other, and „not known" is not trouble. Of what the search gives, the
+/// first by the same artist and title that runs within a few seconds of the
+/// file — the same song, not a live take twice as long.
 pub fn look_up(artist: &str, title: &str, secs: f64) -> Result<(Option<Lyrics>, String)> {
     let url = format!(
         "https://lrclib.net/api/search?artist_name={}&track_name={}",
@@ -228,6 +283,7 @@ pub fn look_up(artist: &str, title: &str, secs: f64) -> Result<(Option<Lyrics>, 
     Ok(pick(&answer, artist, title, secs))
 }
 
+/// The best of LRCLIB's answers — see [`look_up`].
 fn pick(answer: &str, artist: &str, title: &str, secs: f64) -> (Option<Lyrics>, String) {
     let Some(json) = Json::parse(answer) else {
         return (None, String::new());
@@ -259,6 +315,8 @@ fn pick(answer: &str, artist: &str, title: &str, secs: f64) -> (Option<Lyrics>, 
 mod tests {
     use super::*;
 
+    /// Enhanced LRC: the moments of the words come out of the text and say
+    /// how far the line has been sung.
     #[test]
     fn the_words_of_a_line_carry_their_moments() {
         let lines = parse("[00:10.00] <00:10.00>so <00:10.50>lang <00:11.20>war es\n[00:12.00] ohne");
@@ -323,6 +381,8 @@ mod tests {
         assert!(none.is_none(), "nothing within a few seconds");
     }
 
+    /// The words in the file are found where the standard puts them and
+    /// where ffmpeg puts them.
     #[test]
     fn the_words_in_the_file_are_found() {
         use lofty::config::WriteOptions;

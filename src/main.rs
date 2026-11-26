@@ -1,7 +1,17 @@
+//! Kessler — a small music player and library, with iPod Classic support.
+//!
+//! The window is the program; the subcommands are for the few things that
+//! are better done once from a terminal (connecting last.fm, a scan from a
+//! script, looking at an iPod without opening anything).
+
 #![allow(clippy::too_many_arguments, clippy::collapsible_if, clippy::collapsible_else_if)]
 
+/// Whether this is the development build rather than the public one: the
+/// menu's head and the window's title then say „dev" beside the number, so
+/// nobody mistakes one for the other. The public copy sets it to `false`.
 pub const DEV: bool = false;
 
+/// The version as kessler shows it, with „dev" after it in a dev build.
 pub const VERSION_SHOWN: &str =
     if DEV { concat!(env!("CARGO_PKG_VERSION"), " · dev") } else { env!("CARGO_PKG_VERSION") };
 
@@ -42,9 +52,11 @@ use crate::library::{scanner::ScanProgress, LibraryManager};
     about = "A small music player and library, with iPod Classic support"
 )]
 struct Cli {
+    /// Path to an alternative config file.
     #[arg(short, long, value_name = "FILE", global = true)]
     config: Option<PathBuf>,
 
+    /// Increase log verbosity (repeat for more: -v, -vv).
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
@@ -54,84 +66,126 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Scan music directories and import tracks into the library.
     Scan {
+        /// Directories to scan. Defaults to `music_dirs` from the config.
         #[arg(value_name = "DIR")]
         dirs: Vec<PathBuf>,
 
+        /// Also remove tracks whose files no longer exist.
         #[arg(long)]
         prune: bool,
     },
+    /// Print library statistics and exit.
     Stats,
+    /// Print the paths Kessler uses (config, database) and exit.
     Paths,
+    /// Open the window frontend.
     #[cfg(feature = "gui")]
     Gui,
+    /// Connect a Last.fm account, or see whether one is connected.
     Lastfm {
         #[command(subcommand)]
         action: LastfmAction,
     },
+    /// Inspect a connected iPod. Read-only — nothing is written to the device.
     #[cfg(feature = "ipod")]
     Ipod {
         #[command(subcommand)]
         action: IpodAction,
     },
+    /// Start playing in the running window (Linux, over MPRIS).
     Play,
+    /// Pause the running window.
     Pause,
+    /// Play or pause the running window — for a key binding.
     Toggle,
+    /// The next track in the running window.
     Next,
+    /// The track before.
     Prev,
+    /// Stop the running window.
     Stop,
+    /// Print what the running window plays, as one line — for a status bar.
     Now,
 }
 
 #[derive(Subcommand, Debug)]
 enum LastfmAction {
+    /// Write the application's key and secret into the config.
+    ///
+    /// Make them at https://www.last.fm/api/account/create — any name will do;
+    /// they identify the program, not the account.
     Setup {
         #[arg(long, value_name = "KEY")]
         key: String,
         #[arg(long, value_name = "SECRET")]
         secret: String,
     },
+    /// Connect the account: opens a page to approve, then stores the session.
     Login,
+    /// Say whether an account is connected, and what is waiting to be sent.
     Status,
+    /// Forget the session. The key and secret stay.
     Logout,
 }
 
 #[cfg(feature = "ipod")]
 #[derive(Subcommand, Debug)]
 enum IpodAction {
+    /// List mounted iPods.
     List,
+    /// Show what is on an iPod: capacity, tracks, playlists.
     Info {
+        /// Mount point. Omit to use the only detected device.
         #[arg(value_name = "MOUNT")]
         mount: Option<PathBuf>,
     },
+    /// List the tracks on an iPod.
     Tracks {
         #[arg(value_name = "MOUNT")]
         mount: Option<PathBuf>,
+        /// Show at most this many tracks.
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    /// List the playlists on an iPod.
     Playlists {
         #[arg(value_name = "MOUNT")]
         mount: Option<PathBuf>,
     },
+    /// Copy library tracks onto an iPod. Shows a plan unless --apply is given.
+    ///
+    /// Additive: nothing is ever deleted from the device, and the existing
+    /// database is backed up before a new one is written.
     Sync {
         #[arg(value_name = "MOUNT")]
         mount: Option<PathBuf>,
+        /// Actually copy. Without this, the sync only reports what it would do.
         #[arg(long)]
         apply: bool,
+        /// Only this artist's tracks.
         #[arg(long, value_name = "NAME")]
         artist: Option<String>,
+        /// Only this album.
         #[arg(long, value_name = "NAME")]
         album: Option<String>,
+        /// Copy at most this many tracks. For the first write to a device:
+        /// one album, then unplug it and look at the screen.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+        /// Convert tracks the iPod cannot play (FLAC, Ogg) to 320kbps MP3.
+        /// Needs ffmpeg on PATH; the originals are left untouched.
         #[arg(long)]
         transcode: bool,
     },
+    /// Copy the device's iTunesDB aside, timestamped.
     Backup {
         #[arg(value_name = "MOUNT")]
         mount: Option<PathBuf>,
     },
+    /// Print the report the device column saves: what the iPod will make of
+    /// its database, and what the next sync would do.
     Report {
         #[arg(value_name = "MOUNT")]
         mount: Option<PathBuf>,
@@ -185,6 +239,9 @@ fn run() -> Result<()> {
     }
 }
 
+/// Work the running window from the command line — see `media::remote`.
+/// Linux only: on a Mac the window has no bus to be reached on. What went
+/// wrong is said as itself — „kessler läuft nicht" — not as an error kind.
 fn cmd_remote(command: &str) -> Result<()> {
     #[cfg(all(target_os = "linux", feature = "gui"))]
     let done = if command == "now" {
@@ -208,6 +265,13 @@ fn cmd_remote(command: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether this executable is sitting inside a macOS application bundle.
+///
+/// An application inside a bundle already *has* an icon, and a better one
+/// than anything it could hand over while running — see [`crate::gui::run`].
+/// The bundle's own path is the only signal available before any window
+/// exists, and it is a reliable one: nothing but a bundle puts the executable
+/// in `…​.app/Contents/MacOS/`.
 pub fn launched_from_a_bundle() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
@@ -221,6 +285,7 @@ pub fn launched_from_a_bundle() -> bool {
             .is_some_and(|p| p.ends_with(".app"))
 }
 
+/// Set up tracing. Logs go to stderr only when the user asked for them.
 fn init_logging(verbosity: u8) {
     use tracing_subscriber::EnvFilter;
 
@@ -230,7 +295,8 @@ fn init_logging(verbosity: u8) {
         _ => "debug",
     };
 
-    let filter = EnvFilter::try_from_env("CRATEDIG_LOG")
+    let filter = EnvFilter::try_from_env("KESSLER_LOG")
+        .or_else(|_| EnvFilter::try_from_env("CRATEDIG_LOG"))
         .unwrap_or_else(|_| EnvFilter::new(format!("kessler={default_level}")));
 
     let _ = tracing_subscriber::fmt()
@@ -329,6 +395,7 @@ fn cmd_ipod(config: &Config, action: IpodAction) -> Result<()> {
     use crate::ipod::device_info::DeviceInfo;
     use crate::ipod::{format_bytes, sync, IpodDevice};
 
+    /// Resolve the device to act on: the given mount, or the only one found.
     fn pick(mount: Option<PathBuf>) -> Result<IpodDevice> {
         if let Some(path) = mount {
             return IpodDevice::at(path);
@@ -630,6 +697,12 @@ fn cmd_ipod(config: &Config, action: IpodAction) -> Result<()> {
     Ok(())
 }
 
+/// Say what was walked past for its format.
+///
+/// The question this answers: "another player lists more tracks than Kessler
+/// does — where are they?" Until now a file in a format we cannot play was
+/// never opened and never mentioned, so the difference had no explanation
+/// anywhere. Now it has a number, per format, at the end of every scan.
 fn report_foreign(foreign: &[(String, u32)]) {
     if foreign.is_empty() {
         return;
@@ -645,6 +718,12 @@ fn report_foreign(foreign: &[(String, u32)]) {
     println!("  {}", formats.join(", "));
 }
 
+/// Say which files a scan could not read, once, at the end.
+///
+/// Most malformed tags are salvaged (see `library::id3`), so what reaches this
+/// list is the genuinely unreadable — and a short list at the end is something
+/// a person can act on, where a running commentary is something they scroll
+/// past.
 fn report_skipped(skipped: &[(String, String)]) {
     if skipped.is_empty() {
         return;
@@ -663,12 +742,19 @@ fn report_skipped(skipped: &[(String, String)]) {
     }
 }
 
+/// How many albums a dry run lists before it says "and N more".
 #[cfg(feature = "ipod")]
 const ALBUMS_SHOWN: usize = 12;
 
+/// How many missing files a sync names before it says "and N more".
 #[cfg(feature = "ipod")]
 const MISSING_SHOWN: usize = 8;
 
+/// The albums a plan would copy, smallest first.
+///
+/// A dry run over a whole library reports a number — 757 tracks — and leaves
+/// the person with no way to pick one album to try first. This gives them the
+/// short end of the list, which is where a first `--apply` should start.
 #[cfg(feature = "ipod")]
 fn albums_of(tracks: &[db::models::Track]) -> Vec<(String, usize)> {
     let mut albums: Vec<(String, usize)> = Vec::new();
@@ -694,6 +780,7 @@ fn albums_of(tracks: &[db::models::Track]) -> Vec<(String, usize)> {
     albums
 }
 
+/// Cut a string to a column width without splitting a character.
 #[cfg(feature = "ipod")]
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -717,6 +804,9 @@ fn cmd_paths(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Connect an account, or report on one.
+///
+/// The window does the same; this stays for scripts and for whoever prefers it.
 fn cmd_lastfm(mut config: Config, action: LastfmAction) -> Result<()> {
     match action {
         LastfmAction::Setup { key, secret } => {
@@ -787,6 +877,8 @@ fn cmd_lastfm(mut config: Config, action: LastfmAction) -> Result<()> {
 
 #[cfg(test)]
 mod bundle_tests {
+    /// The same reasoning as [`launched_from_a_bundle`], against a path rather
+    /// than the real executable, so it can actually be checked.
     fn inside_bundle(path: &str) -> bool {
         let exe = std::path::Path::new(path);
         let mut parts = exe.iter().rev().skip(1);

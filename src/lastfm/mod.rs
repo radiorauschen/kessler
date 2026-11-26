@@ -1,3 +1,17 @@
+//! Last.fm: connecting an account, saying what is playing, and scrobbling.
+//!
+//! Four pieces, kept apart on purpose:
+//!
+//! - [`sign`] — the digest and the signature Last.fm asks for.
+//! - [`api`] — building a request and reading the reply.
+//! - [`watch`] — the rules for what counts as having listened to something.
+//!   No network, no player, no window: just the rules, and tests for them.
+//! - [`queue`] — scrobbles that could not be sent yet.
+//!
+//! What ties them together here is [`Scrobbler`], which owns a thread. Nothing
+//! about reporting a track is urgent, and nothing about it may ever hold up a
+//! frame, so the window hands over what happened and forgets about it.
+
 pub mod api;
 pub mod queue;
 pub mod sign;
@@ -13,6 +27,7 @@ use crate::error::{KesslerError, Result};
 use api::ApiError;
 use queue::{Pending, Queue};
 
+/// Unix time now, in seconds.
 pub fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -20,6 +35,7 @@ pub fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Turn a track into the fields Last.fm files it under.
 fn fields(track: &Track) -> Pending {
     Pending {
         artist: track.artist.trim().to_string(),
@@ -32,6 +48,7 @@ fn fields(track: &Track) -> Pending {
     }
 }
 
+/// What the account needs before anything can be sent.
 #[derive(Debug, Clone)]
 pub struct Credentials {
     pub key: String,
@@ -40,6 +57,10 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    /// The three values, if all three are there.
+    ///
+    /// The key and secret are the application's and come from the config; the
+    /// session is this person's and is written by `kessler lastfm login`.
     pub fn from_config(config: &LastfmConfig) -> Option<Self> {
         Some(Self {
             key: non_empty(config.api_key.as_deref())?,
@@ -56,6 +77,8 @@ fn non_empty(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Step one of connecting: ask for a token, which the person then approves in
+/// a browser.
 pub fn request_token(key: &str, secret: &str) -> Result<String> {
     let reply = api::call(
         vec![
@@ -74,10 +97,12 @@ pub fn request_token(key: &str, secret: &str) -> Result<String> {
         .ok_or_else(|| KesslerError::Lastfm(tr!("last.fm gab keinen token zurück").into()))
 }
 
+/// Where the person approves that token.
 pub fn approval_url(key: &str, token: &str) -> String {
     format!("https://www.last.fm/api/auth/?api_key={key}&token={token}")
 }
 
+/// Step two: trade the approved token for a session key that does not expire.
 pub fn request_session(key: &str, secret: &str, token: &str) -> Result<(String, String)> {
     let reply = api::call(
         vec![
@@ -98,6 +123,7 @@ pub fn request_session(key: &str, secret: &str, token: &str) -> Result<(String, 
     Ok((session, user))
 }
 
+/// Open a URL in whatever the system uses for the web.
 pub fn open_in_browser(url: &str) -> bool {
     let opener = if cfg!(target_os = "macos") {
         "open"
@@ -115,7 +141,16 @@ pub fn open_in_browser(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Connect an account from inside the window, without a terminal.
+///
+/// The only part of this that needs a person is approving the token in a
+/// browser, and the only part that needed a terminal was waiting for them to
+/// come back. So it waits by asking: once the token is approved, `getSession`
+/// starts answering, and until then it says "unauthorized token" — which is not
+/// an error here, it is "not yet". Asking every couple of seconds for a few
+/// minutes costs nothing and saves the person a command line.
 pub fn connect(key: String, secret: String) -> mpsc::Receiver<Result<(String, String)>> {
+    /// How long the person has to approve it, and how often we look.
     const PATIENCE: std::time::Duration = std::time::Duration::from_secs(180);
     const EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -146,6 +181,8 @@ pub fn connect(key: String, secret: String) -> mpsc::Receiver<Result<(String, St
     rx
 }
 
+/// Tell Last.fm what is playing now. Nothing is stored if this fails: by the
+/// time it could be retried the track would be over.
 fn send_now_playing(credentials: &Credentials, track: &Pending) -> Result<()> {
     let mut params = vec![
         ("method".to_string(), "track.updateNowPlaying".to_string()),
@@ -162,6 +199,7 @@ fn send_now_playing(credentials: &Credentials, track: &Pending) -> Result<()> {
     }
 }
 
+/// Send one scrobble.
 fn send_scrobble(credentials: &Credentials, track: &Pending) -> Result<()> {
     let mut params = vec![
         ("method".to_string(), "track.scrobble".to_string()),
@@ -179,6 +217,8 @@ fn send_scrobble(credentials: &Credentials, track: &Pending) -> Result<()> {
     }
 }
 
+/// Love a track on the account (a song kept from the radio, when „bei last.fm
+/// lieben" is on).
 fn send_love(credentials: &Credentials, track: &Pending) -> Result<()> {
     let params = vec![
         ("method".to_string(), "track.love".to_string()),
@@ -194,6 +234,8 @@ fn send_love(credentials: &Credentials, track: &Pending) -> Result<()> {
     }
 }
 
+/// The fields that are worth sending when they are there and must not be sent
+/// empty: Last.fm files a track under an empty album rather than under none.
 fn add_optional(params: &mut Vec<(String, String)>, track: &Pending) {
     if !track.album.is_empty() {
         params.push(("album".to_string(), track.album.clone()));
@@ -213,29 +255,41 @@ fn reported(error: ApiError) -> KesslerError {
     KesslerError::Lastfm(tr!("{} (fehler {})", error.message, error.code))
 }
 
+/// What the window hands over.
 enum Job {
     NowPlaying(Box<Pending>),
     Scrobble(Box<Pending>),
     Love(Box<Pending>),
 }
 
+/// What comes back, for the interface to say.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Report {
+    /// A scrobble got through. The title is for the status line.
     Scrobbled(String),
+    /// A track was loved.
     Loved(String),
+    /// Something went wrong and is worth saying once.
     Trouble(String),
+    /// The session is no longer accepted: the account has to be connected
+    /// again, and nothing will work until it is.
     Disconnected,
 }
 
+/// Reports listening to Last.fm, on a thread of its own.
 pub struct Scrobbler {
     jobs: mpsc::Sender<Job>,
     reports: mpsc::Receiver<Report>,
+    /// The same channel the thread reports on, for the things the window works
+    /// out for itself without troubling the network.
     voice: mpsc::Sender<Report>,
     user: String,
     waiting: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Scrobbler {
+    /// Start one, if the account is connected. `None` means "not set up", which
+    /// is a normal state and not an error.
     pub fn start(config: &LastfmConfig, queue_path: PathBuf) -> Option<Self> {
         let credentials = Credentials::from_config(config)?;
         let user = config.username.clone().unwrap_or_default();
@@ -294,6 +348,9 @@ impl Scrobbler {
         })
     }
 
+    /// Hand over what the watcher decided. Never blocks, never fails loudly: a
+    /// scrobbler whose thread has gone is a scrobbler that stops scrobbling,
+    /// not a program that stops playing music.
     pub fn submit(&self, event: watch::Event) {
         let job = match event {
             watch::Event::NowPlaying(track) => {
@@ -316,6 +373,9 @@ impl Scrobbler {
         let _ = self.jobs.send(job);
     }
 
+    /// What a station said it played: playing now, or — with when it began —
+    /// listened to. There is no file behind it, only the two names the station
+    /// gave.
     pub fn submit_aired(&self, artist: &str, title: &str, started_at: Option<i64>) {
         let entry = Pending {
             artist: artist.to_string(),
@@ -333,6 +393,7 @@ impl Scrobbler {
         let _ = self.jobs.send(job);
     }
 
+    /// Love `artist` – `title` on the account.
     pub fn love(&self, artist: &str, title: &str) {
         let entry = Pending {
             artist: artist.to_string(),
@@ -348,6 +409,7 @@ impl Scrobbler {
         }
     }
 
+    /// Whatever the thread has said since last time.
     pub fn poll(&self) -> Vec<Report> {
         self.reports.try_iter().collect()
     }
@@ -356,17 +418,27 @@ impl Scrobbler {
         &self.user
     }
 
+    /// How many scrobbles are still waiting to get through.
     pub fn waiting(&self) -> usize {
         self.waiting.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
+/// What came of trying to send a queue.
 struct Drained {
+    /// What still has not got through, in the order it happened.
     left: Vec<Pending>,
+    /// The title of the last one that did, for the status line.
     last_sent: Option<String>,
+    /// Why it stopped, if it stopped.
     trouble: Option<KesslerError>,
 }
 
+/// Send these, oldest first, and stop at the first one that fails.
+///
+/// Stopping matters: scrobbles are a sequence, and sending the newest while the
+/// one before it waits would file a listening session out of order. Whatever is
+/// left comes back in its original order to be written down and tried again.
 fn drain(pending: Vec<Pending>, send: impl Fn(&Pending) -> Result<()>) -> Drained {
     let mut left = Vec::new();
     let mut last_sent = None;
@@ -410,6 +482,8 @@ fn trouble(error: KesslerError) -> Report {
 mod tests {
     use super::*;
 
+    /// The window puts „last.fm: " in front of every report; the error type
+    /// carries one too. Exactly one of them survives.
     #[test]
     fn a_report_names_last_fm_once() {
         let Report::Trouble(said) = trouble(KesslerError::Lastfm(
@@ -439,6 +513,7 @@ mod tests {
         }
     }
 
+    /// Two of the three is not enough, and a blank is not a value.
     #[test]
     fn all_three_are_needed_before_anything_is_sent() {
         assert!(Credentials::from_config(&config(Some("k"), Some("s"), Some("x"))).is_some());
@@ -447,6 +522,7 @@ mod tests {
         assert!(Credentials::from_config(&config(Some("k"), Some("  "), Some("x"))).is_none());
     }
 
+    /// The approval link is what the person opens; it carries the token.
     #[test]
     fn the_approval_url_carries_key_and_token() {
         let url = approval_url("KEY", "TOKEN");
@@ -490,6 +566,8 @@ mod tests {
         assert_eq!(sent.track_number, Some(8));
     }
 
+    /// An album artist equal to the artist is noise, and an empty album would
+    /// be filed as an album called "".
     #[test]
     fn empty_and_redundant_fields_are_left_out() {
         let mut entry = fields(&track());
@@ -514,6 +592,8 @@ mod tests {
         assert!(!names.contains(&"duration"));
     }
 
+    /// A dead session has to be told apart from a blocked network: one needs
+    /// the person, the other needs patience.
     #[test]
     fn a_dead_session_is_reported_as_such() {
         assert_eq!(
@@ -540,6 +620,7 @@ mod tests {
         }
     }
 
+    /// Everything goes, and the last one is the one worth naming.
     #[test]
     fn a_queue_that_gets_through_is_emptied() {
         let queue = vec![waiting("space 1", 100), waiting("space 2", 200)];
@@ -549,6 +630,8 @@ mod tests {
         assert!(outcome.trouble.is_none());
     }
 
+    /// The one that failed and everything after it wait, in order — a session
+    /// filed out of order is worse than one filed late.
     #[test]
     fn a_failure_holds_the_rest_back_in_order() {
         let queue = vec![
@@ -574,6 +657,7 @@ mod tests {
         assert!(outcome.trouble.is_some());
     }
 
+    /// Nothing sent means nothing to report, and nothing lost.
     #[test]
     fn a_dead_connection_loses_nothing() {
         let queue = vec![waiting("space 1", 100), waiting("space 2", 200)];
@@ -583,6 +667,7 @@ mod tests {
         assert!(outcome.last_sent.is_none());
     }
 
+    /// Not being set up is a state, not a failure.
     #[test]
     fn an_unconnected_account_starts_nothing() {
         let path = std::env::temp_dir().join("kessler-lastfm-none.tsv");

@@ -1,18 +1,33 @@
+//! How the window looks and what its status line says.
+
 use crate::gui::*;
 
+/// How long a change of colours takes to fade from one to the other.
 const THEME_FADE_SECS: f64 = 0.25;
 
+/// A change of size is made behind a dip to the ground, so quickly it reads as
+/// a blink: the window fades out, changes size where nobody sees it, and fades
+/// back in. Out fast, in a little slower, in seconds.
 const ZOOM_OUT_SECS: f64 = 0.06;
 const ZOOM_IN_SECS: f64 = 0.14;
 
+/// Where a change of size stands — see [`GuiApp::zoom_dip`].
 #[derive(Clone, Copy)]
 pub enum ZoomDip {
+    /// Fading out, since then, to this size.
     Out { since: f64, to: f32 },
+    /// Set, and waiting for the first frame drawn at it: that frame is the
+    /// one that lays every face out afresh at the new size, and it stays
+    /// hidden.
     Held { to: f32 },
+    /// Fading back in, since then.
     In { since: f64 },
 }
 
 impl GuiApp {
+    /// Switch to a colour scheme and to light, dark or the system's, and
+    /// remember both. The scheme is kept as the half being painted, so a
+    /// config read by an older kessler still opens on it.
     pub fn apply_theme(&mut self, ctx: &egui::Context, theme: Theme, brightness: Brightness) {
         let system = self.desktop_theme.or(ctx.system_theme());
         self.theme = brightness.resolve(theme, system);
@@ -23,6 +38,9 @@ impl GuiApp {
         self.follow_system(ctx);
     }
 
+    /// One of one's own scheme's four colours, as a rule in the menu moves it:
+    /// painted at once (the palette is worked out from the seed every frame),
+    /// written to the config once the hand lets go.
     pub fn set_seed_colour(&mut self, role: usize, colour: egui::Color32, settled: bool) {
         let mut seed = theme::custom();
         seed.set(role, colour);
@@ -33,6 +51,7 @@ impl GuiApp {
         }
     }
 
+    /// Take a scheme somebody passed on by its code, and show it.
     pub fn take_seed_code(&mut self, ctx: &egui::Context, code: &str) {
         match theme::Seed::parse(code) {
             Some(seed) => {
@@ -46,6 +65,7 @@ impl GuiApp {
         }
     }
 
+    /// Take one colour typed as hex, for the colour it was typed under.
     pub fn take_seed_hex(&mut self, role: usize, text: &str) {
         match theme::Seed::parse_colour(text) {
             Some(colour) => {
@@ -56,6 +76,8 @@ impl GuiApp {
         }
     }
 
+    /// The keys while a code is pasted into the menu, or a colour typed as
+    /// hex: escape leaves, enter takes it.
     pub(in crate::gui) fn handle_seed_keys(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         const NONE: Modifiers = Modifiers::NONE;
@@ -89,6 +111,11 @@ impl GuiApp {
         }
     }
 
+    /// Repaint in whatever the choice currently comes out as.
+    ///
+    /// Called every frame, because "systemfarben" has to notice the Mac being
+    /// switched between light and dark while the window is open — and because
+    /// doing nothing when nothing changed costs one comparison.
     pub fn follow_system(&mut self, ctx: &egui::Context) {
         self.listen_to_the_desktop(ctx);
         let system = self.desktop_theme.or(ctx.system_theme());
@@ -135,6 +162,14 @@ impl GuiApp {
         }
     }
 
+    /// The icon in the window's colours and its typeface — see
+    /// [`appicon`]. Drawn when something it is made of has changed,
+    /// and not before the window has a face to draw the k in.
+    ///
+    /// Drawn on a thread of its own and handed to the system on a later
+    /// frame: a tile of 512 points a side with its letter takes a good tenth
+    /// of a second, and drawn here it held up the frame light turned to dark
+    /// in — the change stood still before it began to fade.
     pub(in crate::gui) fn dress_the_icon(&mut self, ctx: &egui::Context) {
         let size = appicon::SIDE;
         if let Some(coming) = &self.icon_coming {
@@ -178,6 +213,13 @@ impl GuiApp {
             .ok();
     }
 
+    /// On Linux, keep up with GNOME's light-or-dark setting.
+    ///
+    /// The window system there does not tell a program which way round the
+    /// desktop is, so „systemfarben" would sit in the light for ever. GNOME
+    /// keeps it in one setting, and `gsettings monitor` says each time it
+    /// changes — one sleeping child process, started the first time the
+    /// scheme follows the system and not before.
     pub(in crate::gui) fn listen_to_the_desktop(&mut self, ctx: &egui::Context) {
         if !cfg!(target_os = "linux") {
             return;
@@ -231,6 +273,22 @@ impl GuiApp {
         });
     }
 
+    /// Tell the window frame which way round the window is.
+    ///
+    /// The bar with the three buttons and the program's name is drawn by the
+    /// operating system, not by this program, and it follows the window's own
+    /// appearance rather than anything painted inside it. A dark scheme under
+    /// a light title bar is the one seam in the window that cannot be painted
+    /// over, so the window itself gets told.
+    ///
+    /// „systemfarben" hands back `SystemDefault` rather than whichever colour
+    /// it happens to have resolved to, and that is not a shortcut: pinning the
+    /// window's appearance stops it following the system, and the system theme
+    /// this program reads is the *window's*. Pinning it would answer its own
+    /// question from then on, and a Mac switched to light in the evening would
+    /// leave the window sitting in the dark.
+    /// On Linux, the title bar on or off as `[ui] window_bar` asks: told to
+    /// the window when it changes, not every frame.
     pub(in crate::gui) fn dress_the_bar(&mut self, ctx: &egui::Context) {
         if !cfg!(target_os = "linux") {
             return;
@@ -252,12 +310,20 @@ impl GuiApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(wanted));
     }
 
+    /// From light to dark and back, and nothing else. Every scheme
+    /// has its other half, so this stays in the scheme; it leaves „system" for
+    /// the side that is not showing.
     pub fn toggle_light_dark(&mut self, ctx: &egui::Context) {
         let to = if self.resolved.palette().is_dark() { Brightness::Hell } else { Brightness::Dunkel };
         self.apply_theme(ctx, self.resolved, to);
         self.set_status(tr!("farben: {} · {}", crate::lang::t(self.theme.family()), crate::lang::t(to.name())));
     }
 
+    /// The next scheme in the menu's order, round again at the end, in the half
+    /// that is showing: light stays light and dark stays dark, so leafing
+    /// through is not a flicker between the two.
+    ///
+    /// `back` steps the other way, for `alt` + `shift` + `f`.
     pub fn next_scheme(&mut self, ctx: &egui::Context, back: bool) {
         let own = Theme::Eigenes.family();
         let families: Vec<Theme> =
@@ -270,11 +336,17 @@ impl GuiApp {
         self.set_status(tr!("farben: {}", crate::lang::t(next.family())));
     }
 
+    /// The whole screen and back. The operating system draws the change
+    /// and keeps the state; this only asks for the other one.
     pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!now));
     }
 
+    /// Draw the whole window at this size and keep it (menu → grösse, and
+    /// `cmd` + `+` `-` `0`).
+    ///
+    /// Not at once: behind a short dip to the ground — see [`ZoomDip`].
     pub fn set_zoom(&mut self, ctx: &egui::Context, zoom: f32) {
         let to = crate::gui::menu::zoom_of(zoom);
         let now = ctx.input(|i| i.time);
@@ -290,6 +362,7 @@ impl GuiApp {
         ctx.request_repaint();
     }
 
+    /// The size the window is at, or is about to be at.
     fn zoom_wanted(&self) -> f32 {
         match self.zoom_dip {
             Some(ZoomDip::Out { to, .. } | ZoomDip::Held { to }) => to,
@@ -297,6 +370,8 @@ impl GuiApp {
         }
     }
 
+    /// Run the dip a frame on, and say how much of the ground lies over the
+    /// window now, 0 to 1.
     pub fn zoom_dip(&mut self, ctx: &egui::Context) -> f32 {
         let Some(dip) = self.zoom_dip else {
             return 0.0;
@@ -335,6 +410,7 @@ impl GuiApp {
         over * over * (3.0 - 2.0 * over)
     }
 
+    /// A notch bigger or smaller, from the keyboard, and say where it is.
     pub fn zoom_by(&mut self, ctx: &egui::Context, by: i32) {
         let zoom = match by {
             0 => 1.0,
@@ -344,6 +420,13 @@ impl GuiApp {
         self.set_status(tr!("grösse: {} %", (zoom * 100.0).round() as i32));
     }
 
+    /// Switch one optional track column on or off.
+    /// The next typeface in the `fonts` folder, set at once: the faces are
+    /// read and handed to egui again, and the transport's marks are drawn
+    /// again out of the new face on the next frame.
+    ///
+    /// `back` steps the other way, for the long list the machine's own faces
+    /// make (⇧-click).
     pub fn next_typeface(&mut self, ctx: &egui::Context, back: bool) {
         let count = self.families.len();
         if count < 2 {
@@ -356,6 +439,9 @@ impl GuiApp {
         self.set_typeface(ctx, &next);
     }
 
+    /// Offer this machine's own typefaces in the menu too, or stop. Stopping
+    /// while one of them is set goes back to the one the window opens in, since
+    /// the list no longer holds it.
     pub fn set_system_fonts(&mut self, ctx: &egui::Context, on: bool) {
         self.config.ui.system_fonts = on;
         self.families = theme::all_families(self.config.ui.font_dir.as_deref(), on);
@@ -371,6 +457,10 @@ impl GuiApp {
         }
     }
 
+    /// Every setting of the menu back to how kessler first opens: the `[ui]`
+    /// table, but for the parts switched on under „allgemein" and where the
+    /// fonts are looked for. The music's folders, last.fm, the iPod and the
+    /// player stay.
     pub fn reset_settings(&mut self, ctx: &egui::Context) {
         let old = std::mem::take(&mut self.config.ui);
         let ui = &mut self.config.ui;
@@ -395,6 +485,7 @@ impl GuiApp {
         self.set_status(tr!("einstellungen zurückgesetzt"));
     }
 
+    /// Set the window in the family `key` names — see [`theme::the_typeface`].
     pub fn set_typeface(&mut self, ctx: &egui::Context, key: &str) {
         let Some(chosen) = theme::the_typeface(&self.families, key) else {
             return;
@@ -416,18 +507,24 @@ impl GuiApp {
         self.menu_heights = Default::default();
     }
 
+    /// Set the typeface this wide on its width axis, and keep it (menu →
+    /// darstellung → breite) — the faces installed again at the new width.
     pub fn set_font_width(&mut self, ctx: &egui::Context, width: f32) {
         self.config.ui.font_width = width;
         let key = self.config.ui.typeface.clone();
         self.set_typeface(ctx, &key);
     }
 
+    /// Set the regular this heavy on the weight axis, the bold with it, and
+    /// keep it (menu → schrift → gewicht).
     pub fn set_font_weight(&mut self, ctx: &egui::Context, weight: f32) {
         self.config.ui.font_weight = weight;
         let key = self.config.ui.typeface.clone();
         self.set_typeface(ctx, &key);
     }
 
+    /// The alternate forms the face in use offers — see
+    /// [`theme::style_sets`] — read from its file once per face.
     pub fn style_sets(&mut self) -> Vec<theme::StyleSet> {
         let Some(chosen) = theme::the_typeface(&self.families, &self.config.ui.typeface) else {
             return Vec::new();
@@ -439,6 +536,11 @@ impl GuiApp {
         self.sets_offered.as_ref().map(|(_, sets)| sets.clone()).unwrap_or_default()
     }
 
+    /// The face's alternate `tag` on or off (menu → schrift → alternativen),
+    /// and the faces installed again with it.
+    ///
+    /// Two alternates of the same character are one or the other, never both:
+    /// switching one on switches off the other.
     pub fn toggle_style_set(&mut self, ctx: &egui::Context, tag: &str) {
         let rivals = theme::rivals_of(&self.style_sets(), tag);
         let key = theme::face_key(&self.config.ui.typeface).to_string();
@@ -471,10 +573,22 @@ impl GuiApp {
         self.status = Some((message.into(), Instant::now(), STATUS_SECS));
     }
 
+    /// The same, for something that happened without anybody asking.
+    ///
+    /// A message about what you just did may go as soon as you have read it —
+    /// you knew what it would say. A scrobble is the other kind: it reports
+    /// something the program did on its own, at the bottom edge of a window
+    /// whose owner is looking at the middle, and four seconds is not enough to
+    /// catch it.
     pub fn set_notice(&mut self, message: impl Into<String>) {
         self.status = Some((message.into(), Instant::now(), NOTICE_SECS));
     }
 
+    /// Where the song on the air stands with last.fm, by the radio's own rule:
+    /// a song heard from its start counts once it has been heard thirty
+    /// seconds, when the next one comes or after four minutes; the one under
+    /// way when the station was tuned in, or one without an artist, never.
+    /// `None` while no station plays or nothing goes to last.fm from the radio.
     pub(in crate::gui) fn radio_scrobble_standing(&self) -> Option<OnAirScrobble> {
         if self.on_air.is_none() || !self.config.ui.radio_scrobble || self.scrobbler.is_none() {
             return None;
@@ -495,10 +609,22 @@ impl GuiApp {
         })
     }
 
+    /// Where the track being played stands with Last.fm, in words.
+    ///
+    /// The one thing the program did entirely out of sight: a scrobble is
+    /// earned four minutes in and reported for twelve seconds, which is a
+    /// report you see only by chance. Said as a standing line, the rule
+    /// explains itself — the figure counts down, and then it says it counted.
+    ///
+    /// Nothing at all without an account: a line about a service nobody signed
+    /// in to is noise, and the menu already says so where it belongs.
     pub fn scrobble_standing(&self) -> Option<String> {
         self.scrobble_said(false)
     }
 
+    /// The line itself, long or short. Paused, nothing: a count standing
+    /// still at the foot read as a clock gone wrong. It comes back, where it
+    /// stopped, when the music plays on.
     fn scrobble_said(&self, short: bool) -> Option<String> {
         use crate::lastfm::watch::Standing;
         let scrobbler = self.scrobbler.as_ref()?;
@@ -529,6 +655,8 @@ impl GuiApp {
         }
     }
 
+    /// The whole library in one line, for the foot of the compact window.
+    /// Nothing while it is empty.
     pub fn library_line(&self) -> Option<String> {
         if self.total_tracks == 0 || self.showing_radio() {
             return None;
@@ -544,10 +672,25 @@ impl GuiApp {
         Some(said.join(" · "))
     }
 
+    /// The same, short enough for the compact header line: the time left and
+    /// nothing else while a track is being listened to — „last.fm 2:10".
     pub fn scrobble_short(&self) -> Option<String> {
         self.scrobble_said(true)
     }
 
+    /// What the words in the search field found, for as long as they stand
+    /// there.
+    ///
+    /// The foot of the window is where this program says what is true right
+    /// now — last.fm, the device, a scan — and a search is exactly that kind
+    /// of fact: true while the words are in the field, gone when they are not.
+    /// So it is a standing line rather than news, and anything that just
+    /// happened still takes the line for its few seconds.
+    ///
+    /// All three figures, because the words are searched for in all three
+    /// columns at once and „47" alone would not say of what. A column that
+    /// found nothing is left out rather than printed as a nought: the line is
+    /// read at a glance, and three noughts to skip over is three too many.
     pub fn search_standing(&self) -> Option<String> {
         if self.showing_podcasts() {
             return None;
@@ -573,6 +716,8 @@ impl GuiApp {
         })
     }
 
+    /// How far the run through the artists has got, while it runs — for
+    /// the status line, where it stands until it is done.
     pub fn artist_hunt_standing(&self) -> Option<String> {
         let hunt = self.artist_hunt.as_ref()?;
         Some(tr!(
@@ -582,6 +727,9 @@ impl GuiApp {
         ))
     }
 
+    /// How far a copy to the iPod has got, while it runs — for the status
+    /// line, so it can be followed with the log lying over the iPod's
+    /// column.
     pub fn transfer_standing(&self) -> Option<String> {
         match self.transfer.as_ref().map(|t| &t.stage) {
             Some(crate::gui::Stage::Going { done, total, .. }) => Some(tr!(
@@ -593,6 +741,7 @@ impl GuiApp {
         }
     }
 
+    /// The status line, while it is still fresh.
     pub fn status(&self) -> Option<&str> {
         self.status.as_ref().and_then(|(msg, at, secs)| {
             (at.elapsed() < std::time::Duration::from_secs(*secs)).then_some(msg.as_str())
@@ -600,11 +749,17 @@ impl GuiApp {
     }
 }
 
+/// Where the song on the air stands with last.fm — see
+/// [`GuiApp::radio_scrobble_standing`]. How long „last.fm zählt" stands once a
+/// station's song has been heard long enough.
 const COUNTS_SAID_SECS: i64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::gui) enum OnAirScrobble {
+    /// Seconds still to hear before it counts.
     Listening(u64),
+    /// Heard long enough: it goes when the next song comes, or at four
+    /// minutes.
     Counts,
     Never,
 }

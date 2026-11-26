@@ -1,28 +1,49 @@
+//! The gaps in the library: who the library's artists keep naming as like them,
+//! and who is not in it.
+//!
+//! Not a recommendation from outside — it is counted from the library itself,
+//! from what is kept about each artist on disk (see [`super:artistinfo`]):
+//! somebody seven of them name is likelier a gap than somebody one of them
+//! does. Nothing is asked of the network here; the answers come from the artist
+//! column and from.
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::artistinfo::{self, plain};
 
+/// Somebody missing, and who of the library names them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gap {
+    /// As the first of them to name them spells it.
     pub name: String,
+    /// The library's artists naming them, the likest first, each with how like.
     pub by: Vec<(String, Option<f32>)>,
 }
 
+/// The gaps, and what they were counted from.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Gaps {
     pub gaps: Vec<Gap>,
+    /// The library's artists, all of them.
     pub artists: usize,
+    /// Of those, the ones whose similar artists are known at all.
     pub known: usize,
+    /// fills it in.
     pub unmeasured: usize,
 }
 
+/// One of the library's artists and whom they name, each with how like.
 pub type Named = (String, Vec<(String, Option<f32>)>);
 
+/// How many artists of the library have to name somebody before they count
+/// as a gap: one alone is that artist's taste, not the library's.
 pub const AT_LEAST: usize = 2;
 
+/// How many gaps are kept, the most named first.
 pub const KEPT: usize = 80;
 
+/// Count the gaps of a library of `artists`, from what is on disk in `dir`.
 pub fn find(dir: &Path, artists: &[String]) -> Gaps {
     let mut lists = Vec::new();
     let mut unmeasured = 0;
@@ -47,6 +68,9 @@ pub fn find(dir: &Path, artists: &[String]) -> Gaps {
     }
 }
 
+/// The counting itself: everyone named by at least [`AT_LEAST`] of the
+/// library and not in it, the most named first; among as many, the likest
+/// in sum, then by name.
 pub fn tally(lists: &[Named], artists: &[String]) -> Vec<Gap> {
     let here: HashSet<String> = artists.iter().map(|a| plain(a)).collect();
     let mut found: HashMap<String, Gap> = HashMap::new();
@@ -109,6 +133,8 @@ mod tests {
         );
     }
 
+    /// „The Cure" in the library is „Cure" named elsewhere, and an artist
+    /// naming the same one twice counts once.
     #[test]
     fn names_are_compared_plainly_and_counted_once() {
         let artists: Vec<String> = ["The Cure", "A", "B"].map(String::from).to_vec();

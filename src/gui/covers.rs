@@ -1,3 +1,12 @@
+//! The covers on the records' headings in the track list, and beside what
+//! is playing.
+//!
+//! Three things keep them cheap. The covers were shrunk to tiles once, during
+//! the scan, so nothing here decodes a two-thousand-pixel JPEG. Only what is
+//! on screen is ever turned into a texture, on a thread of its own, with a
+//! ceiling on the memory they may hold between them. And a long list costs
+//! the same as a short one.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
@@ -9,36 +18,84 @@ use super::dither::{self, Look};
 use super::theme::{Palette, Role, MARKER_RADIUS};
 use super::{text, GuiApp};
 
+/// How many covers may be asked of the reading thread in one frame, and how
+/// many may be waiting there at once.
+///
+/// Scrolling a long way lands on a screenful of tiles that have never been
+/// loaded. They are read, sized and screened on a thread of their own — on the
+/// window's, four a frame on a Retina screen held each frame up by a tenth of a
+/// second and the window stood still while the wall filled. Until a cover is
+/// there its tile is the blank one, and the covers arrive one by one.
 const LOADS_PER_FRAME: usize = 8;
 const WAITING_AT_MOST: usize = 24;
 
+/// How much memory the held covers may take between them, in bytes, and
+/// how few may be held whatever their size.
+///
+/// A ceiling on the bytes rather than on the count: a cover is grain × grain ×
+/// 4 bytes, and the grain follows the heading's size and the screen — ninety
+/// six covers were a few megabytes at the size the headings began at and a
+/// quarter of a gigabyte at the largest on a Retina screen. What is on screen
+/// is never let go of, so the floor only matters to a screenful of very big
+/// ones.
+///
+/// And a ceiling on the count as well: with the wall gone a screen shows ten or
+/// twenty headings, not hundreds of tiles, and covers of 48 points are so small
+/// that the bytes alone let well over a thousand pile up over an evening's
+/// browsing. A few screenfuls back are kept; further back is read again on the
+/// way there, off the window's thread.
 const TEXTURE_BYTES: usize = 48 * 1024 * 1024;
 const TEXTURES_AT_LEAST: usize = 16;
 const TEXTURES_AT_MOST: usize = 64;
 
+/// What is known about one album's cover.
 enum Slot {
     Ready(egui::TextureHandle),
+    /// Asked of the reading thread, not back yet.
     Waiting,
+    /// Looked for and not there. Remembered so it is not looked for again on
+    /// every frame of a scroll.
     Missing,
 }
 
+/// The covers currently held in video memory.
 pub struct CoverCache {
     dir: PathBuf,
+    /// Whether the held textures are halftones or the covers themselves, and
+    /// how coarse the halftone is. All three are different pictures, so
+    /// changing any of them throws the textures away — which costs the two
+    /// frames it takes to build a screenful again.
     dithered: bool,
     grain: u32,
     method: Look,
+    /// Screened from the negative, for a light ground — see
+    /// [`Palette::screens_negative`]. A different picture again.
     negative: bool,
     slots: HashMap<u64, Slot>,
+    /// Load order, for deciding what to let go of first.
     order: VecDeque<u64>,
+    /// Which covers this frame actually asked for; nothing visible is evicted.
     wanted: HashSet<u64>,
     budget: usize,
+    /// Set when a frame ran out of budget, so another is asked for.
     more_to_come: bool,
+    /// The reading thread, started at the first cover asked for, and what
+    /// comes back from it.
     reader: Option<std::sync::mpsc::Sender<Job>>,
     read: Option<std::sync::mpsc::Receiver<Read>>,
+    /// How many covers are with the reading thread.
     waiting: usize,
+    /// Covers read and not yet on the graphics card, and how many more may
+    /// go up this frame — see [`UPLOADS_PER_FRAME`].
     arrived: VecDeque<Read>,
     uploads: usize,
+    /// Counted up whenever what is held is thrown away, so a cover read for
+    /// the old dress is not taken for the new one.
     dressing: u64,
+    /// How many pixels a side a heading's cover takes on the screen. A
+    /// cover in its own colours is brought down to this before it goes to
+    /// the graphics card: kept at the four hundred of the tile, each was
+    /// 640 kb for a picture drawn a hundred pixels wide.
     fit: u32,
 }
 
@@ -65,10 +122,13 @@ impl CoverCache {
         }
     }
 
+    /// How many covers are with the reading thread — for the measurement.
     pub fn waiting(&self) -> usize {
         self.waiting
     }
 
+    /// Forget everything held. Used after a rescan, when covers that were
+    /// missing may now be there.
     pub fn clear(&mut self) {
         self.slots.clear();
         self.order.clear();
@@ -76,6 +136,8 @@ impl CoverCache {
         self.dressing += 1;
     }
 
+    /// Draw them this way from now on, throwing away what was built the other
+    /// way.
     fn dress(&mut self, dithered: bool, grain: u32, method: Look, negative: bool, fit: u32) {
         let refit = !dithered && self.fit != fit;
         self.fit = fit;
@@ -100,6 +162,7 @@ impl CoverCache {
         self.wanted.clear();
     }
 
+    /// Let go of the least recently loaded covers that are not on screen.
     fn trim(&mut self) {
         let side = if self.dithered { self.grain } else { self.fit };
         let each = (side.max(1) as usize).pow(2) * 4;
@@ -119,6 +182,7 @@ impl CoverCache {
         }
     }
 
+    /// The texture for one album, asking for it if there is budget left.
     fn texture(&mut self, ctx: &egui::Context, key: u64) -> Option<egui::TextureHandle> {
         self.receive(ctx);
         self.wanted.insert(key);
@@ -155,6 +219,7 @@ impl CoverCache {
         None
     }
 
+    /// The thread that reads covers, started the first time one is wanted.
     fn reader(&mut self) -> &std::sync::mpsc::Sender<Job> {
         if self.reader.is_none() {
             let (jobs, inbox) = std::sync::mpsc::channel::<Job>();
@@ -176,6 +241,7 @@ impl CoverCache {
         self.reader.as_ref().expect("just started")
     }
 
+    /// Take in what the reading thread has finished, as textures.
     fn receive(&mut self, ctx: &egui::Context) {
         let Some(read) = &self.read else {
             return;
@@ -210,8 +276,10 @@ impl CoverCache {
     }
 }
 
+/// How many covers go up to the graphics card in one frame, at most.
 const UPLOADS_PER_FRAME: usize = 4;
 
+/// One cover asked of the reading thread.
 struct Job {
     key: u64,
     path: PathBuf,
@@ -224,6 +292,7 @@ struct Job {
     ctx: egui::Context,
 }
 
+/// And what it sends back.
 struct Read {
     key: u64,
     dressing: u64,
@@ -231,6 +300,8 @@ struct Read {
     image: Option<egui::ColorImage>,
 }
 
+/// Read one cover off disk into something egui can upload — in its own
+/// colours no bigger than `fit` a side, where one is given.
 fn load(
     path: &std::path::Path,
     dithered: bool,
@@ -256,6 +327,17 @@ fn load(
     Some(screened(&decoded, grain, method, negative))
 }
 
+/// A cover as a pattern of dots and nothing else.
+///
+/// The cover is first reduced to the number of dots wanted, then every dot is
+/// decided by [`dither::screen`]. Reducing first is what makes the dots land
+/// on whole screen pixels; deciding second is what makes them dots.
+///
+/// They come out **white and opaque, the gaps transparent**, so the colour is
+/// not baked in: the tile tints it when it draws it. One texture per album,
+/// any colour, and a scheme on the same side of light and dark costs nothing.
+/// `negative` screens it from the negative, for a scheme whose ink is darker
+/// than its ground — see [`Palette::screens_negative`].
 pub(super) fn screened(
     source: &image::DynamicImage,
     grain: u32,
@@ -298,6 +380,7 @@ pub(super) fn screened(
     }
 }
 
+/// [`screened`], for a picture that is not square: `width` × `height` dots.
 pub(super) fn screened_wide(source: &image::DynamicImage, width: u32, height: u32, method: Look, negative: bool) -> egui::ColorImage {
     let (width, height) = (width.max(8), height.max(8));
     let mut grey = image::imageops::resize(&source.to_luma8(), width, height, image::imageops::FilterType::Triangle);
@@ -324,8 +407,13 @@ pub(super) fn screened_wide(source: &image::DynamicImage, width: u32, height: u3
     egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
 }
 
+/// The colour of the hairline round every picture, transparent for none —
+/// set once a frame from the config (see [`set_outline`]), as the pictures
+/// are painted from many places that do not all hold the config.
 static OUTLINE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// The hairline's colour for what `[ui] picture_outline` names, in this
+/// palette; transparent for "aus" and anything not known.
 pub fn outline_colour(name: &str, palette: &Palette) -> Color32 {
     match name {
         "zart" => palette.faint,
@@ -335,10 +423,14 @@ pub fn outline_colour(name: &str, palette: &Palette) -> Color32 {
     }
 }
 
+/// The colour for this frame's pictures' hairline.
 pub fn set_outline(colour: Color32) {
     OUTLINE.store(u32::from_le_bytes(colour.to_array()), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// A hairline round a picture, or the tile standing in for one: one pixel of
+/// the screen, inside its edge so it takes nothing from what stands beside
+/// it, on the picture's own rounded corner.
 fn outline(ui: &Ui, rect: Rect, corner: u8) {
     let [r, g, b, a] = OUTLINE.load(std::sync::atomic::Ordering::Relaxed).to_le_bytes();
     if a == 0 {
@@ -353,6 +445,10 @@ fn outline(ui: &Ui, rect: Rect, corner: u8) {
     );
 }
 
+/// A screened picture in `rect`: its dots in `ink`, and — in three tones —
+/// the second colour's under them, the two halves of its texture drawn one
+/// over the other (see [`screened`]); the hairline round it where one is
+/// asked for.
 pub(super) fn paint_screened(
     ui: &Ui,
     rect: Rect,
@@ -374,6 +470,13 @@ pub(super) fn paint_screened(
     outline(ui, rect, corner);
 }
 
+/// A grey picture brought to `side` × `side`, quickly: an average over the
+/// pixels each new one covers on the way down, a straight line between
+/// neighbours on the way up. `resize` with any of its filters took fifteen to
+/// twenty milliseconds a cover to go from four hundred to eight hundred on a
+/// Retina screen, four a frame, and the window stood still while the wall
+/// filled; this is a millisecond or two, and the dots that come of it are the
+/// same dots to the eye.
 fn sized(grey: &image::GrayImage, side: u32) -> image::GrayImage {
     let (width, height) = grey.dimensions();
     if width == 0 || height == 0 {
@@ -407,6 +510,10 @@ fn sized(grey: &image::GrayImage, side: u32) -> image::GrayImage {
     out
 }
 
+/// Get the cache ready for the album headings in the track list: covers at the
+/// heading's size, screened as every picture is (darstellung → bilder). The
+/// cache is theirs alone since the wall went — the two dressing it at two sizes
+/// on the same frame was what kept it loading for ever.
 pub fn dress_for_headings(app: &mut GuiApp, ctx: &egui::Context, size: f32) {
     let ui = &app.config.ui;
     let grain = dither::grain_for(size, ctx.pixels_per_point(), ui.picture_fineness());
@@ -418,6 +525,8 @@ pub fn dress_for_headings(app: &mut GuiApp, ctx: &egui::Context, size: f32) {
     app.cover_cache.begin_frame();
 }
 
+/// And when they are drawn: let go of what is not on screen, and ask for
+/// another frame if some covers had to wait for one.
 pub fn after_headings(app: &mut GuiApp, ctx: &egui::Context) {
     if app.cover_cache.more_to_come {
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -425,6 +534,9 @@ pub fn after_headings(app: &mut GuiApp, ctx: &egui::Context) {
     app.cover_cache.trim();
 }
 
+/// One album's cover in `rect`, for a heading in the track list: a halftone
+/// in the ink — in the accent while it is the record being heard, the way the
+/// wall marks it — or the cover itself; the blank tile when there is none.
 pub fn heading_cover(
     cache: &mut CoverCache,
     ui: &Ui,
@@ -454,6 +566,16 @@ pub fn heading_cover(
     }
 }
 
+/// The stand-in for an album with no cover.
+///
+/// Not a picture of a missing picture: the same tint the search field uses,
+/// with the album's initial in it. It says "nothing here" quietly, and a wall
+/// of them still reads as a grid rather than as damage.
+///
+/// And marked the way a cover is: the one you are on, or the one you are
+/// hearing, takes the accent. A halftone cover turns the accent by itself; a
+/// blank one has no dots to turn, and left in the field's grey it was the one
+/// tile on the wall that did not answer a click.
 pub(super) fn blank(ui: &Ui, rect: Rect, name: &str, palette: &Palette, lit: bool) {
     let (fill, letter) = blank_colours(palette, lit);
     ui.painter().rect_filled(rect, MARKER_RADIUS, fill);
@@ -466,10 +588,22 @@ pub(super) fn blank(ui: &Ui, rect: Rect, name: &str, palette: &Palette, lit: boo
     ui.painter().galley(at, galley, letter);
 }
 
+/// The square a halftone stands on.
+///
+/// The dots are where a cover is light, so a cover that is mostly dark — a
+/// black sleeve with a line drawing on it — came out as a few dots floating
+/// on the ground, with no edge to say where the record is. The field a blank
+/// tile stands on goes behind every halftone: a shade off the ground, enough
+/// to keep the square a square, not enough to become a frame. No line — the
+/// window has none to spare.
 pub(super) fn halftone_ground(ui: &Ui, rect: Rect, palette: &Palette) {
     ui.painter().rect_filled(rect, MARKER_RADIUS, palette.field);
 }
 
+/// The fill and the letter of a blank tile. Marked, it is the accent laid
+/// over the field rather than the accent itself: a solid square of it would
+/// be the loudest thing on the wall, louder than a halftone in the same
+/// colour, whose gaps let the ground through.
 fn blank_colours(palette: &Palette, lit: bool) -> (Color32, Color32) {
     if lit {
         (palette.field.lerp_to_gamma(palette.lit_dots(), 0.55), palette.ground)
@@ -482,6 +616,8 @@ fn blank_colours(palette: &Palette, lit: bool) -> (Color32, Color32) {
 mod tests {
     use super::*;
 
+    /// Up and down, the picture keeps its shape: a light left half stays a
+    /// light left half, and nothing comes out of the edges.
     #[test]
     fn a_cover_is_sized_up_and_down_without_losing_its_shape() {
         let half = image::GrayImage::from_fn(400, 400, |x, _| image::Luma([if x < 200 { 255 } else { 0 }]));
@@ -496,6 +632,8 @@ mod tests {
         }
     }
 
+    /// A blank tile answers a click the way a cover does: marked, it takes
+    /// the accent, and its letter stays readable on it.
     #[test]
     fn a_blank_tile_is_marked_too() {
         let palette = crate::gui::theme::Theme::MacosDunkel.palette();
@@ -506,6 +644,9 @@ mod tests {
         assert_ne!(letter, lit);
     }
 
+    /// One dot per point at the middle of the slider — the size that makes
+    /// the pattern land on whole screen pixels instead of beating against
+    /// them. The rest of the slider's behaviour is tested where it lives.
     #[test]
     fn the_grain_follows_the_tile() {
         assert_eq!(dither::grain_for(168.0, 2.0, 0.5), 168);
@@ -515,6 +656,10 @@ mod tests {
         assert_eq!(dither::grain_for(171.0, 2.0, 0.5), 168);
     }
 
+    /// A cover that is mostly light keeps being mostly light on a light
+    /// ground: its dots — dark ink there — go where the picture is dark, so
+    /// few of them. On a dark ground the same cover is mostly dots, light
+    /// ink where it is light.
     #[test]
     fn a_light_cover_stays_light_on_a_light_ground() {
         let light = image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(64, 64, image::Luma([220])));

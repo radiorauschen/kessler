@@ -1,9 +1,35 @@
+//! Taking new files into the library.
+//!
+//! What happens when music is dropped on the window or picked in the menu:
+//! the files are read, filed under `künstler:in/album/nn titel.ext` in the music
+//! folder, and read into the library the same way a scan would read them.
+//!
+//! The rules that matter, and the reasons:
+//!
+//! * **Copying, not moving, unless asked.** A drop from a download folder that
+//!   empties the download folder is a surprise, and surprises about somebody
+//!   else's files are the expensive kind.
+//! * **Nothing is ever overwritten.** A name already taken gets a number; a
+//!   file that is byte-for-byte the one already there is not filed twice.
+//! * **The tag decides where it goes**, not the folder it came from. That is
+//!   the whole point of filing it: what arrives as `01.mp3` in `New folder (2)`
+//!   comes out under its own name.
+
 use std::path::{Path, PathBuf};
 
 use super::{metadata, scanner};
 use crate::db::models::Track;
 use crate::db::Database;
 
+/// Music among these paths that Kessler cannot play, counted per format.
+///
+/// Dropping an album of AAC files on the window and watching nothing happen is
+/// the same question as "why does another player list more tracks?", asked at
+/// a different moment. It deserves the same answer: a number and a format,
+/// not silence.
+///
+/// Walked separately from [`gather`] and only when there is something to
+/// explain, so the ordinary case pays nothing for it.
 pub fn passed_over(paths: &[PathBuf]) -> Vec<(String, u32)> {
     let mut counted: Vec<(String, u32)> = Vec::new();
 
@@ -36,14 +62,24 @@ pub fn passed_over(paths: &[PathBuf]) -> Vec<(String, u32)> {
     counted
 }
 
+/// What came of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Outcome {
+    /// Filed and read in.
     pub added: u32,
+    /// Already there, untouched.
     pub already: u32,
+    /// Could not be read or could not be copied, with the reason.
     pub failed: Vec<(PathBuf, String)>,
+    /// How many of them Music.app was told about, when it was asked to be.
     pub handed: u32,
 }
 
+/// Every audio file under these paths — the files themselves, and everything
+/// inside any folder among them.
+///
+/// Sorted, so a dropped album arrives in its own order and the numbers in the
+/// status line mean the same thing twice running.
 pub fn gather(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for path in paths {
@@ -67,6 +103,14 @@ pub fn gather(paths: &[PathBuf]) -> Vec<PathBuf> {
     found
 }
 
+/// One name, made fit to be a file name.
+///
+/// A slash would make a folder, a colon is trouble on a Mac for historical
+/// reasons that have outlived the Mac that had them, and a quotation mark
+/// would have to be escaped every time the path is handed to something else.
+/// Everything else a tag can hold — accents, brackets, kanji — is kept: this
+/// is a name, and mangling it into ASCII would be the second-worst thing to do
+/// to somebody's library.
 pub fn tidy(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -81,6 +125,7 @@ pub fn tidy(name: &str) -> String {
     cleaned.chars().take(90).collect::<String>().trim().to_string()
 }
 
+/// Where one track belongs.
 pub fn destination(root: &Path, track: &Track, source: &Path) -> PathBuf {
     let artist = or_else(tidy(crate::db::grouping_artist(track)), "unbekannt");
     let album = or_else(tidy(&track.album), "unbekanntes album");
@@ -112,6 +157,11 @@ fn or_else(value: String, fallback: &str) -> String {
     }
 }
 
+/// The same path, or the next free spelling of it.
+///
+/// Two different recordings of the same song on the same record is a thing
+/// that happens; overwriting the first with the second is not something a
+/// program should do about it.
 pub fn free(wanted: &Path) -> PathBuf {
     if !wanted.exists() {
         return wanted.to_path_buf();
@@ -131,6 +181,11 @@ pub fn free(wanted: &Path) -> PathBuf {
     wanted.to_path_buf()
 }
 
+/// Whether the file already sitting there is the one being offered.
+///
+/// Size alone, deliberately. Hashing every file of a dropped folder to catch
+/// the rare pair of same-named, same-sized, different tracks would cost more
+/// than the mistake does — and the mistake is a second copy, not a lost one.
 fn already_there(target: &Path, source: &Path) -> bool {
     match (std::fs::metadata(target), std::fs::metadata(source)) {
         (Ok(there), Ok(offered)) => there.len() == offered.len(),
@@ -138,6 +193,15 @@ fn already_there(target: &Path, source: &Path) -> bool {
     }
 }
 
+/// Where a file filed as `artist/album/file` belongs once its tags say
+/// something else — `None` when it is not filed that way, or need not move.
+///
+/// Only a file whose two folders are named for its old artist and album (any
+/// capitals) is taken to be filed, and only inside one of `roots`, the music
+/// folders: anything somebody arranged by hand is left exactly where it is. The
+/// file's own name follows the new title and number only if it was the name
+/// kessler would have given it; a name of the file's own — an iTunes `1-02 …` —
+/// is kept.
 pub fn refiled(roots: &[PathBuf], before: &Track, after: &Track) -> Option<PathBuf> {
     let path = &before.path;
     let file = path.file_name()?;
@@ -172,6 +236,15 @@ pub fn refiled(roots: &[PathBuf], before: &Track, after: &Track) -> Option<PathB
     Some(free(&new))
 }
 
+/// Move a file to where [`refiled`] says, and take away the folders it
+/// leaves empty — the album's, then the artist's, never more. A folder
+/// holding nothing but the Finder's `.DS_Store` counts as empty. Returns
+/// where the file landed.
+///
+/// The free name is found again here, at the moment of moving: the tag window
+/// plans every move of a batch before it makes one, and two discs joined into
+/// one record both planned their `01 Intro` for the same free spot — the second
+/// rename replaced the first file (folder check).
 pub fn move_filed(from: &Path, to: &Path) -> std::io::Result<PathBuf> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
@@ -197,12 +270,18 @@ pub fn move_filed(from: &Path, to: &Path) -> std::io::Result<PathBuf> {
     Ok(to)
 }
 
+/// How far along the filing is.
 #[derive(Debug, Clone, Copy)]
 pub struct Progress {
     pub done: u32,
     pub total: u32,
 }
 
+/// File a set of audio files into the library and read them in.
+///
+/// `moving` takes the originals away rather than copying them. `to_music`
+/// hands each new file to Music.app as well, which is a macOS idea and does
+/// nothing anywhere else.
 pub fn take(
     sources: &[PathBuf],
     root: &Path,
@@ -273,6 +352,11 @@ pub fn take(
     outcome
 }
 
+/// Copy or move one file.
+///
+/// A move across two disks is not a rename, and the rename is the one that
+/// fails — so the fallback is the copy it should have been, and the original
+/// only goes once the copy is there.
 fn place(source: &Path, target: &Path, moving: bool) -> std::result::Result<(), String> {
     if moving && std::fs::rename(source, target).is_ok() {
         return Ok(());
@@ -284,9 +368,21 @@ fn place(source: &Path, target: &Path, moving: bool) -> std::result::Result<(), 
     Ok(())
 }
 
+/// How many files go to Music.app in one script.
+///
+/// A whole record in one breath, a dropped folder of two hundred in a handful
+/// — rather than one call each, which would be one launch of `osascript` per
+/// track and, the first time, Music opening itself again for every one of
+/// them. Not unbounded either: the list travels as an argument, and an
+/// argument has a size.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const PER_SCRIPT: usize = 100;
 
+/// What is said to Music.app about one batch of files.
+///
+/// `add` takes a list, and the list is what makes this one conversation
+/// instead of two hundred. Written apart from the running of it so it can be
+/// read and tested here; the running needs a Mac.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn music_script(paths: &[PathBuf]) -> String {
     let files: Vec<String> = paths
@@ -297,6 +393,17 @@ fn music_script(paths: &[PathBuf]) -> String {
     format!("tell application \"Music\" to add {{{}}}", files.join(", "))
 }
 
+/// Hand the files that were just filed to Music.app as well.
+///
+/// The way that is actually sanctioned: Music's own database is undocumented
+/// and writing to it is how a library gets broken. With "copy files to the
+/// Music Media folder" switched off in Music, this leaves each file where it
+/// is and adds a reference to it — one file, two libraries. With that setting
+/// on, Music makes its own copy, and the same music is then on the disk twice.
+///
+/// Returns how many files went. Nothing is retried and nothing is undone: this
+/// is an offer to another program, not a part of filing, and a Music that is
+/// not there must not turn a copied record into an error.
 #[cfg(target_os = "macos")]
 pub fn hand_to_music(paths: &[PathBuf]) -> u32 {
     let mut handed = 0;
@@ -319,6 +426,14 @@ pub fn hand_to_music(_paths: &[PathBuf]) -> u32 {
     0
 }
 
+/// Asks Music.app which of its tracks these files are: one answer per file,
+/// in order, its persistent ID or nothing. Each is looked for by its title —
+/// Music's own search — and then known by its file, so two songs of the same
+/// name are never mixed up. `launch` lets Music be started to be asked;
+/// without it, a Music that is not running is left alone and knows nothing.
+///
+/// Asked before the files move: a moved file is one Music can no longer say
+/// where it is, and so no longer one it can be found by.
 #[cfg(target_os = "macos")]
 pub fn music_tracks(files: &[(String, PathBuf)], launch: bool) -> Vec<Option<String>> {
     let mut args: Vec<String> = vec![if launch { "1" } else { "0" }.to_string()];
@@ -348,6 +463,10 @@ pub fn music_tracks(files: &[(String, PathBuf)], _launch: bool) -> Vec<Option<St
     vec![None; files.len()]
 }
 
+/// Tell Music.app about files whose tags kessler has written: each by its
+/// persistent ID, with the file's new place where it moved. Music is pointed
+/// there, and then reads the file's tags again (its `refresh`). Returns how
+/// many it took.
 #[cfg(target_os = "macos")]
 pub fn tell_music(tracks: &[(String, Option<PathBuf>)]) -> u32 {
     if tracks.is_empty() {
@@ -374,6 +493,10 @@ pub fn tell_music(_tracks: &[(String, Option<PathBuf>)]) -> u32 {
     0
 }
 
+/// The script behind [`music_tracks`]. Titles and paths come in as
+/// arguments rather than written into the script, so no title can be read as
+/// a command. Text comparison in AppleScript ignores case, as the Mac's disk
+/// does.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MUSIC_FIND: &str = r#"on run argv
     set launch to item 1 of argv
@@ -402,6 +525,9 @@ const MUSIC_FIND: &str = r#"on run argv
     return found as text
 end run"#;
 
+/// The script behind [`tell_music`]: each track found by its persistent ID,
+/// given its file's new place when there is one, and refreshed. Prints how
+/// many took.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MUSIC_MOVE: &str = r#"on run argv
     set done to 0
@@ -422,6 +548,7 @@ const MUSIC_MOVE: &str = r#"on run argv
     return done as text
 end run"#;
 
+/// Whether handing files to another program is a thing here at all.
 pub fn music_app_available() -> bool {
     cfg!(target_os = "macos")
 }
@@ -464,6 +591,8 @@ mod refiling_tests {
         crate::library::one_name_for(&dir)
     }
 
+    /// The case: the artist renamed, the file moves to the folder of the
+    /// new name, and the old folders, now empty, go.
     #[test]
     fn a_renamed_artist_takes_the_file_to_its_new_folder() {
         let root = scratch("artist");
@@ -482,6 +611,8 @@ mod refiling_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A file name of its own — iTunes' `1-01` — is kept; a new title
+    /// renames only a file kessler named.
     #[test]
     fn a_name_of_the_files_own_is_kept() {
         let root = scratch("own");
@@ -503,6 +634,10 @@ mod refiling_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Two discs made one record: both have an `01 Intro`, and the tag window
+    /// plans every move before it makes any. Both files survive, the second
+    /// under the next free name — a rename onto a file that is there replaces
+    /// it without a word.
     #[test]
     fn two_files_planned_for_one_name_both_survive() {
         let root = scratch("merge");
@@ -533,6 +668,8 @@ mod refiling_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Folders somebody named themselves, and anything outside the music
+    /// folders, stay as they are.
     #[test]
     fn what_kessler_did_not_file_stays_put() {
         let root = scratch("put");
@@ -559,6 +696,12 @@ mod refiling_tests {
 mod tests {
     use super::*;
 
+    /// What Music.app is told, and how often it is told anything.
+    ///
+    /// One script for a hundred files rather than a hundred scripts: on the
+    /// first drop of a record that is the difference between Music opening
+    /// once and Music opening twelve times. The list form is `add {a, b}`,
+    /// which is what the dictionary means by a list of files.
     #[test]
     fn music_is_told_about_the_lot_at_once() {
         let files = vec![
@@ -577,6 +720,11 @@ mod tests {
         assert_eq!(many.chunks(PER_SCRIPT).count(), 2);
     }
 
+    /// A path that could break out of the AppleScript string is dropped, not
+    /// passed on. `tidy` already takes both characters out of every name the
+    /// import writes; this is the second lock on a door that is already shut,
+    /// because the cost of being wrong here is somebody else's program running
+    /// a line that came out of a file name.
     #[test]
     fn a_name_that_could_carry_a_command_does_not_go() {
         let sneaky = PathBuf::from("/m/a\" & (do shell script \"rm -rf ~\") & \".mp3");
@@ -619,6 +767,8 @@ mod tests {
         }
     }
 
+    /// What filing a track is for: it arrives as `01.mp3` in a folder called
+    /// something else entirely, and comes out under its own name.
     #[test]
     fn a_track_is_filed_under_what_it_says_it_is() {
         let root = Path::new("/music");
@@ -634,6 +784,13 @@ mod tests {
         );
     }
 
+    /// The record that showed every track twice, filed the right way.
+    ///
+    /// The tag says CAVE and the shelf already says Cave. On a Mac the file
+    /// lands in the folder that is there whatever the library writes down, so
+    /// what the library writes down had better be the same thing. Here it is
+    /// checked on any system, because the spelling is settled by asking the
+    /// folder rather than by the filesystem being forgiving.
     #[test]
     fn a_record_is_filed_under_the_folder_that_is_already_there() {
         let root = scratch("cave");
@@ -655,6 +812,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A slash in a title would quietly make a folder out of half of it.
     #[test]
     fn a_name_never_becomes_a_folder() {
         assert_eq!(tidy("AC/DC"), "AC DC");
@@ -667,6 +825,7 @@ mod tests {
         assert_eq!(tidy("Mjölnir (Röyksopp Mix)"), "Mjölnir (Röyksopp Mix)");
     }
 
+    /// A tag with nothing in it still has to land somewhere findable.
     #[test]
     fn a_file_with_no_tags_keeps_its_own_name() {
         let at = destination(
@@ -680,6 +839,8 @@ mod tests {
         );
     }
 
+    /// The album artist is what files a compilation under one name instead of
+    /// twelve.
     #[test]
     fn a_compilation_is_filed_under_its_album_artist() {
         let mut t = track("bob james", "various", "nautilus", Some(3));
@@ -691,6 +852,7 @@ mod tests {
         );
     }
 
+    /// Nothing is ever overwritten.
     #[test]
     fn a_taken_name_gets_a_number() {
         let dir = scratch("free");
@@ -706,6 +868,7 @@ mod tests {
         assert_eq!(std::fs::read(&wanted).unwrap(), b"first");
     }
 
+    /// Dropping the same folder twice must not double the library.
     #[test]
     fn the_same_file_twice_is_recognised() {
         let dir = scratch("same");
@@ -720,6 +883,8 @@ mod tests {
         assert!(!already_there(&dir.join("nothing.mp3"), &offered));
     }
 
+    /// A folder dropped on the window is everything inside it, in order, and
+    /// nothing that is not music.
     #[test]
     fn a_dropped_folder_is_its_music() {
         let dir = scratch("gather");
@@ -742,6 +907,8 @@ mod tests {
         assert_eq!(gather(std::slice::from_ref(&loose)).len(), 1);
     }
 
+    /// The whole thing, once, for real: two tagged files go in, and the
+    /// library comes out with them filed and known.
     #[test]
     fn music_is_filed_and_read_in() {
         use crate::library::fixtures;
@@ -810,6 +977,10 @@ mod tests {
         assert_eq!(again.already, 2);
     }
 
+    /// Moved in, in a different capital and the other way of writing an umlaut
+    /// than the folders already there, then the music folder read again: every
+    /// file once on the disk and once in the library, in the folders that were
+    /// there, and the inbox empty (folder check).
     #[test]
     fn moved_in_and_read_again_every_file_is_there_once() {
         use crate::library::fixtures;
@@ -854,6 +1025,7 @@ mod tests {
         assert_eq!(gather(std::slice::from_ref(&inbox)).len(), 0, "moving left a file behind");
     }
 
+    /// Copying leaves the original where it was; moving does not.
     #[test]
     fn copying_and_moving_are_what_they_say() {
         let dir = scratch("place");

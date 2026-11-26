@@ -1,15 +1,46 @@
+//! The screen saver: the vectorscope, as big as the window allows.
+//!
+//! The field's scope is seven small figures side by side, one for each
+//! register; the menu's is the same music as one figure, every register nested
+//! inside the others. This is that one figure again, filling the window,
+//! screened into dots in the accent on the ground — and with the room a window
+//! has, it can afford what the field cannot: more waves of every note, so a
+//! steady one lays its rings on each other and a moving one fans them out, and
+//! a longer afterglow, so the last seconds hang in the dark as ghosts.
+//!
+//! It comes after so long without a key, a click, a movement or a turn of
+//! the wheel, and the touch that ends it is used up doing so: the click that
+//! wakes the window does not also start a record, the key does not also
+//! skip one. Somebody half way through typing, or with a transfer running,
+//! is somebody who is there — it never comes over either.
+//!
+//! While nothing plays, the still figure the icon is made of stands in the
+//! middle instead, and under it — as under the music — what is playing, or what
+//! was. Unless it is to come without music too: then it makes up vibrations of
+//! its own and draws those, and nothing is played — they are numbers handed to
+//! the scope, never sound.
+
 use eframe::egui::{self, Color32, Rect, Sense, Vec2};
 
 use super::scope::{Scope, Tuning};
 use super::theme::{Palette, Role};
 use super::{text, GuiApp};
 
+/// How long it takes to come up, in seconds. Slowly: a picture that snaps
+/// on is an alarm, one that rises is a mood.
 const RISE: f64 = 2.5;
 
+/// How long after it is shown on purpose — „jetzt zeigen" in the menu — a
+/// movement of the pointer does not count: the hand is still on its way
+/// away from the menu.
 const GRACE: f64 = 1.5;
 
+/// How big the figure is, as a share of the window's shorter side — the
+/// menu's „klein", „mittel", „gross" — and, last, „fenster": as big as the
+/// window's longer side, so the figure runs off every edge and fills it.
 pub const SIZES: [f32; 4] = [0.5, 0.7, 0.86, 0.0];
 
+/// The side of the figure's square for size `size` in `window`.
 fn figure_side(window: Rect, size: u8) -> f32 {
     match SIZES.get(usize::from(size)).copied().unwrap_or(SIZES[2]) {
         share if share > 0.0 => window.width().min(window.height()) * share,
@@ -17,39 +48,67 @@ fn figure_side(window: Rect, size: u8) -> f32 {
     }
 }
 
+/// The waiting times the menu offers, in minutes, „aus" first.
 pub const AFTER: [u32; 4] = [0, 1, 5, 20];
 
+/// The sizes of dot it offers, in device pixels: one is the finest the
+/// screen has, three reads as a print from across the room.
 pub const DOTS: [u8; 3] = [1, 2, 3];
 
+/// The afterglows it offers: how much of its light a stroke keeps for each
+/// thirtieth of a second. The field keeps half; here even the shortest
+/// lingers longer, because there is room for it to.
 pub const GLOWS: [f32; 3] = [0.55, 0.7, 0.82];
 
+/// How strong the brighter part of the figure is drawn, as the exposure
+/// that part is brought to: `1 - e^-s` of full ink — about 55 %, 75 % and
+/// 90 %. „zart", „mittel", „kräftig" in the menu.
 pub const STRENGTHS: [f32; 3] = [0.8, 1.4, 2.3];
 
+/// Which lit pixels count as the brighter part: the ones above nine in ten.
 const BRIGHT_SHARE: f32 = 0.9;
 
+/// How long a frame stands while the window is looked at, in milliseconds.
 const STEP: u64 = 16;
 
+/// How much of the way to the wanted exposure it goes each thirtieth of a
+/// second — most of the way in a second.
 const EXPOSURE_EASE: f32 = 0.08;
 
+/// The exposure is kept between these, so a near-silent stretch is not
+/// blown up into noise and a wall of sound is not crushed to nothing.
 const EXPOSURE_LEAST: f32 = 0.5;
 const EXPOSURE_MOST: f32 = 400.0;
 
+/// What the saver remembers between frames.
 #[derive(Default)]
 pub struct Saver {
+    /// Whether it is showing.
     pub on: bool,
+    /// When somebody last touched anything, in egui's seconds.
     touched_at: f64,
+    /// When it came up.
     since: f64,
+    /// Until when a movement of the pointer does not end it.
     grace_until: f64,
     scope: Option<Scope>,
     picture: Option<egui::TextureHandle>,
+    /// The exposure it is drawn at, following the music — see [`figure`].
     exposure: f32,
+    /// Brought up by hand from the menu, which it may be with nothing
+    /// playing; otherwise it comes only with the music, and goes with it.
     by_hand: bool,
+    /// The search field's quiet pictures as the saver draws them, with a scope
+    /// of their own — see [`art`].
     art: Option<super::library::FieldArt>,
     art_scope: Scope,
+    /// The drawings as the saver last made them, each at the size it was
+    /// drawn at — see [`drawings`].
     drawn: Vec<Option<([usize; 2], egui::TextureHandle)>>,
 }
 
 impl Saver {
+    /// Show it now, for the menu's „jetzt zeigen".
     pub fn show_now(&mut self, now: f64) {
         self.on = true;
         self.by_hand = true;
@@ -58,6 +117,7 @@ impl Saver {
     }
 }
 
+/// The tuning for a given afterglow.
 fn tuning(glow: f32) -> Tuning {
     Tuning {
         waves: 5.0,
@@ -66,6 +126,9 @@ fn tuning(glow: f32) -> Tuning {
     }
 }
 
+/// Once a frame, before the keys are read: whether anybody is there, and so
+/// whether the saver comes up, stays or goes. The touch that ends it is taken
+/// out of the frame's input so nothing else acts on it.
 pub fn watch(app: &mut GuiApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let (touched, moved) = ctx.input(|i| {
@@ -129,6 +192,7 @@ pub fn watch(app: &mut GuiApp, ctx: &egui::Context) {
     }
 }
 
+/// Draw it over everything, when it is on. Called last.
 pub fn draw(app: &mut GuiApp, ctx: &egui::Context, palette: &Palette) {
     if !app.saver.on {
         app.saver.picture = None;
@@ -203,17 +267,25 @@ pub fn draw(app: &mut GuiApp, ctx: &egui::Context, palette: &Palette) {
     ctx.request_repaint_after(step);
 }
 
+/// What colour the dots are, at one moment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Colouring {
+    /// One colour for every dot.
     Plain(Color32),
+    /// From `from` on one side of the figure to `to` on the other, along
+    /// the direction `angle` points (radians).
     Across { from: Color32, to: Color32, angle: f32 },
 }
 
+/// How long the wandering colour takes from one of the scheme's colours to
+/// the next, in seconds: slow enough to be noticed only on looking again.
 const WANDER_SECS: f64 = 12.0;
 
+/// How long the gradient takes to turn once round, in seconds.
 const TURN_SECS: f64 = 90.0;
 
 impl Colouring {
+    /// For the setting `saver_colours`, `t` seconds after the saver came.
     fn of(setting: u8, palette: &Palette, t: f64) -> Self {
         let colours = scheme_colours(palette);
         match setting {
@@ -227,6 +299,7 @@ impl Colouring {
         }
     }
 
+    /// The colour of the dot at `x`, `y` of a square `side` across.
     fn at(self, x: usize, y: usize, side: usize) -> Color32 {
         match self {
             Self::Plain(colour) => colour,
@@ -241,6 +314,11 @@ impl Colouring {
     }
 }
 
+/// The scheme's own colours that read on its ground: the accent first, then
+/// the ink, the receded accent, the middle tone and a halftone's own colour
+/// where it has one. Those too close to the ground — the faint tone, the
+/// marker — would be dots nobody sees, and are left out; so is a colour the
+/// list has already, which would only make the wander stand still.
 fn scheme_colours(palette: &Palette) -> Vec<Color32> {
     let mut colours: Vec<Color32> = Vec::new();
     let candidates = [Some(palette.accent), Some(palette.ink), Some(palette.accent_faint), Some(palette.mid), palette.lit_dots];
@@ -259,6 +337,8 @@ fn scheme_colours(palette: &Palette) -> Vec<Color32> {
     colours
 }
 
+/// The colour `t` seconds into the wander round `colours`: each held a moment
+/// and eased into the next.
 fn wandering(colours: &[Color32], t: f64) -> Color32 {
     let n = colours.len();
     let step = (t.max(0.0) / WANDER_SECS) as usize;
@@ -269,6 +349,8 @@ fn wandering(colours: &[Color32], t: f64) -> Color32 {
     from.lerp_to_gamma(to, f * f * (3.0 - 2.0 * f))
 }
 
+/// The music — or the made-up vibrations — as one figure in `square`,
+/// screened, coloured as `colouring` says and faded by `ink`.
 fn figure(
     app: &mut GuiApp,
     ui: &egui::Ui,
@@ -327,25 +409,43 @@ fn figure(
     );
 }
 
+/// How many made-up frames make a second, as a sound card's would.
 const VIBRATION_RATE: u32 = 44_100;
 
+/// How many of them the scope is handed each time: as many as the tap keeps
+/// of the music.
 const VIBRATION_FRAMES: usize = 2048;
 
+/// One made-up voice: a pitch that wanders a little, a right channel a
+/// turning phase away from the left, and a slow breath in and out.
 struct Voice {
     hz: f64,
+    /// How far the pitch wanders, as a share of it, and over how long.
     wander: f64,
     wander_secs: f64,
+    /// How long the right channel takes to turn once round against the
+    /// left: a line, an ellipse, a ring, an ellipse the other way.
     turn_secs: f64,
+    /// How long it takes to come and go, and where in that it starts.
     breath_secs: f64,
     breath_at: f64,
 }
 
+/// Three voices, two registers apart so each rings in its own and hardly
+/// in its neighbours' — closer, and every register filled with the others'
+/// leftovers, which the scope draws as a tangle. Each breathes at its own
+/// pace, and the paces share no factor worth the name, so the rings they
+/// make together do not come round again in any afternoon.
 const VOICES: [Voice; 3] = [
     Voice { hz: 58.0, wander: 0.004, wander_secs: 29.0, turn_secs: 17.0, breath_secs: 41.0, breath_at: 0.2 },
     Voice { hz: 262.0, wander: 0.004, wander_secs: 37.0, turn_secs: 11.0, breath_secs: 29.0, breath_at: 0.55 },
     Voice { hz: 1245.0, wander: 0.004, wander_secs: 43.0, turn_secs: 23.0, breath_secs: 37.0, breath_at: 0.9 },
 ];
 
+/// The made-up vibrations, the last [`VIBRATION_FRAMES`] of them up to `t`
+/// seconds in, as left and right. Worked out afresh from `t` each time —
+/// every pitch has a phase that can be written down for any moment — so
+/// there is nothing to keep between frames and nothing to drift.
 fn vibrations(t: f64) -> Vec<[f32; 2]> {
     use std::f64::consts::TAU;
     let start = t - VIBRATION_FRAMES as f64 / f64::from(VIBRATION_RATE);
@@ -369,13 +469,17 @@ fn vibrations(t: f64) -> Vec<[f32; 2]> {
         .collect()
 }
 
+/// The exposure that brings the brighter part of what is lit to `strength`.
 fn wanted_exposure(scope: &Scope, strength: f32) -> Option<f32> {
     let bright = scope.bright(BRIGHT_SHARE)?;
     Some((strength / bright.max(1e-4)).clamp(EXPOSURE_LEAST, EXPOSURE_MOST))
 }
 
+/// What the saver shows, by the names `[ui] saver_picture` uses: the
+/// vectorscope, the search field's quiet pictures, or the words of the song.
 pub const PICTURES: [&str; 9] = ["vektorskop", "schlange", "mandelbrot", "leben", "kugel", "zarathustra", "kessler saga", WORDS, DRAWINGS];
 
+/// What the menu says for the saver's picture `name`.
 pub fn said(name: &str) -> &'static str {
     if name == DRAWINGS {
         tr!("release note drawings")
@@ -386,10 +490,18 @@ pub fn said(name: &str) -> &'static str {
     }
 }
 
+/// How many rows of cells the quiet pictures are, filling the window: three
+/// times the search field's, so a cell is about a fiftieth of the height.
 const ART_ROWS: usize = 48;
 
+/// How many texels a cell is across: enough for the scope to be drawn finer
+/// than the cells it is then laid into, and for the snake's gaps.
 const ART_TEXELS: usize = 4;
 
+/// One of the search field's quiet pictures, filling the window in coarse cells
+/// in the accent: the same snake, life, zoom, ball or coarse scope, moving on
+/// the same ticks — a quarter of a second, a second on the air — and drawn only
+/// on them. Returns how long until the next tick.
 fn art(
     app: &mut GuiApp,
     ui: &egui::Ui,
@@ -436,12 +548,25 @@ fn art(
 }
 pub const WORDS: &str = "liedtext";
 
+/// How big the words are, as a share of the window's height, for each of
+/// the menu's sizes. Every line the same size, and the same weight: the line
+/// being sung is told only by its colour, so nothing grows, shrinks or moves
+/// and the words draw only when a line begins.
 const WORD_SIZES: [f32; 4] = [0.05, 0.07, 0.1, 0.14];
 
+/// How often it draws while it comes up, in milliseconds — the only time
+/// the words are drawn more than once a line.
 const RISE_STEP: u64 = 33;
 
+/// How many lines stand above and below the one being sung.
 const LINES_ABOUT: usize = 4;
 
+/// The words of the song playing, filling the window: timed words with the line
+/// being sung in the middle, in the accent, the ones before and after it fading
+/// towards the edges; words without moments a page at a time, turned as the
+/// song goes on. Returns how long until the words next change. Where there are
+/// none — still being looked for, none found, or none sung — it says so in the
+/// middle of the window rather than handing over to the figure.
 fn lyrics(app: &mut GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, rise: f32, size: u8) -> Option<std::time::Duration> {
     app.follow_the_words();
     let size = window.height() * WORD_SIZES.get(usize::from(size)).copied().unwrap_or(WORD_SIZES[2]);
@@ -471,6 +596,7 @@ fn lyrics(app: &mut GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, rise
     }
 }
 
+/// Timed words around the line being sung — see [`lyrics`].
 #[allow(clippy::too_many_arguments)]
 fn timed(
     ui: &egui::Ui,
@@ -544,6 +670,8 @@ fn timed(
     }
 }
 
+/// Where the words may stand: the window, less the top and the line at the
+/// foot that says what is playing.
 fn words_room(window: Rect) -> Rect {
     Rect::from_min_max(
         egui::pos2(window.left(), window.top() + FOOT_LINE),
@@ -551,6 +679,7 @@ fn words_room(window: Rect) -> Rect {
     )
 }
 
+/// Words without moments, a page at a time — see [`lyrics`].
 #[allow(clippy::too_many_arguments)]
 fn paged(
     ui: &egui::Ui,
@@ -610,8 +739,10 @@ fn paged(
     std::time::Duration::from_secs(5)
 }
 
+/// How far above the foot of the window what is playing stands.
 const FOOT_LINE: f32 = 48.0;
 
+/// What is playing, quietly, at the foot: title and artist, centred.
 fn playing_line(app: &GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, rise: f32) {
     let Some([title, artist, _]) = app.playing_words() else {
         return;
@@ -626,20 +757,33 @@ fn playing_line(app: &GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, ri
     ui.painter().galley(at, g, colour);
 }
 
+/// The saver's picture that is felix's drawings: the one under „über" and
+/// the one at the head of each public release's notes, one after the other.
+/// What the config file calls it; the menu names it „release note drawings".
 pub const DRAWINGS: &str = "release notes drawings";
 
+/// The drawings, oldest first, and what release each belongs to, as the corner
+/// says it. The first is the drawing under „über", there from the start; then
+/// the one at the head of each public release's notes. A release that comes
+/// with a drawing of its own adds it here — its mask made with
+/// `bundle/make-drawing.py <scan> release-<version>.png`.
 const RELEASE_DRAWINGS: &[(&str, &[u8])] = &[
     ("", super::menu::DRAWING),
     ("1.5.322", include_bytes!("release-1.5.322.png")),
     ("1.5.354", include_bytes!("release-1.5.354.png")),
     ("1.5.411", include_bytes!("release-1.5.411.png")),
+    ("1.5.429", include_bytes!("release-1.5.429.png")),
 ];
 
+/// How long each drawing stands, and how long one goes over into the next, in
+/// seconds.
 const DRAWING_HOLDS: f64 = 24.0;
 const DRAWING_CROSSES: f64 = 3.0;
 
+/// How tall a drawing stands, as a share of the window's height.
 const DRAWING_HEIGHT: f32 = 0.72;
 
+/// The mask of each drawing, read once.
 fn drawing_masks() -> &'static Vec<image::GrayImage> {
     static MASKS: std::sync::OnceLock<Vec<image::GrayImage>> = std::sync::OnceLock::new();
     MASKS.get_or_init(|| {
@@ -650,6 +794,8 @@ fn drawing_masks() -> &'static Vec<image::GrayImage> {
     })
 }
 
+/// Which drawing stands at `elapsed` seconds into the saver, the one after it,
+/// and how far it has gone over to that one, 0 to 1. Starting on the newest.
 fn drawing_at(elapsed: f64, count: usize) -> (usize, usize, f32) {
     let each = DRAWING_HOLDS + DRAWING_CROSSES;
     let step = (elapsed / each).floor().max(0.0) as usize;
@@ -660,6 +806,10 @@ fn drawing_at(elapsed: f64, count: usize) -> (usize, usize, f32) {
     (now, next, over * over * (3.0 - 2.0 * over))
 }
 
+/// felix's drawings, one at a time in the middle of the window, in the
+/// receded accent every drawing is drawn in, each going over into the next;
+/// in the bottom right-hand corner which release it is from. Returns how long
+/// until a frame is wanted again.
 fn drawings(app: &mut GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, rise: f32, elapsed: f64) -> std::time::Duration {
     let masks = drawing_masks();
     let count = masks.len();
@@ -729,6 +879,8 @@ fn drawings(app: &mut GuiApp, ui: &egui::Ui, window: Rect, palette: &Palette, ri
 mod tests {
     use super::*;
 
+    /// Every drawing is there to read, and the saver starts on the newest,
+    /// stands, goes over to the oldest and round again.
     #[test]
     fn the_release_drawings_go_round() {
         for (i, mask) in drawing_masks().iter().enumerate() {
@@ -741,6 +893,8 @@ mod tests {
         assert_eq!(drawing_at(DRAWING_HOLDS + DRAWING_CROSSES + 1.0, n).0, 0);
     }
 
+    /// The wander holds each colour, then eases into the next, and comes
+    /// round again.
     #[test]
     fn the_colour_wanders_round_the_scheme() {
         let colours = [Color32::RED, Color32::GREEN, Color32::BLUE];
@@ -751,6 +905,8 @@ mod tests {
         assert_eq!(wandering(&colours, WANDER_SECS * 3.0), Color32::RED);
     }
 
+    /// Every scheme has colours to wander through, none of them lost on the
+    /// ground and none twice.
     #[test]
     fn every_scheme_has_colours_to_wander_through() {
         for theme in super::super::theme::Theme::all() {
@@ -761,6 +917,7 @@ mod tests {
         }
     }
 
+    /// The gradient runs from one end to the other along its direction.
     #[test]
     fn the_gradient_runs_across_the_figure() {
         let across = Colouring::Across { from: Color32::BLACK, to: Color32::WHITE, angle: 0.0 };
@@ -769,6 +926,8 @@ mod tests {
         assert_eq!(Colouring::Plain(Color32::RED).at(3, 4, 10), Color32::RED);
     }
 
+    /// A second of made-up music at `level` — a bass, a chord drifting in
+    /// phase, a little noise — looked at the way the saver looks at it.
     fn looked_at(level: f32, side: usize) -> Scope {
         let rate = 44_100u32;
         let mut scope = Scope::tuned(tuning(GLOWS[1]));
@@ -811,6 +970,8 @@ mod tests {
         dots.iter().filter(|d| **d).count() as f32 / dots.len() as f32
     }
 
+    /// A quiet record and a loud one come out about as strong: the exposure
+    /// follows what is lit, not a number fixed for loud music.
     #[test]
     fn a_quiet_record_is_drawn_as_strongly_as_a_loud_one() {
         let side = 300;
@@ -826,6 +987,7 @@ mod tests {
         assert!(gentle < b && b < strong, "{gentle} {b} {strong}");
     }
 
+    /// The made-up vibrations move, and they are never nothing.
     #[test]
     fn the_vibrations_move_and_never_stop() {
         let a = vibrations(10.0);
@@ -840,6 +1002,8 @@ mod tests {
         }
     }
 
+    /// And a look at them, as the ones below: `KESSLER_VIBRATIONS=/tmp/v`
+    /// writes /tmp/v-0.png, /tmp/v-1.png, … at moments some seconds apart.
     #[test]
     #[ignore]
     fn vibration_pictures() {
@@ -867,6 +1031,9 @@ mod tests {
         }
     }
 
+    /// Not a test so much as a look, written to `KESSLER_SAVER_PNG`:
+    /// `KESSLER_SAVER_PNG=/tmp/saver.png cargo test saver_picture -- --ignored`.
+    /// `KESSLER_SAVER_LEVEL` sets how loud the made-up music is.
     #[test]
     #[ignore]
     fn saver_picture() {

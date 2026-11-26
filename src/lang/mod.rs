@@ -1,3 +1,26 @@
+//! The window's three languages: German, English and Japanese.
+//!
+//! The program is written in German: every word the window says is set in the
+//! source in German, where it is read, and the German is also the key the
+//! English is found under. `tr!("warteschlange")` is „warteschlange" in
+//! German and „queue" in English; `tr!("noch {}", n)` fills its `{}` in turn,
+//! in whichever language's sentence, so a sentence can put its figure where
+//! its own grammar wants it.
+//!
+//! A word with no English yet stays German rather than falling to nothing,
+//! and the tests below read the whole source for `tr!` and fail on any
+//! sentence that has no English — so that cannot ship unnoticed.
+//!
+//! One German word that needs two Englishes carries what it means after a
+//! bar: `tr!("titel|name")` is „titel" in German and „title" in English,
+//! where plain `tr!("titel")` — a count of them — is „tracks". The bar and
+//! what follows it are never shown.
+//!
+//! Words that are not literals — a column's name, a scheme's name — are
+//! looked up with [`t`] where they are shown. Their German stays what the
+//! config file stores, so a config written in one language opens in the
+//! other.
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
@@ -5,6 +28,7 @@ use std::sync::OnceLock;
 mod en;
 mod ja;
 
+/// A language the window can speak.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     De,
@@ -13,8 +37,10 @@ pub enum Lang {
 }
 
 impl Lang {
+    /// All three, in the order the menu offers them.
     pub const ALL: [Lang; 3] = [Lang::De, Lang::En, Lang::Ja];
 
+    /// What the config file stores.
     pub fn key(self) -> &'static str {
         match self {
             Lang::De => "de",
@@ -23,6 +49,8 @@ impl Lang {
         }
     }
 
+    /// Its own name, in itself: somebody looking for their language finds it
+    /// written the way they would write it.
     pub fn name(self) -> &'static str {
         match self {
             Lang::De => "deutsch",
@@ -35,6 +63,10 @@ impl Lang {
         Lang::ALL.into_iter().find(|l| l.key() == key.trim())
     }
 
+    /// The system's: German for a German locale — Germany, Austria,
+    /// Switzerland, anywhere „de" is first — English for everything else,
+    /// since English is the one of the two most people who do not read German
+    /// will read.
     pub fn of_system() -> Lang {
         Self::of_locale(sys_locale::get_locale().as_deref().unwrap_or(""))
     }
@@ -51,6 +83,8 @@ impl Lang {
         }
     }
 
+    /// What a setting from the config file comes to: a language by its key,
+    /// or — empty, or anything else — the system's.
     pub fn chosen(setting: &str) -> Lang {
         Self::of_key(setting).unwrap_or_else(Self::of_system)
     }
@@ -58,6 +92,8 @@ impl Lang {
 
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
+/// Speak `lang` from the next word on. The window redraws every word every
+/// frame, so a change shows at once.
 pub fn set(lang: Lang) {
     CURRENT.store(lang as u8, Ordering::Relaxed);
 }
@@ -70,14 +106,21 @@ pub fn current() -> Lang {
     }
 }
 
+/// What stands for a missing name, in the language being spoken — only when
+/// the name really is missing. Not `t` on the name itself: a band called
+/// „nichts" stays „nichts" in English.
 pub fn said<'a>(name: &str, shown: &'a str) -> &'a str {
     if name.is_empty() { t(shown) } else { shown }
 }
 
+/// `de` in the language being spoken: itself in German, its English where
+/// there is one, itself again where there is none yet.
 pub fn t(de: &str) -> &str {
     in_lang(current(), de)
 }
 
+/// The same for a language named outright, for the tests and for anything
+/// that must not depend on the window's setting.
 pub fn in_lang(lang: Lang, de: &str) -> &str {
     match lang {
         Lang::De => shown(de),
@@ -86,6 +129,8 @@ pub fn in_lang(lang: Lang, de: &str) -> &str {
     }
 }
 
+/// What the program is called in the language being spoken: „kessler", and in
+/// Japanese „ケスラー".
 pub fn app_name() -> &'static str {
     match current() {
         Lang::Ja => "ケスラー",
@@ -93,6 +138,7 @@ pub fn app_name() -> &'static str {
     }
 }
 
+/// The German as it is shown: without the bar and the meaning after it.
 fn shown(de: &str) -> &str {
     de.split('|').next().unwrap_or(de)
 }
@@ -113,6 +159,9 @@ fn japanese(de: &str) -> Option<&'static str> {
         .copied()
 }
 
+/// A sentence with its `{}` filled in turn by `args`. Only bare `{}`: a
+/// figure that wants a width or a precision is formatted before it is handed
+/// over.
 pub fn fill(template: &str, args: &[String]) -> String {
     let mut out = String::with_capacity(template.len() + 16);
     let mut args = args.iter();
@@ -129,6 +178,7 @@ pub fn fill(template: &str, args: &[String]) -> String {
     out
 }
 
+/// A German word or sentence, in the language being spoken — see the module.
 macro_rules! tr {
     ($de:literal) => {
         $crate::lang::t($de)
@@ -142,6 +192,8 @@ macro_rules! tr {
 mod tests {
     use super::*;
 
+    /// Only a missing name is translated; a name that happens to be a word
+    /// of the window's is left as it is.
     #[test]
     fn only_a_missing_name_is_said_in_the_language() {
         assert_eq!(in_lang(Lang::En, "unbekannt"), "unknown");
@@ -149,6 +201,9 @@ mod tests {
         assert_eq!(said("björk", "björk"), "björk");
     }
 
+    /// Every `tr!("…")` in the source, as the German it says — read from the
+    /// files themselves, so a sentence cannot be added without the test
+    /// seeing it.
     fn sentences_in_source() -> Vec<(String, String)> {
         let mut found = Vec::new();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -176,6 +231,7 @@ mod tests {
         found
     }
 
+    /// The body of a string literal up to its closing quote, unescaped.
     fn read_literal(from: &str) -> (String, &str) {
         let mut out = String::new();
         let mut chars = from.char_indices();
@@ -218,6 +274,8 @@ mod tests {
         assert!(missing.is_empty(), "no japanese for:\n{}", missing.join("\n"));
     }
 
+    /// The two tables hold the same German, so neither can keep a word the
+    /// other has dropped.
     #[test]
     fn the_japanese_has_the_same_words_as_the_english() {
         let en: std::collections::BTreeSet<&str> = en::ALL.iter().flat_map(|p| p.iter()).map(|(de, _)| *de).collect();
@@ -259,6 +317,9 @@ mod tests {
         }
     }
 
+    /// An English with nothing left to translate is a word the window no
+    /// longer says: out of the table with it, or it will be translated again
+    /// the next time somebody wonders.
     #[test]
     fn every_english_is_still_wanted() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

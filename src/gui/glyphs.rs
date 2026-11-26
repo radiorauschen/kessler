@@ -1,3 +1,27 @@
+//! The transport's marks, out of the typeface the window is set in.
+//!
+//! Five of the marks this window uses are not letters, and some of the best
+//! of them cannot be reached by typing a character: a face's best repeat may
+//! be its second drawing of `↻` (`uni21BB.alt`, say) — two arrows chasing
+//! each other round, the queue going round — and egui sets a character's
+//! first drawing and nothing else. It has no stylistic sets.
+//!
+//! So these are read out of the font file by name and drawn here: the outline
+//! is walked, flattened into straight edges and filled into a small mask at
+//! the screen's own resolution, then handed to the painter as a texture and
+//! tinted like any other mark. What comes out is the type designer's drawing
+//! at the size of the label words beside it — the same stems, the same ends,
+//! the same hand — which neither a fallback face nor lines drawn here could be.
+//!
+//! Where the face has an arrow but not the shuffle or the repeat — many have
+//! `←` and `→` and neither of the other two — those two are built here out of
+//! the face's own arrow: its stem, its head and the thickness of the head's
+//! arms are measured off the drawing and set again, two lanes for the
+//! shuffle, two arrows chasing round for the repeat. See [`compose`].
+//!
+//! Where the face has not got even that (none at all), the caller is told so
+//! and draws its own.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -6,6 +30,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, GlyphNames, MetadataProvider};
 
+/// One of the marks, and how it is found in a face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mark {
     Back,
@@ -13,12 +38,16 @@ pub enum Mark {
     Shuffle,
     Repeat,
     RepeatOne,
+    /// The three of the window's own buttons, where kessler draws them:
+    /// close, into the Dock, full screen — the face's ×, − and +.
     Close,
     Shrink,
     Grow,
 }
 
 impl Mark {
+    /// The glyph names to try, best first, and the character to fall back on
+    /// when a face names its glyphs differently or not at all.
     fn wanted(self) -> (&'static [&'static str], char) {
         match self {
             Self::Back => (&["arrowleft", "uni2190"], '←'),
@@ -32,16 +61,33 @@ impl Mark {
         }
     }
 
+    /// A quarter turn for the shuffle: `⇵` stands two lanes side by side,
+    /// one down and one up; turned, it is two lanes one above the other, one
+    /// going each way along the line the row reads in — `⇆`, and a shuffle
+    /// that looks like the other arrows in the row, which all lie flat.
+    /// The glyph looks the same turned either way.
     fn turned(self) -> bool {
         self == Self::Shuffle
     }
 }
 
+/// How big the marks are set, in points per em.
+///
+/// A step above the label words (eleven) and below the lists (fifteen). At
+/// eleven the arrows were drawn as small as a lowercase x, and the stems
+/// were exactly the words' own; at fifteen the stems are a third heavier than
+/// the words, which is how the row looked two weights at once. Twelve and a
+/// half is where the arrows are plainly marks and the stems still read as the
+/// same pen — measured against the word `pause`.
 pub const MARK_SIZE: f32 = 12.5;
 
+/// The face the marks are read from, as the context holds it, and how much
+/// smaller than their size it is set — the same as the words beside them.
 #[derive(Clone)]
 struct Face(Arc<Vec<u8>>, f32);
 
+/// The masks already drawn, keyed by mark and screen scale. `None` means the
+/// face has not got that glyph, which is worth remembering too.
 #[derive(Clone, Default)]
 struct Drawn(HashMap<(Mark, u32, u32), Option<TextureHandle>>);
 
@@ -53,6 +99,9 @@ fn drawn_id() -> egui::Id {
     egui::Id::unique("kessler-mark-textures")
 }
 
+/// Hand the marks the file the window's regular face was read from — or
+/// nothing, when the window is set in egui's own face. Every mark drawn from
+/// the face before is forgotten.
 pub fn use_face(ctx: &Context, data: Option<Vec<u8>>, scale: f32) {
     ctx.data_mut(|d| {
         match data {
@@ -65,15 +114,19 @@ pub fn use_face(ctx: &Context, data: Option<Vec<u8>>, scale: f32) {
     });
 }
 
+/// The face the icon's k is read from — see `appicon` — and its id.
 #[derive(Clone)]
 struct IconFace(Arc<Vec<u8>>, Place);
 
+/// A place in a variable face's design space: axis tags and values.
 pub type Place = Vec<(&'static str, f32)>;
 
 fn icon_face_id() -> egui::Id {
     egui::Id::unique("kessler-icon-face")
 }
 
+/// Hand the icon the file its k is to be read from, and where in a variable
+/// face's design space to read it — or nothing.
 pub fn use_icon_face(ctx: &Context, data: Option<(Vec<u8>, Place)>) {
     ctx.data_mut(|d| match data {
         Some((data, at)) => {
@@ -85,10 +138,14 @@ pub fn use_icon_face(ctx: &Context, data: Option<(Vec<u8>, Place)>) {
     });
 }
 
+/// Paint `mark` centred on `at` in `colour`. False when the face has not got
+/// it, so the caller can draw a mark of its own there instead.
 pub fn paint(ui: &egui::Ui, mark: Mark, at: Pos2, colour: Color32) -> bool {
     paint_sized(ui, mark, at, colour, MARK_SIZE)
 }
 
+/// The same at `size` points per em rather than the transport's — its ink
+/// centred on `at`, as every mark here is.
 pub fn paint_sized(ui: &egui::Ui, mark: Mark, at: Pos2, colour: Color32, size: f32) -> bool {
     let ctx = ui.ctx();
     let scale = ctx.pixels_per_point();
@@ -133,6 +190,7 @@ pub fn paint_sized(ui: &egui::Ui, mark: Mark, at: Pos2, colour: Color32, size: f
     true
 }
 
+/// A filled glyph: how much of each screen dot it covers, row by row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mask {
     pub width: usize,
@@ -140,16 +198,26 @@ pub struct Mask {
     pub cover: Vec<u8>,
 }
 
+/// One letter of the icon's face — see [`use_icon_face`] — filled at
+/// `pixels` per em: the icon is a k in that face. `None` when the window is
+/// set in egui's own face, or the face has no such letter.
 pub fn letter(ctx: &Context, character: char, pixels: f32) -> Option<Mask> {
     let face = ctx.data(|d| d.get_temp::<IconFace>(icon_face_id()))?;
     letter_in(&face.0, character, pixels, &face.1)
 }
 
+/// One letter of the face the window is set in — the regular file — at `at`
+/// in its design space: the menu's head draws its k there while nothing
+/// plays, in the face, width and weight the window has, not the icon's.
 pub fn window_letter(ctx: &Context, character: char, pixels: f32, at: &[(&str, f32)]) -> Option<Mask> {
     let face = ctx.data(|d| d.get_temp::<Face>(face_id()))?;
     letter_in(&face.0, character, pixels, at)
 }
 
+/// The same out of a font file's bytes — at `at` in a variable face's design
+/// space, for the axes it names: the Japanese icon's ケ is drawn bold out of M
+/// PLUS 1 Code, which is one variable file, and Asap's k at the window's width
+/// and bold.
 pub fn letter_in(data: &[u8], character: char, pixels: f32, at: &[(&str, f32)]) -> Option<Mask> {
     let font = FontRef::new(data).ok()?;
     let location = font.axes().location(at.iter().copied());
@@ -161,6 +229,8 @@ pub fn letter_in(data: &[u8], character: char, pixels: f32, at: &[(&str, f32)]) 
     Some(fill(&edges))
 }
 
+/// Find `mark` in the face and fill it at `pixels` per em. `None` when the
+/// file is not a font or has no such glyph.
 pub fn draw(data: &[u8], mark: Mark, pixels: f32) -> Option<Mask> {
     let font = FontRef::new(data).ok()?;
     let (names, character) = mark.wanted();
@@ -180,10 +250,13 @@ pub fn draw(data: &[u8], mark: Mark, pixels: f32) -> Option<Mask> {
     Some(fill(&edges))
 }
 
+/// A glyph's outline as straight edges, at `pixels` per em, the right way up
+/// (y up the page). Found by one of `names`, else by `character`.
 fn outline_of(font: &FontRef, names: &[&str], character: char, pixels: f32) -> Option<Vec<(Vec2, Vec2)>> {
     outline_at(font, names, character, pixels, LocationRef::default())
 }
 
+/// The same at a place in the face's design space.
 fn outline_at(
     font: &FontRef,
     names: &[&str],
@@ -200,6 +273,7 @@ fn outline_at(
     outline_glyph(font, glyph, pixels, location)
 }
 
+/// One glyph's outline as straight edges, by its id.
 fn outline_glyph(font: &FontRef, glyph: skrifa::GlyphId, pixels: f32, location: LocationRef) -> Option<Vec<(Vec2, Vec2)>> {
     let outline = font.outline_glyphs().get(glyph)?;
     let mut pen = Flattener::default();
@@ -213,6 +287,16 @@ fn outline_glyph(font: &FontRef, glyph: skrifa::GlyphId, pixels: f32, location: 
     (!pen.edges.is_empty()).then_some(pen.edges)
 }
 
+/// A mark the face has not got, built out of what it has.
+///
+/// Out of its own `→`, where there is one: the stem, the head and the arms
+/// measured off the drawing. Where there is not even that, out of its hyphen:
+/// the hyphen's bar is the stem's thickness and height on the line, the head
+/// is set at forty-five degrees in the same thickness, and every corner is
+/// softened by as much as the face softens its own.
+///
+/// `None` for a face that has neither, or one whose arrow is not a stem and
+/// a two-armed head.
 fn compose(font: &FontRef, mark: Mark, pixels: f32) -> Option<Vec<(Vec2, Vec2)>> {
     let (pen, winding) = match outline_of(font, &["arrowright", "uni2192"], '→', pixels) {
         Some(arrow) => (Pen::measure(&arrow)?, area(&arrow).signum()),
@@ -247,18 +331,31 @@ fn compose(font: &FontRef, mark: Mark, pixels: f32) -> Option<Vec<(Vec2, Vec2)>>
     Some(edges)
 }
 
+/// What an arrow is drawn with, measured off the face's own `→`: a straight
+/// stem and a head of two arms at forty-five degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Pen {
+    /// Where the tail starts and the tip ends, across.
     tail: f32,
     tip: f32,
+    /// The height of the stem's middle.
     middle: f32,
+    /// How thick the stem is.
     stem: f32,
+    /// How thick the head's arms are, measured across the page.
     arm: f32,
+    /// How far the head reaches back from the tip, and so how far up and
+    /// down.
     head: f32,
+    /// How much every corner is softened — nothing for an arrow measured off
+    /// the face, which has its own corners already.
     round: f32,
 }
 
 impl Pen {
+    /// Measure an arrow pointing right. `None` when it is not built the way
+    /// this expects — a filled triangle for a head, say — because a measure
+    /// that does not fit would only draw something wrong.
     fn measure(edges: &[(Vec2, Vec2)]) -> Option<Pen> {
         let (low, high) = bounds(edges);
         let middle = (low.y + high.y) / 2.0;
@@ -276,6 +373,11 @@ impl Pen {
         fits.then_some(Pen { tail, tip, middle, stem, arm, head, round: 0.0 })
     }
 
+    /// A pen for a face with no arrow at all, out of its hyphen: the bar's
+    /// thickness is the stem, its middle the height the arrow stands at, and
+    /// the arrow as long and its head as deep as a drawn arrow's in proportion
+    /// to the em. The corners are softened by a sixth of the stem, which is
+    /// about what a softly drawn face does to its own.
     fn from_hyphen(hyphen: &[(Vec2, Vec2)], em: f32) -> Option<Pen> {
         let (low, high) = bounds(hyphen);
         let stem = high.y - low.y;
@@ -293,6 +395,9 @@ impl Pen {
         })
     }
 
+    /// An arrow like the face's own, with a head `head` deep, its stem's
+    /// middle at `middle`, from `tail` to `tip` — pointing right, or left when
+    /// `tip` is the smaller.
     fn arrow(&self, tail: f32, tip: f32, middle: f32, head: f32) -> Vec<Vec2> {
         let s = if tip >= tail { 1.0 } else { -1.0 };
         let (d, t) = (self.arm, self.stem / 2.0);
@@ -310,6 +415,7 @@ impl Pen {
         ]
     }
 
+    /// The head alone, its tip at `tip` pointing along `towards`.
     fn head_alone(&self, tip: Vec2, towards: Vec2, head: f32) -> Vec<Vec2> {
         let d = self.arm;
         let along = towards.normalized();
@@ -325,14 +431,24 @@ impl Pen {
         ]
     }
 
+    /// How tall a composed mark stands: a little more than the arrow, as a
+    /// face's own shuffle and repeat tend to stand a little taller than its
+    /// arrows.
     fn height(&self) -> f32 {
         self.head * 2.0 * 1.1
     }
 
+    /// The head of a lane of the shuffle, and of either arrow of the repeat:
+    /// small enough that two lanes stand in about the arrow's height.
     fn lane_head(&self) -> f32 {
         ((self.height() - 1.5 * self.stem) / 3.0).max(self.arm * 1.3)
     }
 
+    /// Two lanes that cross, both going right: one from the top left down to
+    /// the bottom right, unbroken, and one from the bottom left up to the top
+    /// right, broken where it passes under the first. Straight at both ends,
+    /// an S between,
+    /// and the face's own head on each.
     fn shuffle(&self) -> Vec<Vec<Vec2>> {
         let t = self.stem;
         let head = (self.lane_head() * 0.9).max(self.arm * 1.3);
@@ -382,11 +498,19 @@ impl Pen {
         ]
     }
 
+    /// How far apart the repeat's two lanes run, middle to middle, and how
+    /// deep their heads are: far enough apart that a side has room between
+    /// its corner and the head below it.
     fn lanes(&self) -> (f32, f32) {
         let head = (self.lane_head() * 0.9).max(self.arm * 1.3);
         ((head + 0.8 * self.stem) / 0.65, head)
     }
 
+    /// Two arrows chasing each other round, clockwise: the shuffle's two
+    /// lanes, each turning at its tail into the side of a loop. The upper
+    /// one comes up the left side, round the corner and along to its head at
+    /// the right; the lower one is the same turned half round. Each side
+    /// stops short of the other arrow's head by most of a stem's breadth.
     fn repeat(&self) -> Vec<Vec<Vec<Vec2>>> {
         let t = self.stem;
         let (apart, head) = self.lanes();
@@ -414,10 +538,14 @@ impl Pen {
 }
 
 impl Pen {
+    /// Where the ring of the repeat-one stands, and how big it is round the
+    /// middle of its line: as tall as an arrow.
     fn ring_size(&self) -> (Vec2, f32) {
         (Vec2::new((self.tail + self.tip) / 2.0, self.middle), self.head)
     }
 
+    /// The ring of the repeat-one: a circle the stem's thickness, its outer
+    /// edge as tall as an arrow.
     fn ring(&self) -> Vec<Vec2> {
         let (centre, outer) = self.ring_size();
         let middle = outer - self.stem / 2.0;
@@ -431,6 +559,9 @@ impl Pen {
         shape
     }
 
+    /// The „1" in the ring: a stem and a flag, drawn in the pen's own
+    /// thickness — the face's own „1", scaled down to fit, came out thinner
+    /// than the ring round it.
     fn one(&self) -> Vec<Vec<Vec2>> {
         let (centre, outer) = self.ring_size();
         let tall = 2.0 * (outer - self.stem) * 0.58;
@@ -444,6 +575,10 @@ impl Pen {
     }
 }
 
+/// Soften every corner of a closed shape: each point is cut back along both
+/// its edges by up to `by` — never more than half an edge — and the cut
+/// bridged with a curve through where the corner was. Points on a straight
+/// run, or on a gentle curve, are left as they are.
 fn rounded(points: &[Vec2], by: f32) -> Vec<Vec2> {
     let n = points.len();
     let mut out = Vec::with_capacity(n * 4);
@@ -466,6 +601,8 @@ fn rounded(points: &[Vec2], by: f32) -> Vec<Vec2> {
     out
 }
 
+/// A line `width` thick along the points, as one closed shape: each point
+/// moved half the width out to either side, square at the two ends.
 fn stroke(points: &[Vec2], width: f32) -> Vec<Vec2> {
     let n = points.len();
     let normal = |i: usize| {
@@ -479,6 +616,7 @@ fn stroke(points: &[Vec2], width: f32) -> Vec<Vec2> {
     out
 }
 
+/// The smallest box round the edges.
 fn bounds(edges: &[(Vec2, Vec2)]) -> (Vec2, Vec2) {
     let (mut low, mut high) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
     for (a, b) in edges {
@@ -488,6 +626,8 @@ fn bounds(edges: &[(Vec2, Vec2)]) -> (Vec2, Vec2) {
     (low, high)
 }
 
+/// The runs of ink along a line across the page at `y`, by the non-zero
+/// rule, left to right.
 fn crossings_across(edges: &[(Vec2, Vec2)], y: f32) -> Vec<(f32, f32)> {
     runs(
         edges
@@ -497,6 +637,7 @@ fn crossings_across(edges: &[(Vec2, Vec2)], y: f32) -> Vec<(f32, f32)> {
     )
 }
 
+/// The same down the page at `x`, bottom to top.
 fn crossings_down(edges: &[(Vec2, Vec2)], x: f32) -> Vec<(f32, f32)> {
     runs(
         edges
@@ -522,6 +663,8 @@ fn runs(crossings: impl Iterator<Item = (f32, i32)>) -> Vec<(f32, f32)> {
     out
 }
 
+/// Twice the signed area the edges enclose; its sign says which way they
+/// wind.
 fn area(edges: &[(Vec2, Vec2)]) -> f32 {
     edges.iter().map(|(a, b)| a.x * b.y - b.x * a.y).sum()
 }
@@ -530,12 +673,14 @@ fn area_of(points: &[Vec2]) -> f32 {
     area(&closed(points))
 }
 
+/// A closed polygon's edges.
 fn closed(points: &[Vec2]) -> Vec<(Vec2, Vec2)> {
     (0..points.len())
         .map(|i| (points[i], points[(i + 1) % points.len()]))
         .collect()
 }
 
+/// A quarter turn.
 fn turn(edges: &mut [(Vec2, Vec2)]) {
     for edge in edges {
         edge.0 = Vec2::new(-edge.0.y, edge.0.x);
@@ -543,6 +688,7 @@ fn turn(edges: &mut [(Vec2, Vec2)]) {
     }
 }
 
+/// Walks an outline into straight edges, in the outline's own units.
 #[derive(Default)]
 struct Flattener {
     edges: Vec<(Vec2, Vec2)>,
@@ -559,6 +705,8 @@ impl Flattener {
     }
 }
 
+/// How many straight pieces a curve is cut into. The marks are a dozen dots
+/// tall; eight pieces a curve is finer than any dot.
 const PIECES: usize = 8;
 
 impl OutlinePen for Flattener {
@@ -603,8 +751,12 @@ impl OutlinePen for Flattener {
     }
 }
 
+/// How many lines each row of dots is looked at along. Across, a span's ends
+/// are measured exactly; down, sixteen looks are sixteen shades.
 const LOOKS: usize = 16;
 
+/// Fill closed edges into a mask by the non-zero rule, with one clear dot all
+/// round.
 fn fill(edges: &[(Vec2, Vec2)]) -> Mask {
     let (mut low, mut high) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
     for (a, b) in edges {
@@ -614,6 +766,8 @@ fn fill(edges: &[(Vec2, Vec2)]) -> Mask {
     fill_within(edges, low, high)
 }
 
+/// The same between `low` and `high`, wherever the edges reach: ink outside
+/// is lost.
 fn fill_within(edges: &[(Vec2, Vec2)], low: Vec2, high: Vec2) -> Mask {
     let shift = Vec2::splat(1.0) - low;
     let width = (high.x - low.x).ceil() as usize + 2;
@@ -653,6 +807,7 @@ fn fill_within(edges: &[(Vec2, Vec2)], low: Vec2, high: Vec2) -> Mask {
     Mask { width, height, cover }
 }
 
+/// Add one look's worth of a span from `from` to `to` to a row of dots.
 fn span(row: &mut [f32], from: f32, to: f32) {
     let from = from.max(0.0);
     let to = to.min(row.len() as f32);
@@ -714,6 +869,8 @@ mod tests {
         assert_eq!(at(5, 5), 0, "the middle is the hole");
     }
 
+    /// A face that has all five, where one is installed: DejaVu has the
+    /// arrows and the circled one, though no second repeat.
     fn some_face() -> Option<Vec<u8>> {
         [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -754,6 +911,8 @@ mod tests {
         assert!(Mark::Shuffle.turned());
     }
 
+    /// An arrow drawn as a face draws its `→` (font units): the shape
+    /// [`Pen::arrow`] has to give back when it is measured and drawn again.
     fn drawn_arrow() -> Vec<(Vec2, Vec2)> {
         let p = |x: f32, y: f32| Vec2::new(x, y);
         closed(&[
@@ -799,6 +958,8 @@ mod tests {
         assert_eq!(Pen::measure(&triangle), None);
     }
 
+    /// Both built marks come out with ink, wound one way, about as tall as
+    /// the arrow and no wider than it plus its head.
     #[test]
     fn the_shuffle_and_the_repeat_are_built_out_of_the_arrow() {
         let arrow = drawn_arrow();
@@ -822,6 +983,9 @@ mod tests {
         }
     }
 
+    /// Not a check: writes what the built marks look like at the size the
+    /// window sets them, and a hundred times that, to look at.
+    /// `cargo test -- --ignored built_marks_picture`
     #[test]
     #[ignore]
     fn built_marks_picture() {
@@ -852,6 +1016,9 @@ mod tests {
         }
     }
 
+    /// A face with no arrow at all still gets all five marks, out of its
+    /// hyphen — Barlow's bar, as it is in the font (Regular, font units,
+    /// without its rounded corners) — and every one of them has ink.
     #[test]
     fn the_marks_come_out_of_a_hyphen() {
         let p = |x: f32, y: f32| Vec2::new(x, y);
@@ -884,6 +1051,8 @@ mod tests {
         }
     }
 
+    /// Softening a corner takes the point off it and keeps the shape where
+    /// it was.
     #[test]
     fn a_rounded_square_loses_its_corners_only() {
         let p = |x: f32, y: f32| Vec2::new(x, y);

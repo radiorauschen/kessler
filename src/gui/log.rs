@@ -1,24 +1,54 @@
+//! What Kessler did, written down.
+//!
+//! A great deal happens out of sight: a scrobble four minutes into a track, a
+//! year written into twelve files by a run through the library, a transfer to
+//! the iPod, a cover put on a record. The status line says each of those once,
+//! for a few seconds, at the edge of the window — which is a report you see
+//! only by chance. This is the rest of the time: every such thing, with when
+//! it happened, newest first, in the fourth column when it is asked for (`t`,
+//! or a click on the status line).
+//!
+//! Kept in a small text file beside the library, one line an entry, so what
+//! was scrobbled yesterday is still there today. Only the last
+//! [`KEEP`] are kept; the file is cut back to them now and then rather than
+//! on every line.
+
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
 
+/// How many entries are kept, in the window and in the file.
 pub const KEEP: usize = 1000;
 
+/// What kind of thing happened — the word the log sets before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// A track scrobbled to Last.fm.
     Scrobble,
+    /// Anything else about Last.fm: connected, trouble, the session gone.
     Lastfm,
+    /// Tags edited by hand, in the tag editor.
     Tag,
+    /// A year written by the run through MusicBrainz.
     Year,
+    /// A genre written by the same.
     Genre,
+    /// A cover put on a record.
     Cover,
+    /// The iPod: music sent, ejected, pulled out.
     Ipod,
+    /// The library: read in, music added, a folder taken out.
     Library,
+    /// A list made, renamed, deleted or added to.
     List,
+    /// What was found about an artist, or that nothing was.
     Artist,
+    /// The radio: a station that would not answer.
     Radio,
+    /// The podcasts: followed, fetched, let go of, archived, new episodes, a
+    /// feed that would not answer.
     Podcast,
 }
 
@@ -38,6 +68,7 @@ impl Kind {
         Kind::Podcast,
     ];
 
+    /// The word, in the window and in the file.
     pub fn word(self) -> &'static str {
         match self {
             Kind::Scrobble => "scrobble",
@@ -60,6 +91,7 @@ impl Kind {
     }
 }
 
+/// One thing that happened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub at: NaiveDateTime,
@@ -67,15 +99,19 @@ pub struct Entry {
     pub text: String,
 }
 
+/// The log: in memory, newest last, and in its file.
 #[derive(Default)]
 pub struct Log {
     entries: VecDeque<Entry>,
     path: Option<PathBuf>,
+    /// Lines written to the file since it was last cut back.
     appended: usize,
 }
 
 const FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
+/// An entry as a line of the file: when, the word, what — tab apart, with
+/// any tab or line break in the text turned into a space.
 fn line(entry: &Entry) -> String {
     let text: String = entry
         .text
@@ -85,6 +121,7 @@ fn line(entry: &Entry) -> String {
     format!("{}\t{}\t{}", entry.at.format(FORMAT), entry.kind.word(), text)
 }
 
+/// A line of the file back into an entry; `None` for anything else.
 fn parse(line: &str) -> Option<Entry> {
     let mut parts = line.splitn(3, '\t');
     let at = NaiveDateTime::parse_from_str(parts.next()?, FORMAT).ok()?;
@@ -94,6 +131,8 @@ fn parse(line: &str) -> Option<Entry> {
 }
 
 impl Log {
+    /// The log kept at `path`, read back — the last [`KEEP`] of it. A file
+    /// that is not there, or cannot be read, is an empty log.
     pub fn open(path: &Path) -> Self {
         let mut entries: VecDeque<Entry> = std::fs::read_to_string(path)
             .unwrap_or_default()
@@ -110,6 +149,7 @@ impl Log {
         }
     }
 
+    /// Write one thing down, now.
     pub fn add(&mut self, kind: Kind, text: impl Into<String>) {
         let entry = Entry {
             at: chrono::Local::now().naive_local(),
@@ -150,6 +190,7 @@ impl Log {
         self.entries.len()
     }
 
+    /// Forget everything, the file too — „leeren" at the column's head.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.appended = 0;
@@ -160,6 +201,9 @@ impl Log {
         self.entries.is_empty()
     }
 
+    /// The whole log as Markdown, to be sent or kept: a heading, then a day to
+    /// a heading of its own, the newest first, and each entry a line — the
+    /// time, its kind in code, what happened.
     pub fn markdown(&self, today: chrono::NaiveDate) -> String {
         let mut out = format!("# kessler {} · log\n", crate::VERSION_SHOWN);
         let mut day = None;
@@ -175,15 +219,19 @@ impl Log {
         out
     }
 
+    /// The entry `at` places from the newest.
     pub fn nth_newest(&self, at: usize) -> Option<&Entry> {
         self.entries.len().checked_sub(at + 1).and_then(|i| self.entries.get(i))
     }
 }
 
+/// The time of an entry, for its line.
 pub fn time(at: NaiveDateTime) -> String {
     at.format("%H:%M").to_string()
 }
 
+/// The day a run of entries happened, for the line above them: „heute",
+/// „gestern", or the date — with the year only when it is not this one.
 pub fn day(date: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
     use chrono::Datelike;
     if date == today {
@@ -205,6 +253,8 @@ mod tests {
         NaiveDateTime::parse_from_str(text, FORMAT).unwrap()
     }
 
+    /// Emptied, the log is empty on disk too: opened again, nothing comes
+    /// back.
     #[test]
     fn a_cleared_log_stays_cleared() {
         let dir = std::env::temp_dir().join(format!("kessler-log-cleared-{}", std::process::id()));
@@ -271,6 +321,7 @@ mod tests {
         assert_eq!(day(at("2025-12-31 10:00:00").date(), today), "31.12.2025");
     }
 
+    /// The log as Markdown: the newest day first, a line an entry.
     #[test]
     fn the_log_goes_out_as_markdown() {
         let mut log = Log::default();

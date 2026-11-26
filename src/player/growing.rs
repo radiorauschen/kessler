@@ -1,3 +1,9 @@
+//! A file still being fetched, played as it grows.
+//!
+//! Reading past what has come in so far waits for more, a little at a time,
+//! until the fetch says it is done — or gives up after [`WAIT_AT_MOST`], so a
+//! fetch that stalls ends the episode rather than the evening.
+
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -8,10 +14,13 @@ use std::time::{Duration, Instant};
 use rodio::decoder::DecoderBuilder;
 use rodio::Decoder;
 
+/// How long a read waits for more to come in before it calls it the end.
 const WAIT_AT_MOST: Duration = Duration::from_secs(20);
 
+/// How often it looks whether more has come.
 const LOOK_EVERY: Duration = Duration::from_millis(25);
 
+/// The file being fetched, and whether the fetch is over.
 pub struct Growing {
     file: File,
     done: Arc<AtomicBool>,
@@ -42,6 +51,9 @@ impl Seek for Growing {
     }
 }
 
+/// The decoder on `part`, the file being fetched; `done` is set once the
+/// fetch is over, `bytes` is how long it will be where the server said, and
+/// `kind` the file's ending, for the decoder to know what to expect.
 pub fn open(part: &Path, done: Arc<AtomicBool>, bytes: u64, kind: &str) -> Result<Decoder<BufReader<Growing>>, String> {
     let file = File::open(part).map_err(|e| e.to_string())?;
     let growing = Growing { file, done };
@@ -59,6 +71,8 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// What is read waits for what is still to come, and the end is the end
+    /// once the fetch is done.
     #[test]
     fn a_read_waits_for_what_is_still_coming() {
         let dir = std::env::temp_dir().join(format!("kessler-growing-{}", std::process::id()));

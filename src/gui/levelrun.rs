@@ -1,3 +1,13 @@
+//! The run that finds out how loud everything is, and the table the sound
+//! is levelled by — see [`crate::library::loudness`] and
+//! [`crate::player::leveling`].
+//!
+//! It goes record by record: every track of a record whose loudness is not
+//! known for the file as it is now is read from its tags or measured, and
+//! then the record's gain is worked out from all of its tracks. On threads
+//! of its own, a few records at once, and only while levelling is on; it says how far it has got
+//! in the status line and in the menu, and a click there stops it.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,24 +20,33 @@ use crate::player::leveling::{Factors, Level};
 
 use super::{log, text, GuiApp};
 
+/// What the run sends back.
 pub enum News {
+    /// One track, found out, for the state of its file given.
     Track { id: i64, loud: Loudness, modified: String },
+    /// A record's gain, for its tracks.
     Record { ids: Vec<i64>, gain: f64, peak: f64 },
+    /// One track that could not be read; the run goes on.
     Failed { path: PathBuf, why: String },
 }
 
 pub struct Measuring {
     pub news: mpsc::Receiver<News>,
     pub stop: Arc<AtomicBool>,
+    /// Whether music is playing — the run goes gently while it is.
     pub playing: Arc<AtomicBool>,
+    /// Tracks to find out, and how many are done.
     pub total: usize,
     pub done: usize,
     pub failed: usize,
+    /// When the table was last filled again from what came in.
     pub refreshed: Instant,
 }
 
+/// How often the table is filled again while a run goes.
 const REFRESH: Duration = Duration::from_secs(5);
 
+/// The records with anything to find out, each as all of its tracks.
 fn due(rows: Vec<LoudRow>) -> Vec<Vec<LoudRow>> {
     let mut records: Vec<Vec<LoudRow>> = Vec::new();
     for row in rows {
@@ -40,10 +59,15 @@ fn due(rows: Vec<LoudRow>) -> Vec<Vec<LoudRow>> {
     records
 }
 
+/// How many read at once: half of what the machine has to think with, and
+/// no more than four — the rest stays for the sound and the window. One
+/// alone took an afternoon over a large library.
 fn readers() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get() / 2).clamp(1, 4)
 }
 
+/// How long a reader that is not the first waits before it looks again
+/// whether the music still plays.
 const WAITING: Duration = Duration::from_millis(500);
 
 fn start(records: Vec<Vec<LoudRow>>, playing: Arc<AtomicBool>) -> (mpsc::Receiver<News>, Arc<AtomicBool>) {
@@ -100,6 +124,7 @@ fn start(records: Vec<Vec<LoudRow>>, playing: Arc<AtomicBool>) -> (mpsc::Receive
     (rx, stop)
 }
 
+/// The two factors for a track from what is known about it.
 fn factors_of(k: &crate::db::loudness::Known) -> Factors {
     let track = loudness::factor(k.track_gain, k.peak);
     let album = k
@@ -110,12 +135,14 @@ fn factors_of(k: &crate::db::loudness::Known) -> Factors {
 }
 
 impl GuiApp {
+    /// The level set in the config, to the player — once, at the start.
     pub(super) fn apply_leveling(&mut self) {
         let level = Level::from_name(&self.config.player.leveling);
         self.player.leveling().set_level(level);
         self.fill_level_table();
     }
 
+    /// Step through off, per track, per record.
     pub fn cycle_leveling(&mut self) {
         let now = Level::from_name(&self.config.player.leveling);
         let at = Level::ALL.iter().position(|l| *l == now).unwrap_or(0);
@@ -130,6 +157,7 @@ impl GuiApp {
         }
     }
 
+    /// Fill the player's table from the database.
     pub fn fill_level_table(&mut self) {
         let Ok(rows) = self.db.loudness_rows() else { return };
         self.loudness_count = (
@@ -143,6 +171,8 @@ impl GuiApp {
         self.player.leveling().set_all(table);
     }
 
+    /// Start a run over whatever is not known yet, if levelling is on and
+    /// nothing is running.
     pub fn start_measuring(&mut self) {
         if self.measuring.is_some() {
             return;
@@ -185,6 +215,8 @@ impl GuiApp {
         }
     }
 
+    /// Once a frame: take in what the run found, and start one when the
+    /// library has changed and levelling is on.
     pub(super) fn poll_measuring(&mut self) {
         if self.config.ui.music
             && std::mem::take(&mut self.level_check)
@@ -247,6 +279,7 @@ impl GuiApp {
         }
     }
 
+    /// For the status line, while a run goes.
     pub fn measuring_standing(&self) -> Option<String> {
         let run = self.measuring.as_ref()?;
         Some(tr!(
@@ -273,6 +306,8 @@ mod tests {
         }
     }
 
+    /// A record is due as a whole when any of its tracks is, so its gain
+    /// takes in all of them; a record known throughout is left alone.
     #[test]
     fn records_are_due_whole() {
         let due = due(vec![row(1, "a", true), row(2, "a", false), row(3, "b", true), row(4, "c", false)]);
